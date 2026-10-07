@@ -12,6 +12,7 @@ import { v7 as uuidv7 } from 'uuid';
 import type { Db } from '../../db/client';
 import { type AgentVersionRow, agentDefinitions, agentVersions, departments } from '../../db/schema';
 import { ApiError } from '../../http/problem';
+import type { Mutex } from '../../util/mutex';
 import type { ProviderService } from '../providers/service';
 import type { ToolCatalog } from '../tools/catalog';
 import type { AgentEntry, DepartmentEntry, OrgDirectory } from './directory';
@@ -34,6 +35,8 @@ export class OrgService {
     private readonly providers: ProviderService,
     private readonly catalog: ToolCatalog,
     private readonly logger: IMastraLogger,
+    /** Shared with settings updates and provider deletion: model references must not race a delete. */
+    private readonly configLock: Mutex,
   ) {}
 
   // --- departments ---
@@ -108,7 +111,11 @@ export class OrgService {
       .orderBy(desc(agentVersions.version));
   }
 
-  async createAgent(input: CreateAgentInput): Promise<AgentEntry> {
+  createAgent(input: CreateAgentInput): Promise<AgentEntry> {
+    return this.configLock.run(() => this.createAgentLocked(input));
+  }
+
+  private async createAgentLocked(input: CreateAgentInput): Promise<AgentEntry> {
     if (RESERVED_AGENT_KEYS.has(input.key) || input.key.startsWith('provider-test')) {
       throw new ApiError(400, 'reserved_agent_key', `"${input.key}" is reserved for a built-in agent`);
     }
@@ -151,7 +158,11 @@ export class OrgService {
     return this.refresh(id, 'Agent created');
   }
 
-  async updateAgent(id: string, input: UpdateAgentInput): Promise<AgentEntry> {
+  updateAgent(id: string, input: UpdateAgentInput): Promise<AgentEntry> {
+    return this.configLock.run(() => this.updateAgentLocked(id, input));
+  }
+
+  private async updateAgentLocked(id: string, input: UpdateAgentInput): Promise<AgentEntry> {
     const agent = this.activeAgent(id);
     const changesVersion =
       input.description !== undefined ||
@@ -189,7 +200,11 @@ export class OrgService {
   }
 
   /** Rollback (or roll forward) to an existing version. */
-  async activateVersion(id: string, version: number): Promise<AgentEntry> {
+  activateVersion(id: string, version: number): Promise<AgentEntry> {
+    return this.configLock.run(() => this.activateVersionLocked(id, version));
+  }
+
+  private async activateVersionLocked(id: string, version: number): Promise<AgentEntry> {
     this.activeAgent(id);
     const [row] = await this.db
       .select()
@@ -256,6 +271,6 @@ export class OrgService {
   }
 
   private assertModel(model: ModelRef | null): void {
-    if (model) this.providers.assertUsable(model, 'model');
+    if (model) this.providers.assertUsable(model, 'model', 'chat');
   }
 }

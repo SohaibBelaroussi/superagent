@@ -20,7 +20,9 @@ const call = (method: string, path: string, body?: unknown) =>
 describe(`M2 against ${BASE_URL}`, () => {
   it('serves the tool catalog', async () => {
     const { items } = (await (await call('GET', '/v1/catalog/tools')).json()) as { items: CatalogTool[] };
-    expect(items.map((t) => t.key)).toEqual(expect.arrayContaining(['current_time', 'web_search', 'fetch_page']));
+    expect(items.map((t) => t.key)).toEqual(
+      expect.arrayContaining(['current_time', 'web_search', 'fetch_page']),
+    );
   });
 
   it('creates a department and agent that go live, then archives them', async () => {

@@ -43,23 +43,31 @@ export interface AgentEntry {
 export class OrgDirectory {
   private departmentsById = new Map<string, DepartmentEntry>();
   private agentsById = new Map<string, AgentEntry>();
+  private generation = 0;
 
   constructor(private readonly db: Db) {}
 
   async reload(): Promise<void> {
-    const [departmentRows, agentRows] = await Promise.all([
-      this.db.select().from(departments),
-      this.db
-        .select({ agent: agentDefinitions, version: agentVersions })
-        .from(agentDefinitions)
-        .innerJoin(
-          agentVersions,
-          and(
-            eq(agentVersions.agentId, agentDefinitions.id),
-            eq(agentVersions.version, agentDefinitions.activeVersion),
+    const generation = ++this.generation;
+    // One snapshot, so agents always match their departments.
+    const { departmentRows, agentRows } = await this.db.transaction(
+      async (tx) => ({
+        departmentRows: await tx.select().from(departments),
+        agentRows: await tx
+          .select({ agent: agentDefinitions, version: agentVersions })
+          .from(agentDefinitions)
+          .innerJoin(
+            agentVersions,
+            and(
+              eq(agentVersions.agentId, agentDefinitions.id),
+              eq(agentVersions.version, agentDefinitions.activeVersion),
+            ),
           ),
-        ),
-    ]);
+      }),
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+    // A reload that started later has (or will have) a fresher view; never let an older one win.
+    if (generation !== this.generation) return;
     this.departmentsById = new Map(departmentRows.map((d) => [d.id, { ...d }]));
     this.agentsById = new Map(
       agentRows.map(({ agent, version }) => [

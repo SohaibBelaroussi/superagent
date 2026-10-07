@@ -94,7 +94,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     // Agent definitions from our tables become live Mastra agents (decision D14).
     const runtime = new AgentRuntime({ mastra, directory, settings, catalog }, logger);
     runtime.loadAll();
-    const org = new OrgService(db, directory, runtime, providers, catalog, logger);
+    const org = new OrgService(db, directory, runtime, providers, catalog, logger, settings.lock);
 
     const app = await createApp({ config, logger, mastra, db, tokens, providers, settings, org, catalog });
     return {
