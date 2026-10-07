@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Superagent Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,500..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: blueprint-style technical report. Sticky contents rail on wide screens, one reading column, figures and tables scroll inside their own frames. */
+:root {
+  --paper: #F5F7FB;
+  --panel: #FFFFFF;
+  --ink: #16202E;
+  --muted: #586579;
+  --rule: #D3DBE6;
+  --grid: #E4EAF3;
+  --blue: #1D4EA6;
+  --blue-soft: #E2EAFA;
+  --ok: #1D7549;
+  --ok-soft: #DFF2E7;
+  --warn: #8F5600;
+  --warn-soft: #FAEED6;
+  --bad: #AE2F2A;
+  --bad-soft: #F8E1DF;
+  --code-bg: #EDF1F7;
+  --display: "Archivo", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0D1522; --panel: #131F31; --ink: #E3E9F2; --muted: #9AA8BC; --rule: #29394F; --grid: #182638;
+    --blue: #8EB1FF; --blue-soft: #1B2C4C; --ok: #6ED19D; --ok-soft: #13301F; --warn: #EFB65C; --warn-soft: #382910;
+    --bad: #FF8B80; --bad-soft: #3B1A18; --code-bg: #182538; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0D1522; --panel: #131F31; --ink: #E3E9F2; --muted: #9AA8BC; --rule: #29394F; --grid: #182638;
+  --blue: #8EB1FF; --blue-soft: #1B2C4C; --ok: #6ED19D; --ok-soft: #13301F; --warn: #EFB65C; --warn-soft: #382910;
+  --bad: #FF8B80; --bad-soft: #3B1A18; --code-bg: #182538; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 16px/1.62 var(--body);
+  padding-inline: 16px;
+}
+a { color: var(--blue); text-underline-offset: 2px; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+code { background: var(--code-bg); padding: 0.08em 0.35em; border-radius: 3px; overflow-wrap: anywhere; }
+strong { font-weight: 600; }
+
+/* ---------- header ---------- */
+.masthead {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-block: 56px 40px;
+  border-bottom: 1px solid var(--rule);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -1px -1px;
+  padding-inline: 20px;
+}
+.eyebrow {
+  font: 600 12px/1.3 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin: 0 0 14px;
+}
+h1 {
+  font-family: var(--display);
+  font-stretch: 78%;
+  font-weight: 800;
+  font-size: clamp(2.4rem, 6vw, 4.2rem);
+  line-height: 0.98;
+  letter-spacing: -0.01em;
+  margin: 0 0 18px;
+  text-wrap: balance;
+}
+.lede { font-size: 1.12rem; max-width: 62ch; margin: 0 0 22px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font: 400 13px/1.4 var(--mono); color: var(--muted); margin: 0; padding: 0; list-style: none; }
+
+/* ---------- frame ---------- */
+.frame {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 40px;
+  padding-block: 36px 80px;
+}
+@media (min-width: 1060px) {
+  .frame { grid-template-columns: 210px minmax(0, 1fr); gap: 56px; }
+}
+.toc { display: none; }
+@media (min-width: 1060px) {
+  .toc { display: block; position: sticky; top: 24px; align-self: start; max-height: calc(100vh - 48px); overflow-y: auto; }
+}
+.toc p { font: 600 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: toc; }
+.toc li { counter-increment: toc; }
+.toc a { display: grid; grid-template-columns: 26px 1fr; text-decoration: none; color: var(--ink); font-size: 14px; line-height: 1.35; padding: 5px 0; }
+.toc a::before { content: counter(toc, decimal-leading-zero); font: 400 12px/1.6 var(--mono); color: var(--muted); }
+.toc a:hover { color: var(--blue); }
+
+main { min-width: 0; max-width: 820px; }
+section { padding-block: 8px 28px; border-bottom: 1px solid var(--rule); margin-bottom: 32px; }
+section:last-of-type { border-bottom: 0; }
+h2 {
+  font-family: var(--display);
+  font-stretch: 85%;
+  font-weight: 750;
+  font-size: clamp(1.6rem, 3.4vw, 2.1rem);
+  line-height: 1.1;
+  margin: 0 0 14px;
+  text-wrap: balance;
+  display: flex; gap: 14px; align-items: baseline;
+}
+h2 .num { font: 500 0.9rem/1 var(--mono); color: var(--blue); flex: none; }
+h3 { font-family: var(--display); font-stretch: 92%; font-weight: 700; font-size: 1.18rem; line-height: 1.25; margin: 30px 0 8px; text-wrap: balance; }
+p, li { max-width: 68ch; }
+p { margin: 0 0 14px; }
+ul, ol { margin: 0 0 16px; padding-left: 1.3em; }
+li { margin-bottom: 6px; }
+li::marker { color: var(--muted); }
+
+/* ---------- verdict ---------- */
+.verdict { display: grid; gap: 0; margin: 0 0 8px; padding: 0; list-style: none; border-top: 1px solid var(--rule); }
+.verdict li { max-width: none; display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--rule); margin: 0; }
+.verdict .tag { font: 600 11px/1.6 var(--mono); letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); padding-top: 3px; }
+@media (max-width: 560px) { .verdict li { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+
+/* ---------- pills ---------- */
+.pill { display: inline-block; font: 600 11px/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; padding: 5px 7px 4px; border-radius: 3px; white-space: nowrap; }
+.pill.native { background: var(--ok-soft); color: var(--ok); }
+.pill.build { background: var(--blue-soft); color: var(--blue); }
+.pill.risk { background: var(--warn-soft); color: var(--warn); }
+.pill.ee, .pill.high { background: var(--bad-soft); color: var(--bad); }
+.pill.med { background: var(--warn-soft); color: var(--warn); }
+.pill.low { background: var(--code-bg); color: var(--muted); }
+
+/* ---------- tables ---------- */
+.table-wrap { overflow-x: auto; margin: 0 0 22px; border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.45; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+tr:last-child td { border-bottom: 0; }
+th { font: 600 11px/1.3 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); background: var(--paper); }
+td:first-child { font-weight: 500; }
+table.wide { min-width: 720px; }
+table.mid { min-width: 600px; }
+td .pill { margin: 1px 4px 1px 0; }
+
+/* ---------- figures ---------- */
+figure { margin: 8px 0 26px; }
+.diagram { overflow-x: auto; border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); padding: 12px; }
+.diagram svg { display: block; width: 100%; height: auto; min-width: 720px; color: var(--ink); }
+figcaption { font-size: 14px; color: var(--muted); margin-top: 10px; max-width: 72ch; }
+.d-box { fill: var(--panel); stroke: var(--ink); stroke-width: 1.2; }
+.d-key { fill: var(--blue-soft); stroke: var(--blue); stroke-width: 1.4; }
+.d-vol { fill: var(--warn-soft); stroke: var(--warn); stroke-width: 1.2; }
+.d-zone { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 5; }
+.d-zone-bad { fill: none; stroke: var(--bad); stroke-width: 1.2; stroke-dasharray: 6 5; }
+.d-line { fill: none; stroke: var(--ink); stroke-width: 1.3; }
+.d-dash { fill: none; stroke: var(--ink); stroke-width: 1.3; stroke-dasharray: 4 4; }
+.d-blue { fill: none; stroke: var(--blue); stroke-width: 1.6; }
+.d-t { fill: var(--ink); font: 600 13px var(--body); }
+.d-s { fill: var(--muted); font: 400 11px var(--body); }
+.d-m { fill: var(--ink); font: 400 12px var(--body); }
+.d-z { fill: var(--muted); font: 600 10.5px var(--mono); letter-spacing: 0.06em; }
+.d-zb { fill: var(--bad); font: 600 10.5px var(--mono); letter-spacing: 0.06em; }
+.d-l { fill: var(--ink); font: 500 11px var(--mono); }
+.d-lb { fill: var(--blue); font: 500 11px var(--mono); }
+.arrowhead { fill: var(--ink); }
+.arrowhead-blue { fill: var(--blue); }
+
+/* ---------- callouts, steps, code ---------- */
+.callout { border-left: 3px solid var(--warn); background: var(--warn-soft); padding: 12px 16px; margin: 0 0 20px; border-radius: 0 4px 4px 0; }
+.callout.bad { border-left-color: var(--bad); background: var(--bad-soft); }
+.callout.info { border-left-color: var(--blue); background: var(--blue-soft); }
+.callout p { margin: 0; max-width: none; }
+.callout p + p { margin-top: 8px; }
+.callout .label { font: 600 11px/1.3 var(--mono); letter-spacing: 0.07em; text-transform: uppercase; display: block; margin-bottom: 4px; }
+
+ol.steps { list-style: none; padding: 0; counter-reset: step; display: grid; gap: 10px; }
+ol.steps li { counter-increment: step; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; max-width: none; margin: 0; }
+ol.steps li::before { content: counter(step); font: 600 13px/26px var(--mono); text-align: center; width: 26px; height: 26px; border: 1.4px solid var(--blue); color: var(--blue); border-radius: 50%; }
+
+pre { background: var(--code-bg); border-radius: 4px; padding: 14px 16px; overflow-x: auto; font: 400 13px/1.55 var(--mono); margin: 0 0 20px; }
+pre code { background: none; padding: 0; font-size: inherit; }
+.c { color: var(--muted); }
+
+.two { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin: 0 0 22px; }
+@media (min-width: 720px) { .two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.card { border: 1px solid var(--rule); background: var(--panel); border-radius: 4px; padding: 16px 18px; min-width: 0; }
+.card h4 { font-family: var(--display); font-stretch: 92%; font-size: 1.02rem; margin: 0 0 8px; }
+.card ul { margin: 0; padding-left: 1.1em; font-size: 14.5px; }
+.card p { font-size: 14.5px; }
+
+details { border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); margin: 0 0 12px; }
+summary { cursor: pointer; padding: 12px 16px; font-weight: 600; }
+details > div { padding: 0 16px 14px; }
+details[open] summary { border-bottom: 1px solid var(--rule); margin-bottom: 12px; }
+
+.decisions { list-style: none; padding: 0; display: grid; gap: 14px; counter-reset: dq; }
+.decisions li { counter-increment: dq; max-width: none; border: 1px solid var(--rule); background: var(--panel); border-radius: 4px; padding: 14px 16px 12px 52px; position: relative; margin: 0; }
+.decisions li::before { content: "Q" counter(dq); position: absolute; left: 14px; top: 14px; font: 600 13px/1 var(--mono); color: var(--blue); }
+.decisions strong { display: block; margin-bottom: 4px; }
+.decisions p { margin: 0; font-size: 15px; }
+
+.sources { font-size: 14px; columns: 2 260px; column-gap: 32px; }
+.sources li { break-inside: avoid; }
+.foot { font: 400 13px/1.5 var(--mono); color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <p class="eyebrow">Research report · not an implementation plan</p>
+  <h1>Superagent<br>Architecture</h1>
+  <p class="lede">A self-hosted assistant organized like a company: a chief of staff you talk to, departments that do the work, a board where you watch it happen. This report checks each part of your brief against what Mastra actually ships, and proposes how the system should be shaped.</p>
+  <ul class="meta">
+    <li>6 Oct 2026</li>
+    <li>@mastra/core 1.74 · @mastra/editor 0.16 · @mastra/docker 0.9</li>
+    <li>Sources: Mastra docs, package source, specs</li>
+  </ul>
+</header>
+
+<div class="frame">
+  <nav class="toc" aria-label="Contents">
+    <p>Contents</p>
+    <ol>
+      <li><a href="#verdict">The short answer</a></li>
+      <li><a href="#brief">Your brief, mapped</a></li>
+      <li><a href="#topology">System shape</a></li>
+      <li><a href="#org">Departments</a></li>
+      <li><a href="#work">Tasks and the board</a></li>
+      <li><a href="#caps">Capabilities and plugins</a></li>
+      <li><a href="#memory">Memory</a></li>
+      <li><a href="#exec">Sandboxes, browsers, research</a></li>
+      <li><a href="#data">Data, models, observability</a></li>
+      <li><a href="#clients">API and clients</a></li>
+      <li><a href="#examples">Two example departments</a></li>
+      <li><a href="#risks">Risks and limits</a></li>
+      <li><a href="#decisions">Decisions for you</a></li>
+      <li><a href="#verify">Still unverified</a></li>
+      <li><a href="#sources">Sources</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+<!-- 1 -->
+<section id="verdict">
+  <h2><span class="num">01</span>The short answer</h2>
+  <p>Mastra can carry this system. It supplies the agent runtime. We build the control plane: the parts that turn a set of agents into an organization you can watch and steer.</p>
+  <ul class="verdict">
+    <li><span class="tag">Runtime</span><span>Mastra covers agents, subagents, background tasks, runtime-created schedules, memory, approvals, Docker sandboxes, browser control, MCP and skills. All of this is Apache-2.0.</span></li>
+    <li><span class="tag">We build</span><span>The task ledger and board, the department model, a capability catalog with a plugin installer, a small "runner" service that owns Docker, and push notifications. Mastra has no Kanban or unified task entity. Its "task tools" are a per-thread to-do list.</span></li>
+    <li><span class="tag">UI-built agents</span><span>Possible for free. <strong>Mastra Editor</strong> (Apache-2.0) stores versioned agents, skills and MCP configs in the database and exposes them over REST, so our own web app can create departments without redeploying. Mastra's ready-made <strong>Agent Builder</strong> UI is Enterprise-licensed and needs a paid key for real use, so we skip it.</span></li>
+    <li><span class="tag">Hierarchy</span><span>The chief should hand work to department leads through persistent task threads and signals, not through Mastra's built-in subagent call. Leads then use the built-in call for their own specialists. This sidesteps Mastra's one-level limit on background delegation.</span></li>
+    <li><span class="tag">Plugins</span><span>The cross-vendor <strong>Agent Plugins 1.0</strong> spec (the format Codex uses) bundles exactly two things: skills and MCP servers. Both map cleanly onto Mastra. Hooks and vendor app connectors don't, and Mastra has no plugin system of its own.</span></li>
+    <li><span class="tag">Main risks</span><span>Whatever can create containers is root-equivalent unless Docker is isolated. Mastra 1.74's live browser stream appears to skip auth. LinkedIn's terms ban the automation you described. Several needed features are beta or pre-1.0.</span></li>
+  </ul>
+</section>
+
+<!-- 2 -->
+<section id="brief">
+  <h2><span class="num">02</span>Your brief, mapped</h2>
+  <p>Each requirement from our discussion, what Mastra gives us for it, and what we write ourselves.</p>
+  <div class="table-wrap">
+    <table class="wide">
+      <thead><tr><th>You asked for</th><th>Mastra provides</th><th>We build</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>One server, operated through an API</td><td>Hono server with about 350 built-in routes, SSE streaming, OpenAPI, typed client SDK, custom routes</td><td>Board, department, capability and plugin routes</td><td><span class="pill native">native</span><span class="pill build">build</span></td></tr>
+        <tr><td>Web app and mobile app</td><td><code>@mastra/client-js</code>, AI SDK UI, assistant-ui, Expo support through the AI SDK</td><td>Both apps</td><td><span class="pill build">build</span></td></tr>
+        <tr><td>A super agent that is always reachable</td><td>Background tasks; signals that wake idle threads; notification inbox</td><td>Chief tools: assign, inspect, steer, report</td><td><span class="pill native">native</span></td></tr>
+        <tr><td>Departments with subagents</td><td>Subagents (<code>agents: {}</code>), workflows, stored agents that reference subagents</td><td>Department model and dispatch</td><td><span class="pill native">native</span><span class="pill build">build</span></td></tr>
+        <tr><td>Kanban / CRM view of tasks</td><td>Nothing built in. Mastra Factory is a self-hostable reference design</td><td>Task ledger, phases, events, board UI</td><td><span class="pill build">build</span></td></tr>
+        <tr><td>Scheduled actions</td><td><code>mastra.schedules.create</code> at runtime, threaded into conversations</td><td>Schedule tools, "Recurring" lane</td><td><span class="pill native">native</span><span class="pill risk">no catch-up</span></td></tr>
+        <tr><td>Coding</td><td><code>createCodingAgent</code>, workspace file and shell tools, LSP, goals with a judge model</td><td>Coding department setup</td><td><span class="pill native">native</span></td></tr>
+        <tr><td>Browser automation in Docker</td><td>AgentBrowser over CDP, live screencast with mouse and keyboard injection</td><td>Per-task browser containers and a thread manager</td><td><span class="pill build">build</span></td></tr>
+        <tr><td>Deep research without paid APIs</td><td>Code mode (parallel tool fan-out), goals, workspace search. No SearXNG integration</td><td>SearXNG and Crawl4AI tools, research department</td><td><span class="pill build">build</span></td></tr>
+        <tr><td>Everything in Docker, isolated, shared workspace</td><td>DockerSandbox with hardening options and volume subpath mounts</td><td>Compose stack, runner service, reaper</td><td><span class="pill build">build</span></td></tr>
+        <tr><td>Create agents and departments from the UI</td><td>Editor: stored, versioned agents over REST (Apache). Agent Builder (EE)</td><td>Our own builder screens</td><td><span class="pill native">native</span><span class="pill ee">avoid EE</span></td></tr>
+        <tr><td>Add tools, MCP servers, skills</td><td>MCP client (stdio and HTTP), stored MCP clients, Agent Skills, tool and skill search</td><td>Capability catalog UI</td><td><span class="pill native">native</span></td></tr>
+        <tr><td>Community plugins</td><td>No plugin support in the framework</td><td>Agent Plugins 1.0 installer</td><td><span class="pill build">build</span></td></tr>
+        <tr><td>Memory per department and agent</td><td>Resource and thread scopes, working memory, semantic recall, observational memory</td><td>Scope conventions, profile injection</td><td><span class="pill native">native</span></td></tr>
+        <tr><td>Chat channels later</td><td>Telegram, WhatsApp, Slack, Discord adapters</td><td>Nothing in v1</td><td><span class="pill native">later</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="topology">
+  <h2><span class="num">03</span>System shape</h2>
+  <p>One long-lived Mastra server is the brain. Everything that touches untrusted input (code written by a model, live web pages, community MCP servers) runs in throwaway containers that the server never hosts itself. Only one small service, the runner, may talk to Docker.</p>
+
+  <figure>
+    <div class="diagram">
+      <svg viewBox="0 0 1000 560" role="img" aria-label="Topology: devices reach caddy over a private network; caddy forwards to the Mastra server in the trusted control plane with Postgres and SeaweedFS; the Mastra server asks the runner to create per-task sandbox, browser and MCP containers through a rootless Docker daemon; search helpers sit in an egress-only zone; a shared workspace volume is the only path between the control plane and sandboxes.">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker>
+          <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead-blue" d="M0 0 L10 5 L0 10 z"/></marker>
+        </defs>
+
+        <text class="d-z" x="20" y="44">YOUR DEVICES</text>
+        <rect class="d-box" x="20" y="60" width="160" height="48" rx="3"/>
+        <text class="d-t" x="100" y="89" text-anchor="middle">Web app (PWA)</text>
+        <rect class="d-box" x="20" y="124" width="160" height="48" rx="3"/>
+        <text class="d-t" x="100" y="153" text-anchor="middle">Mobile app (Expo)</text>
+
+        <rect class="d-box" x="230" y="88" width="120" height="60" rx="3"/>
+        <text class="d-t" x="290" y="114" text-anchor="middle">caddy</text>
+        <text class="d-s" x="290" y="132" text-anchor="middle">TLS · auth gate</text>
+        <line class="d-line" x1="180" y1="84" x2="229" y2="106" marker-end="url(#ah)"/>
+        <line class="d-line" x1="180" y1="148" x2="229" y2="130" marker-end="url(#ah)"/>
+        <text class="d-l" x="205" y="72" text-anchor="middle">VPN</text>
+
+        <line class="d-line" x1="350" y1="118" x2="419" y2="118" marker-end="url(#ah)"/>
+        <text class="d-l" x="385" y="108" text-anchor="middle">API·SSE</text>
+
+        <rect class="d-zone" x="400" y="20" width="370" height="300" rx="4"/>
+        <text class="d-z" x="412" y="40">B1 · TRUSTED CONTROL PLANE</text>
+        <rect class="d-key" x="420" y="52" width="330" height="158" rx="3"/>
+        <text class="d-t" x="436" y="76">mastra server</text>
+        <text class="d-m" x="436" y="100">Chief of staff · department leads · specialists</text>
+        <text class="d-m" x="436" y="122">Task ledger · board API · board event stream</text>
+        <text class="d-m" x="436" y="144">Capability catalog · plugin installer</text>
+        <text class="d-m" x="436" y="166">Editor: stored agents, skills, MCP clients</text>
+        <text class="d-m" x="436" y="188">Scheduler · background tasks · memory</text>
+
+        <rect class="d-box" x="420" y="240" width="150" height="60" rx="3"/>
+        <text class="d-t" x="495" y="266" text-anchor="middle">postgres</text>
+        <text class="d-s" x="495" y="284" text-anchor="middle">+ pgvector</text>
+        <rect class="d-box" x="600" y="240" width="150" height="60" rx="3"/>
+        <text class="d-t" x="675" y="266" text-anchor="middle">seaweedfs</text>
+        <text class="d-s" x="675" y="284" text-anchor="middle">S3 · artifacts, blobs</text>
+        <line class="d-line" x1="495" y1="210" x2="495" y2="239" marker-end="url(#ah)"/>
+        <line class="d-line" x1="675" y1="210" x2="675" y2="239" marker-end="url(#ah)"/>
+
+        <rect class="d-box" x="820" y="60" width="160" height="56" rx="3"/>
+        <text class="d-t" x="900" y="84" text-anchor="middle">runner</text>
+        <text class="d-s" x="900" y="103" text-anchor="middle">the only Docker client</text>
+        <line class="d-line" x1="750" y1="88" x2="819" y2="88" marker-end="url(#ah)"/>
+        <text class="d-l" x="785" y="80" text-anchor="middle">spawn</text>
+
+        <rect class="d-zone" x="810" y="140" width="180" height="82" rx="4"/>
+        <text class="d-z" x="822" y="158">B0 · HOST</text>
+        <text class="d-t" x="900" y="186" text-anchor="middle">rootless Docker</text>
+        <text class="d-s" x="900" y="204" text-anchor="middle">daemon</text>
+        <line class="d-line" x1="900" y1="116" x2="900" y2="139" marker-end="url(#ah)"/>
+        <line class="d-line" x1="900" y1="222" x2="900" y2="369" marker-end="url(#ah)"/>
+        <text class="d-l" x="908" y="300">creates</text>
+
+        <path class="d-blue" d="M750 180 H790 V409" marker-end="url(#ahb)"/>
+        <text class="d-lb" x="797" y="300">CDP</text>
+
+        <rect class="d-vol" x="420" y="334" width="330" height="26" rx="3"/>
+        <text class="d-l" x="585" y="351" text-anchor="middle">workspace volume · tasks/&lt;id&gt; · projects/&lt;id&gt;</text>
+        <line class="d-dash" x1="510" y1="360" x2="510" y2="409" marker-end="url(#ah)"/>
+        <text class="d-l" x="518" y="392">subpath</text>
+
+        <rect class="d-zone-bad" x="400" y="370" width="590" height="172" rx="4"/>
+        <rect class="d-box" x="420" y="410" width="180" height="70" rx="3"/>
+        <text class="d-t" x="510" y="438" text-anchor="middle">sbx-&lt;task&gt;</text>
+        <text class="d-s" x="510" y="458" text-anchor="middle">sandbox · model-written code</text>
+        <rect class="d-box" x="620" y="410" width="180" height="70" rx="3"/>
+        <text class="d-t" x="710" y="438" text-anchor="middle">brw-&lt;task|profile&gt;</text>
+        <text class="d-s" x="710" y="458" text-anchor="middle">Chromium · screencast</text>
+        <rect class="d-box" x="820" y="410" width="160" height="70" rx="3"/>
+        <text class="d-t" x="900" y="438" text-anchor="middle">plugin MCP servers</text>
+        <text class="d-s" x="900" y="458" text-anchor="middle">behind MCP gateway</text>
+        <text class="d-zb" x="412" y="528">B2 · UNTRUSTED · CREATED PER TASK · NO SECRETS</text>
+
+        <rect class="d-zone" x="10" y="370" width="370" height="172" rx="4"/>
+        <rect class="d-box" x="30" y="410" width="160" height="70" rx="3"/>
+        <text class="d-t" x="110" y="438" text-anchor="middle">searxng</text>
+        <text class="d-s" x="110" y="458" text-anchor="middle">metasearch</text>
+        <rect class="d-box" x="205" y="410" width="160" height="70" rx="3"/>
+        <text class="d-t" x="285" y="438" text-anchor="middle">crawl4ai</text>
+        <text class="d-s" x="285" y="458" text-anchor="middle">fetch → markdown</text>
+        <text class="d-z" x="22" y="528">B3 · WEB HELPERS · EGRESS ONLY</text>
+        <path class="d-line" d="M420 196 H198 V369" marker-end="url(#ah)"/>
+        <text class="d-l" x="300" y="188" text-anchor="middle">search · fetch</text>
+      </svg>
+    </div>
+    <figcaption>Trust zones. B1 holds every credential and API key. B2 containers get no secrets and no route to the database. The amber workspace volume is the one deliberate opening: the server mounts all of it, and each sandbox mounts only its own subdirectory.</figcaption>
+  </figure>
+
+  <h3>Services</h3>
+  <div class="table-wrap">
+    <table class="wide">
+      <thead><tr><th>Service</th><th>Image</th><th>Role</th><th>Exposure</th></tr></thead>
+      <tbody>
+        <tr><td>caddy</td><td><code>caddy:2</code></td><td>TLS, routing, auth gate in front of the browser stream</td><td>Only host port, on the VPN or LAN interface</td></tr>
+        <tr><td>web</td><td>own static build</td><td>Web app / PWA</td><td>edge network</td></tr>
+        <tr><td>mastra</td><td>own image from <code>mastra build</code> (Node 22)</td><td>API, agents, schedules, background tasks, Editor</td><td>edge, backend, control, browser networks. No Docker socket</td></tr>
+        <tr><td>runner</td><td>own small service</td><td>Creates and reaps sandbox, browser and MCP containers; image allowlist; profile locks</td><td>control network only</td></tr>
+        <tr><td>docker daemon</td><td>rootless Docker (Linux host)</td><td>Runs the on-demand containers</td><td>Reached only by the runner</td></tr>
+        <tr><td>postgres</td><td><code>pgvector/pgvector:pg17</code></td><td>All Mastra storage domains plus our tables</td><td>backend only</td></tr>
+        <tr><td>seaweedfs</td><td><code>chrislusf/seaweedfs</code></td><td>S3 for artifacts, Editor blobs, backups</td><td>backend; presigned URLs through caddy</td></tr>
+        <tr><td>searxng</td><td><code>searxng/searxng</code></td><td>Search for the research department</td><td>internet egress</td></tr>
+        <tr><td>crawl4ai</td><td><code>unclecode/crawl4ai</code></td><td>Page fetch and markdown extraction</td><td>internet egress</td></tr>
+        <tr><td>mcp-gateway</td><td><code>docker/mcp-gateway</code> (MIT)</td><td>Runs each community stdio MCP server in its own container, serves them over HTTP</td><td>control network; asks the runner for containers</td></tr>
+        <tr><td>valkey <span class="pill low">optional</span></td><td><code>valkey/valkey:8</code></td><td>Pub/sub and stream cache, needed only if workers split from the API process</td><td>backend</td></tr>
+        <tr><td>ollama / llama.cpp <span class="pill low">optional</span></td><td>GPU image</td><td>Local models and embeddings</td><td>backend</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 4 -->
+<section id="org">
+  <h2><span class="num">04</span>Departments</h2>
+  <p>Three layers. One <strong>chief of staff</strong> you talk to. One <strong>lead</strong> per department, which owns that department's work and memory. <strong>Specialists</strong> and fixed workflows under each lead. You talk to the chief, and you can open any department's task thread and talk to the lead directly.</p>
+
+  <figure>
+    <div class="diagram">
+      <svg viewBox="0 0 1000 410" role="img" aria-label="Message flow: you chat with the chief; the chief assigns a task by writing the ledger and sending a message that wakes the department lead on a task thread; the lead delegates to specialists with built-in subagent calls, updates the ledger, and reports back to the chief with a notification signal; schedules fire into the department inbox; the board streams ledger events to you.">
+        <defs>
+          <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker>
+          <marker id="ah2b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead-blue" d="M0 0 L10 5 L0 10 z"/></marker>
+        </defs>
+        <rect class="d-box" x="20" y="170" width="130" height="60" rx="3"/>
+        <text class="d-t" x="85" y="196" text-anchor="middle">You</text>
+        <text class="d-s" x="85" y="215" text-anchor="middle">web · mobile</text>
+
+        <rect class="d-key" x="220" y="150" width="200" height="100" rx="3"/>
+        <text class="d-t" x="320" y="180" text-anchor="middle">Chief of staff</text>
+        <text class="d-s" x="320" y="202" text-anchor="middle">thread chief:main</text>
+        <text class="d-s" x="320" y="222" text-anchor="middle">resource user:me</text>
+
+        <rect class="d-box" x="220" y="320" width="200" height="70" rx="3"/>
+        <text class="d-t" x="320" y="348" text-anchor="middle">Task ledger</text>
+        <text class="d-s" x="320" y="368" text-anchor="middle">tasks · events · decisions</text>
+
+        <rect class="d-box" x="588" y="50" width="200" height="100" rx="3"/>
+        <rect class="d-key" x="576" y="62" width="200" height="100" rx="3"/>
+        <text class="d-t" x="676" y="92" text-anchor="middle">Department lead</text>
+        <text class="d-s" x="676" y="114" text-anchor="middle">thread task:&lt;id&gt;</text>
+        <text class="d-s" x="676" y="134" text-anchor="middle">resource dept:&lt;id&gt;</text>
+
+        <rect class="d-box" x="840" y="20" width="150" height="46" rx="3"/>
+        <text class="d-m" x="915" y="48" text-anchor="middle">Specialist A</text>
+        <rect class="d-box" x="840" y="82" width="150" height="46" rx="3"/>
+        <text class="d-m" x="915" y="110" text-anchor="middle">Specialist B</text>
+        <rect class="d-box" x="840" y="144" width="150" height="46" rx="3"/>
+        <text class="d-m" x="915" y="172" text-anchor="middle">Fixed workflow</text>
+        <text class="d-l" x="915" y="212" text-anchor="middle">built-in delegation</text>
+        <line class="d-line" x1="776" y1="92" x2="839" y2="45" marker-end="url(#ah2)"/>
+        <line class="d-line" x1="776" y1="110" x2="839" y2="105" marker-end="url(#ah2)"/>
+        <line class="d-line" x1="776" y1="128" x2="839" y2="166" marker-end="url(#ah2)"/>
+
+        <rect class="d-box" x="576" y="290" width="200" height="60" rx="3"/>
+        <text class="d-t" x="676" y="315" text-anchor="middle">Schedule</text>
+        <text class="d-s" x="676" y="334" text-anchor="middle">cron · threaded</text>
+        <line class="d-line" x1="676" y1="290" x2="676" y2="163" marker-end="url(#ah2)"/>
+        <text class="d-l" x="684" y="232">fires into dept inbox</text>
+
+        <line class="d-line" x1="150" y1="190" x2="219" y2="190" marker-end="url(#ah2)"/>
+        <line class="d-line" x1="220" y1="212" x2="151" y2="212" marker-end="url(#ah2)"/>
+        <text class="d-l" x="185" y="182" text-anchor="middle">chat</text>
+
+        <line class="d-blue" x1="420" y1="170" x2="575" y2="100" marker-end="url(#ah2b)"/>
+        <text class="d-lb" x="468" y="96" text-anchor="middle">assign_task</text>
+        <text class="d-lb" x="468" y="110" text-anchor="middle">sendMessage · wake</text>
+
+        <line class="d-blue" x1="576" y1="142" x2="421" y2="228" marker-end="url(#ah2b)"/>
+        <text class="d-lb" x="522" y="206" text-anchor="middle">report_to_chief</text>
+        <text class="d-lb" x="522" y="220" text-anchor="middle">notification signal</text>
+
+        <line class="d-line" x1="600" y1="162" x2="421" y2="342" marker-end="url(#ah2)"/>
+        <text class="d-l" x="500" y="292">update_task</text>
+
+        <line class="d-line" x1="320" y1="250" x2="320" y2="319" marker-end="url(#ah2)"/>
+        <text class="d-l" x="328" y="290">reads first</text>
+
+        <path class="d-line" d="M220 355 H85 V231" marker-end="url(#ah2)"/>
+        <text class="d-l" x="152" y="347" text-anchor="middle">board events</text>
+      </svg>
+    </div>
+    <figcaption>The chief never waits on a department. <code>assign_task</code> writes the ledger row, wakes the lead on that task's own thread, and returns the task id within seconds. The lead reports back with a signal: urgent items wake the chief, everything else is batched until it is idle.</figcaption>
+  </figure>
+
+  <h3>Why the chief does not use built-in delegation</h3>
+  <p>Mastra's subagent call (<code>agents: {}</code>) is fine inside a department and wrong between the chief and a department:</p>
+  <ul>
+    <li>Every call opens a fresh thread, so "also add tests" on yesterday's task would start from nothing.</li>
+    <li>The work runs inside the chief's own run, so the chief is busy until the department finishes.</li>
+    <li>Only one level of background delegation is allowed. If the chief used it, a lead could not background its own specialists.</li>
+  </ul>
+  <p>Instead, each lead runs as the root agent of a persistent <code>task:&lt;id&gt;</code> thread. It gets the full background budget for its specialists. Mastra Factory, Mastra's own work-board product, uses the same pattern: its supervisor reaches worker sessions by sending messages, not by delegating.</p>
+
+  <h3>How the chief keeps you up to date</h3>
+  <ol>
+    <li><strong>Ledger first.</strong> Cheap tools that read rows: overview, inspect task, what needs attention, health checks. The health checks are plain queries with no model calls, like "running for six hours with no events".</li>
+    <li><strong>Transcripts and memory next</strong>, only when the rows don't explain a card. It reads the task thread or the department's memory through the memory API.</li>
+    <li><strong>Steering last.</strong> It queues a message into the task thread, tagged as coming from the chief, so the lead sees who is asking.</li>
+  </ol>
+
+  <h3>UI-built departments can join the hierarchy</h3>
+  <p>A stored agent's definition has an <code>agents</code> field, so a department created in our UI can list its specialists. There is a catch. Editor resolves those references against agents already loaded, and silently drops unknown ones. The server therefore has to load stored agents leaves-first at boot. This needs a spike to confirm (see <a href="#verify">Still unverified</a>).</p>
+
+  <h3>Entities we own</h3>
+  <div class="table-wrap">
+    <table class="mid">
+      <thead><tr><th>Entity</th><th>Holds</th></tr></thead>
+      <tbody>
+        <tr><td>Department</td><td>Name, lead agent, members, board, memory resource <code>dept:&lt;id&gt;</code>, inbox thread, approval policy</td></tr>
+        <tr><td>Agent definition</td><td>Our source of truth for an agent: role, instructions, model, capabilities, memory profile. Compiled into an Editor stored agent</td></tr>
+        <tr><td>Task</td><td>Department, parent task, title, brief, phase and phase history, seat, checklist, priority, due date, source (you, chief, schedule, signal), revision, cost, artifacts</td></tr>
+        <tr><td>Seat</td><td>Which agent works which task, on which thread and run (borrowed from Factory)</td></tr>
+        <tr><td>Task event</td><td>Append-only log with a sequence number. Feeds the board stream and the audit trail</td></tr>
+        <tr><td>Decision</td><td>Outbox of side-effecting actions with idempotency keys. "Proposed" means it waits for you</td></tr>
+        <tr><td>Capability, plugin, secret</td><td>The catalog an agent definition picks from, and the values injected into plugin containers</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="work">
+  <h2><span class="num">05</span>Tasks and the board</h2>
+  <p>The ledger is the single source of truth. Mastra's own records feed it: background-task events, the lead's checklist, goal judgements, approval suspensions and schedule triggers. Each card is a task thread, so opening a card opens the conversation where the work is happening.</p>
+
+  <figure>
+    <div class="diagram">
+      <svg viewBox="0 0 1000 236" role="img" aria-label="Task lifecycle: schedules create tasks in Inbox; tasks move from Inbox to Queued to Working to Waiting on you to Review to Done; Waiting on you returns to Working when approved; Review returns to Working when changes are requested; Working can move to Failed.">
+        <defs>
+          <marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker>
+          <marker id="ah3b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead-blue" d="M0 0 L10 5 L0 10 z"/></marker>
+        </defs>
+        <rect class="d-zone" x="20" y="8" width="275" height="36" rx="3"/>
+        <text class="d-m" x="157" y="31" text-anchor="middle">Recurring lane · schedules</text>
+        <line class="d-line" x1="80" y1="44" x2="80" y2="79" marker-end="url(#ah3)"/>
+        <text class="d-l" x="88" y="66">creates</text>
+
+        <rect class="d-box" x="20" y="80" width="120" height="50" rx="3"/>
+        <text class="d-t" x="80" y="110" text-anchor="middle">Inbox</text>
+        <rect class="d-box" x="175" y="80" width="120" height="50" rx="3"/>
+        <text class="d-t" x="235" y="110" text-anchor="middle">Queued</text>
+        <rect class="d-key" x="330" y="80" width="120" height="50" rx="3"/>
+        <text class="d-t" x="390" y="110" text-anchor="middle">Working</text>
+        <rect class="d-vol" x="485" y="80" width="120" height="50" rx="3"/>
+        <text class="d-t" x="545" y="110" text-anchor="middle">Waiting on you</text>
+        <rect class="d-box" x="640" y="80" width="120" height="50" rx="3"/>
+        <text class="d-t" x="700" y="110" text-anchor="middle">Review</text>
+        <rect class="d-box" x="795" y="80" width="120" height="50" rx="3"/>
+        <text class="d-t" x="855" y="110" text-anchor="middle">Done</text>
+
+        <line class="d-line" x1="140" y1="105" x2="174" y2="105" marker-end="url(#ah3)"/>
+        <line class="d-line" x1="295" y1="105" x2="329" y2="105" marker-end="url(#ah3)"/>
+        <line class="d-line" x1="450" y1="105" x2="484" y2="105" marker-end="url(#ah3)"/>
+        <line class="d-line" x1="605" y1="105" x2="639" y2="105" marker-end="url(#ah3)"/>
+        <line class="d-line" x1="760" y1="105" x2="794" y2="105" marker-end="url(#ah3)"/>
+
+        <path class="d-blue" d="M545 131 C545 160 410 160 410 132" marker-end="url(#ah3b)"/>
+        <text class="d-lb" x="478" y="170" text-anchor="middle">approved</text>
+        <path class="d-line" d="M700 79 C700 46 400 46 400 78" marker-end="url(#ah3)"/>
+        <text class="d-l" x="550" y="46" text-anchor="middle">changes requested</text>
+
+        <line class="d-line" x1="360" y1="130" x2="360" y2="185" marker-end="url(#ah3)"/>
+        <rect class="d-box" x="330" y="186" width="120" height="40" rx="3"/>
+        <text class="d-t" x="390" y="211" text-anchor="middle">Failed</text>
+      </svg>
+    </div>
+    <figcaption>Default phases for a department board. Following Factory's model, each phase is <em>resting</em>, <em>working</em> or <em>terminal</em>, and a transition policy can rule that only you may move a card to Done.</figcaption>
+  </figure>
+
+  <h3>What a card shows</h3>
+  <ul>
+    <li>Department, the agent in the seat, phase and how long it has been there.</li>
+    <li>The lead's checklist, taken from Mastra's per-thread task tools. That is the right job for them: a checklist inside a card, not the board itself.</li>
+    <li>Artifacts: reports, rendered videos, pull requests, screenshots, stored in S3 and opened through presigned links.</li>
+    <li>Pending approvals, with approve and decline buttons.</li>
+    <li>Cost and tokens. Each task runs with tracing tags (<code>task:&lt;id&gt;</code>, <code>dept:&lt;id&gt;</code>), and the card sums the metrics for that tag.</li>
+  </ul>
+
+  <h3>Live updates</h3>
+  <p>Every ledger write appends a task event with a sequence number and publishes a small change hint on Mastra's pub/sub. A custom SSE route forwards the hints, and clients refetch the cards that changed. Reconnecting clients send the last sequence number they saw and get the gap replayed. This is how Factory does it. Mastra's background tasks do have read-only routes (<code>GET /background-tasks</code> and a completion stream), which we bridge into the ledger. There is no cancel route, so cancelling goes through our own API.</p>
+
+  <h3>Schedules</h3>
+  <p>Agents create schedules at runtime through <code>mastra.schedules.create</code>. A schedule fires into the department's inbox thread, and the lead turns each firing into tasks. Two limits matter. The scheduler is a polling loop inside the server, so the host must stay up. Fires missed during downtime are not replayed, so we should add a check on boot that runs each overdue schedule once.</p>
+
+  <h3>Approvals</h3>
+  <p>Gated tools (send, apply, publish, push, pay) use <code>requireApproval</code> or suspend mid-run. Suspended runs are stored, and <code>listSuspendedRuns</code> recovers them after a restart. The card moves to "Waiting on you", the attention inbox lists it, and your phone gets a push. We avoid Mastra's AgentController for this, because its sessions and pending approvals live only in memory.</p>
+</section>
+
+<!-- 6 -->
+<section id="caps">
+  <h2><span class="num">06</span>Capabilities and plugins</h2>
+  <p>You want to create agents and departments from the UI, pick their tools, add MCP servers and skills, and install community plugins, all without writing code. Most of this exists in Mastra, but the licensing decides which pieces we can use.</p>
+
+  <h3>What we can use for free</h3>
+  <div class="table-wrap">
+    <table class="wide">
+      <thead><tr><th>Piece</th><th>License</th><th>What it gives</th><th>Use it?</th></tr></thead>
+      <tbody>
+        <tr><td>Core, memory, MCP, Docker, client SDK</td><td>Apache-2.0</td><td>The whole agent runtime</td><td><span class="pill native">yes</span></td></tr>
+        <tr><td>Mastra Editor (main entry)</td><td>Apache-2.0</td><td>Stored, versioned agents, skills, MCP clients and workspaces. REST under <code>/api/stored/*</code>. Plug-in points for tools, sandboxes, browsers, blob stores</td><td><span class="pill native">yes</span>, driven from our UI</td></tr>
+        <tr><td>Agent Builder</td><td>Mastra EE</td><td>Ready-made builder UI, chat-based builder agent, workflow builder, skills.sh browsing</td><td><span class="pill ee">no</span></td></tr>
+        <tr><td>RBAC, fine-grained permissions, SSO</td><td>Mastra EE</td><td>Multi-user permissions</td><td><span class="pill low">not needed</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout bad">
+    <span class="label">License</span>
+    <p>The Mastra Enterprise License v2.0 (effective 22 Sept 2026) allows free use only for development and testing, in an environment that handles no real data. Anything else needs a signed agreement and a license key, with no personal-use exception. EE features still work in development mode without a key, but that is a technical behavior, not permission. Your daily assistant counts as production use. We should block every <code>*/ee</code> import in CI.</p>
+  </div>
+  <p>Mastra can also reclassify features as Enterprise at any time. To hedge, we keep our own agent-definition tables as the source of truth and compile them into Editor records. If Editor ever moves behind the license, we swap that compile step for plain <code>new Agent()</code> plus <code>mastra.addAgent</code>, and the UI does not change.</p>
+
+  <h3>The capability catalog</h3>
+  <p>Everything an agent can be given appears in one catalog that our server exposes to both apps. Studio is not involved.</p>
+  <div class="two">
+    <div class="card">
+      <h4>Built into our server</h4>
+      <ul>
+        <li>Workspace files, shell, code search</li>
+        <li>Browser (per task, or a named profile)</li>
+        <li>Research: search, fetch, crawl</li>
+        <li>Code mode for parallel tool fan-out</li>
+        <li>Ledger, schedule and notify tools</li>
+        <li>Sandbox images (base dev, Python, HyperFrames)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Added at runtime</h4>
+      <ul>
+        <li>MCP servers (HTTP, or stdio run in containers)</li>
+        <li>Skills (Agent Skills format, versioned in Editor)</li>
+        <li>Plugins (bundles of skills and MCP servers)</li>
+        <li>Models and memory profiles</li>
+        <li>Browser identities (logged-in profiles)</li>
+        <li>Secrets, scoped to one plugin or agent</li>
+      </ul>
+    </div>
+  </div>
+  <p>Large agents get Mastra's tool-search and skill-search processors, which expose search and load tools instead of putting every schema in the prompt. The UI can't write new code tools, and Editor says so. New abilities arrive as MCP servers, skills with scripts that run in the sandbox, or plugins.</p>
+
+  <h3>The plugin format</h3>
+  <p>The <strong>Agent Plugins</strong> spec (agent-plugins.org, v1.0, steering committee from Amazon, Cursor, Microsoft, OpenAI and Vercel) is the cross-vendor format. Codex has used it since v0.146 and also reads Claude Code marketplaces. A plugin is a folder with:</p>
+  <ul>
+    <li><code>plugin.json</code>: name, version, author, license, and vendor extensions under reverse-domain keys.</li>
+    <li><code>skills/*/SKILL.md</code>: Agent Skills, the same format Mastra reads.</li>
+    <li><code>mcp.json</code>: stdio or streamable-HTTP MCP servers.</li>
+  </ul>
+  <p>Version 1 has no trust model, permissions, signing or secrets, so our installer supplies those. Claude Code plugins carry more component types: subagents, commands, hooks, LSP servers, themes.</p>
+
+  <h3>Installing a plugin</h3>
+  <ol class="steps">
+    <li><span><strong>Fetch and pin.</strong> From git, npm or an archive. Pin the commit, unpack read-only to <code>/plugins/&lt;name&gt;/&lt;version&gt;</code>, create its data volume.</span></li>
+    <li><span><strong>Validate.</strong> Check <code>plugin.json</code> against Agent Plugins 1.0. Fall back to <code>.codex-plugin</code> or <code>.claude-plugin</code> manifests.</span></li>
+    <li><span><strong>Review.</strong> Show what it contains: skills, MCP commands, hosts it contacts, secrets it needs. Nothing runs before you approve.</span></li>
+    <li><span><strong>Secrets.</strong> Collect them in our form. They are injected only into that plugin's container and never written to the manifest or the stored MCP config.</span></li>
+    <li><span><strong>Map components</strong> onto Mastra (table below).</span></li>
+    <li><span><strong>Enable</strong> per agent or per department, with an allowlist of tools and approval on anything that writes.</span></li>
+  </ol>
+  <div class="table-wrap">
+    <table class="mid">
+      <thead><tr><th>Plugin component</th><th>Becomes in our system</th></tr></thead>
+      <tbody>
+        <tr><td>Skills</td><td>Editor stored skills, published and attached to the chosen agents</td></tr>
+        <tr><td>MCP server, stdio</td><td>A container behind the MCP gateway, reached over HTTP and registered as a stored MCP client</td></tr>
+        <tr><td>MCP server, HTTP</td><td>A stored MCP client. Servers that need headers or OAuth go through a small tool provider of our own, since stored configs carry neither</td></tr>
+        <tr><td>Codex / Claude hooks</td><td>An opt-in processor that runs the hook command inside the plugin container (session start, before and after tool calls, stop)</td></tr>
+        <tr><td>Claude subagents</td><td>Stored agents, after translating their model and tool fields</td></tr>
+        <tr><td>Claude commands</td><td>Skills (Codex converts them the same way)</td></tr>
+        <tr><td>Not mapped</td><td>ChatGPT app connectors, branding, coding-editor hook events, JS hook modules, LSP servers, themes, channels</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout info">
+    <span class="label">First test plugin</span>
+    <p><strong>HyperFrames</strong> (HeyGen, Apache-2.0) ships an Agent Plugins 1.0 manifest with 21 skills and no MCP servers. That makes it a clean first install. Its renderer drives headless Chrome frame by frame and encodes with FFmpeg. Its official render Dockerfile (Node 22, chrome-headless-shell, ffmpeg, fonts) becomes the content department's sandbox image. Text-to-speech (Kokoro) and transcription (whisper.cpp) run locally. We leave out its cloud render, publish and hosted MCP connector, which are HeyGen services.</p>
+  </div>
+</section>
+
+<!-- 7 -->
+<section id="memory">
+  <h2><span class="num">07</span>Memory</h2>
+  <p>Mastra scopes memory by <em>resource</em> (an owner id) and <em>thread</em> (one conversation). A thread belongs to one resource for life. Working memory is a structured note with one slot per memory configuration. Observational memory compresses long threads in the background. Semantic recall searches past messages with embeddings. The model below gives each layer of the organization its own scope.</p>
+  <div class="table-wrap">
+    <table class="wide">
+      <thead><tr><th>Layer</th><th>Scope</th><th>Mechanism</th><th>Written by</th><th>Read by</th></tr></thead>
+      <tbody>
+        <tr><td>Your profile: facts, preferences, rules</td><td>resource <code>user:me</code></td><td>Chief's working memory, with a typed schema</td><td>Chief, and you in the UI</td><td>Every agent, read-only, injected by an input processor</td></tr>
+        <tr><td>Your documents: CV, portfolio</td><td>knowledge index</td><td>pgvector with a query tool, or workspace search</td><td>You, by upload</td><td>Agents granted that capability</td></tr>
+        <tr><td>Department memory</td><td>resource <code>dept:&lt;id&gt;</code></td><td>Lead's working memory (brief, priorities, learned rules) and semantic recall across all its task threads</td><td>Lead</td><td>Lead; chief through the memory API</td></tr>
+        <tr><td>Specialist memory</td><td>resource <code>dept:&lt;id&gt;-&lt;member&gt;</code></td><td>Specialist's own working memory. Mastra creates this resource automatically on delegation</td><td>Specialist</td><td>Specialist</td></tr>
+        <tr><td>Task history</td><td>thread <code>task:&lt;id&gt;</code></td><td>Message history, observational memory, and a recall tool across the department's threads</td><td>Everyone on the task</td><td>Lead, chief, you</td></tr>
+        <tr><td>Your chat with the chief</td><td>thread <code>chief:main</code></td><td>Observational memory</td><td>Chief</td><td>Chief</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>Things that shape this design</h3>
+  <ul>
+    <li><strong>One working-memory slot per agent.</strong> Your profile can't also live in every department's working memory, so it is injected read-only instead.</li>
+    <li><strong>No access control inside memory.</strong> Any code can read any resource. The boundaries are enforced by which tools each agent gets, which suits one user. Don't set Mastra's resource-id lock (<code>MASTRA_RESOURCE_ID_KEY</code>): it would pin every call to a single resource.</li>
+    <li><strong>UI-built agents reference memory by id.</strong> Inline memory configs in stored agents leave out working memory. So we register a few memory profiles in code (chief, lead, specialist) and the UI picks one.</li>
+    <li><strong>Observational memory costs model calls.</strong> A background model writes the observations. Its default is a hosted Gemini model, and it can point at a local model instead.</li>
+    <li><strong>Resource-scoped observational memory is deprecated.</strong> Use thread scope plus the recall tool, as in the table.</li>
+  </ul>
+</section>
+
+<!-- 8 -->
+<section id="exec">
+  <h2><span class="num">08</span>Sandboxes, browsers, research</h2>
+
+  <h3>Sandboxes</h3>
+  <p><code>DockerSandbox</code> is one long-lived container per sandbox. Commands run through <code>docker exec</code>, and a container is found again by its label, so a task resumes in the same container. A resolver keyed on the task gives one sandbox per task. Mastra only stops containers and never deletes them, so the runner needs a reaper.</p>
+  <ul>
+    <li><strong>Workspace.</strong> One named volume with <code>tasks/&lt;id&gt;</code> and <code>projects/&lt;id&gt;</code>. Each sandbox mounts only its subpath (Docker Engine 26+). The server creates the folder first, because Docker won't.</li>
+    <li><strong>Hardening.</strong> Drop all capabilities, no-new-privileges, memory and process limits, tmpfs for <code>/tmp</code> and <code>/dev/shm</code>, no secrets, an internal-only network or an egress allowlist.</li>
+    <li><strong>Gaps in 0.9.</strong> No options for user, runtime or shared-memory size. We bake a non-root user into each image and set a stronger runtime (gVisor) as the daemon default.</li>
+  </ul>
+  <div class="callout bad">
+    <span class="label">Docker access is root access</span>
+    <p>Mounting the Docker socket, even read-only, gives root on the host. Socket proxies filter by API section but don't inspect request bodies, so anything allowed to create containers can create a privileged one. The design therefore gives Docker access only to the runner, which runs against a <strong>rootless Docker daemon</strong> and enforces an image allowlist, mounts, networks and time limits. On the Mastra side this means a custom sandbox class that calls the runner. Docker Desktop on Windows supports neither rootless mode nor Sysbox, which is one reason to run the system on a Linux host.</p>
+  </div>
+
+  <h3>Browsers</h3>
+  <p>Every Mastra browser provider can attach to a remote Chromium over CDP. <strong>AgentBrowser</strong> fits best: it reads a deterministic accessibility snapshot and acts on element references, with no extra model calls. That also makes it friendlier to local models. Stagehand needs its own model for each action.</p>
+  <ul>
+    <li><strong>One browser container per task.</strong> A plain <code>cdpUrl</code> forces one shared browser, so we write a small thread manager that asks the runner for a container per task. FirecrawlBrowser's source is the template. For images, use Chromium with a socat proxy, or Steel (Apache-2.0). Avoid browserless, which is SSPL-licensed.</li>
+    <li><strong>Logged-in identities.</strong> One volume per identity, used as the Chrome profile directory. Chrome allows only one process per profile, so the runner holds a lock and queues that identity's tasks. Since Chrome 136, remote debugging requires a non-default profile directory.</li>
+    <li><strong>Watching and taking over.</strong> Mastra streams a live screencast over a WebSocket (<code>/browser/:agentId/stream</code>) and accepts mouse and keyboard input on it. Our apps can speak that protocol, so you can type a 2FA code from your phone. The frames are JPEGs: fine for typing and clicking, poor for drag puzzles.</li>
+  </ul>
+  <div class="callout bad">
+    <span class="label">Security flag</span>
+    <p>In Mastra 1.74 the browser stream routes appear to be registered before the auth middleware, with no auth check in the handler. Until that's verified or fixed, caddy must require auth on <code>/browser/*</code>.</p>
+  </div>
+
+  <h3>Research without paid APIs</h3>
+  <p>Mastra has no SearXNG integration, so search and fetch become two small custom tools:</p>
+  <ul>
+    <li><strong>SearXNG</strong> (AGPL) for search. Enable JSON output and turn off the rate limiter on the private instance. Upstream engines will sometimes block a single IP. Spread queries across many engines, prefer API-backed ones (Wikipedia, arXiv, GitHub, StackExchange), cache results and back off.</li>
+    <li><strong>Crawl4AI</strong> (Apache-2.0 with an attribution clause) turns pages into markdown in one container. Self-hosted Firecrawl needs five services and lacks browser actions.</li>
+    <li><strong>Our browser containers</strong> handle JavaScript-heavy or logged-in pages.</li>
+  </ul>
+  <p>The research department: a lead that plans and judges completeness (a goal with a judge model, "keep going until the question is answered"), searchers fanned out through code mode, a reader that extracts and cites, and a writer. Sources are saved to the task workspace and indexed for search, and the report goes to S3.</p>
+</section>
+
+<!-- 9 -->
+<section id="data">
+  <h2><span class="num">09</span>Data, models, observability</h2>
+  <h3>Database: Postgres with pgvector</h3>
+  <p>The Postgres adapter implements every Mastra storage domain this design uses: memory, background tasks, schedules, notifications, Editor records, observability. pgvector covers semantic recall and document search. Our ledger lives in its own schema in the same database, where row locks (<code>SKIP LOCKED</code>), advisory locks and <code>LISTEN/NOTIFY</code> serve the queue and the browser-profile locks. LibSQL is a single-writer file. It is fine for development and weak once background tasks, the scheduler and API requests all write at the same time.</p>
+
+  <h3>Object storage: SeaweedFS</h3>
+  <p>MinIO's community edition is effectively gone. The admin console was removed in May 2025, images stopped in October 2025, and the repository was archived in February 2026. SeaweedFS (Apache-2.0) runs as one container with versioning and object lock. Garage (AGPL) is lighter but has no versioning. RustFS reached 1.0 only in September 2026. S3 holds artifacts, Editor blobs and backups. Task workspaces stay on the volume, because Docker sandboxes can't mount S3.</p>
+
+  <h3>Valkey: only when you split processes</h3>
+  <p>A single server process needs no Redis-like service: Mastra's in-process pub/sub and stream cache are enough. Valkey (BSD) becomes necessary only if workers run separately from the API.</p>
+
+  <h3>Models</h3>
+  <p>"No subscriptions" leaves two paths, and the choice is yours (see <a href="#decisions">Decisions</a>):</p>
+  <ul>
+    <li><strong>Pay-per-use API keys</strong> through Mastra's model router, with fallback chains. No monthly fee, but it is still a third-party service.</li>
+    <li><strong>Local models</strong> through any OpenAI-compatible server (Ollama, llama.cpp, vLLM) in Docker. Agents that call tools reliably want roughly 30B-class models or larger. 24 GB of VRAM runs 20–30B models at 4-bit with modest context. CPU-only is practical just for embeddings. Watch out for <code>ollama-cloud</code> in Mastra's provider list: it is a paid hosted service, not local.</li>
+  </ul>
+  <p>A practical mix is API models for the chief and leads, and local models for embeddings, the observational-memory writer and simple classification.</p>
+
+  <h3>Observability</h3>
+  <p>Mastra traces every run and estimates cost from a built-in price table. Metrics need an analytics-capable store, such as Postgres with its observability domain or DuckDB. LibSQL has no metrics support. Traces filter by tags and metadata, which gives per-card cost.</p>
+</section>
+
+<!-- 10 -->
+<section id="clients">
+  <h2><span class="num">10</span>API and clients</h2>
+  <h3>The API surface</h3>
+  <p>Built in: agents (49 routes, including streaming, wake-a-thread messaging, live thread subscriptions and approvals), memory (19), workflows (26), schedules, background tasks (read-only), stored Editor records (41), workspaces (21), observability (43), MCP and A2A. Our own routes, added with <code>registerApiRoute</code> (authenticated by default, listed in OpenAPI):</p>
+  <ul>
+    <li><code>/board/*</code> for tasks, phases, comments and the event stream.</li>
+    <li><code>/departments/*</code> and <code>/agents/*</code> definitions, compiled into Editor.</li>
+    <li><code>/capabilities</code>, <code>/plugins/*</code> and <code>/secrets/*</code>.</li>
+    <li><code>/attention</code>, the inbox of approvals and blocked tasks.</li>
+    <li><code>/push/*</code> for device registration.</li>
+  </ul>
+
+  <h3>Streaming</h3>
+  <p>Everything streams over SSE. To watch a department live, the app subscribes to its task thread. Dropped mobile connections can resume from an offset once a caching pub/sub is configured. Browsers' built-in <code>EventSource</code> can't send auth headers, so the apps use fetch-based SSE, which the Mastra client already does.</p>
+
+  <h3>Auth and network</h3>
+  <ul>
+    <li>Device tokens with Mastra's <code>SimpleAuth</code>, or expiring JWTs with <code>MastraJwtAuth</code>. Both are free. Better Auth in front of Studio in production falls under EE, so skip it.</li>
+    <li>Keep the server off the public internet. Self-hosted WireGuard or Headscale keeps everything under your control. Tailscale's free tier is easier but is a third-party service.</li>
+    <li>Studio stays available as an admin console behind the same auth.</li>
+  </ul>
+
+  <h3>The apps</h3>
+  <div class="two">
+    <div class="card">
+      <h4>Web app</h4>
+      <ul>
+        <li>Chat with the chief or any lead (assistant-ui or AI SDK UI)</li>
+        <li>Department boards and the CRM-style table view</li>
+        <li>Department and agent builder, capability catalog, plugin installer</li>
+        <li>Attention inbox, live browser view with takeover</li>
+        <li>Schedules, memory viewer, costs</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Mobile app</h4>
+      <ul>
+        <li>Chief chat, attention inbox, approvals</li>
+        <li>Board overview and card detail</li>
+        <li>Browser takeover for logins and 2FA</li>
+        <li>Expo with the AI SDK (<code>expo/fetch</code> transport). The Mastra client accepts a custom fetch, but streaming that way is unverified</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Push without paid services</h3>
+  <ul>
+    <li><strong>First:</strong> install the web app as a PWA and use Web Push with self-generated VAPID keys. Free, no account, works on iOS 16.4+ once added to the Home Screen.</li>
+    <li><strong>Native app:</strong> the server sends straight to APNs and FCM. Both are free, but iOS needs an Apple Developer account. Expo's push service is a third-party relay we can skip.</li>
+    <li><strong>Android without Google:</strong> UnifiedPush, with a self-hosted ntfy as the distributor.</li>
+  </ul>
+</section>
+
+<!-- 11 -->
+<section id="examples">
+  <h2><span class="num">11</span>Two example departments</h2>
+  <p>Neither is in scope now. They show what "a department, not an agent" means once everything above exists, and that both can be assembled from the UI.</p>
+
+  <h3>LinkedIn department</h3>
+<pre><code><span class="c"># department definition, as stored by the builder UI</span>
+department: linkedin
+lead:        LinkedIn manager       <span class="c"># priorities, rules, weekly summary</span>
+members:
+  - Job scout       <span class="c"># searches, scores roles against your CV</span>
+  - Applicant       <span class="c"># fills applications, including external ATS pages</span>
+  - Networker       <span class="c"># drafts replies to messages and comments</span>
+  - Writer          <span class="c"># drafts posts in your voice</span>
+capabilities:
+  browser_identity: linkedin-me     <span class="c"># persistent profile volume, one task at a time</span>
+  knowledge:        [cv, profile-facts, target-roles]
+  skills:           [cover-letter-style, outreach-rules]
+memory_profile: lead
+schedules:
+  - "0 9 * * 1-5"   job scan
+  - "0 */2 * * *"   inbox check
+  - "0 10 * * 2,4"  post draft
+approval_required: [submit_application, send_message, publish_post]</code></pre>
+  <div class="callout bad">
+    <span class="label">Account risk</span>
+    <p>LinkedIn's User Agreement (section 8.2) prohibits bots and other automated methods for accessing the service, messaging, posting and applying. Detection can get the account restricted. Safer modes: drafts only (it prepares and you send), or automation limited to job search plus applications on external employer sites. Human-paced timing and approval on every outbound action lower the risk without removing it.</p>
+  </div>
+
+  <h3>Content studio</h3>
+  <ul>
+    <li><strong>Lead:</strong> content producer, holding the editorial calendar and brand rules.</li>
+    <li><strong>Members:</strong> trend researcher (uses the research tools), scriptwriter, video editor (HyperFrames plugin in the HyperFrames sandbox image), publisher.</li>
+    <li><strong>Pipeline as a workflow:</strong> brief, script, storyboard, render, review (suspends for you), publish.</li>
+    <li><strong>Output:</strong> renders go to S3, and the card shows a preview link. Voice-over and captions are made locally (Kokoro TTS, whisper.cpp).</li>
+    <li><strong>Publishing:</strong> official platform APIs through MCP where they exist. Browser identities only where they don't, with the same terms-of-service caveat as LinkedIn.</li>
+  </ul>
+</section>
+
+<!-- 12 -->
+<section id="risks">
+  <h2><span class="num">12</span>Risks and limits</h2>
+  <div class="table-wrap">
+    <table class="wide">
+      <thead><tr><th>Risk</th><th>Level</th><th>Mitigation</th></tr></thead>
+      <tbody>
+        <tr><td>Container control is root-equivalent</td><td><span class="pill high">high</span></td><td>Runner as the only Docker client, rootless daemon, image allowlist, Linux host</td></tr>
+        <tr><td>Prompt injection from web pages and plugins, with access to your accounts</td><td><span class="pill high">high</span></td><td>Approval on outbound actions, least-privilege tools per department, one container per browser identity, no secrets in sandboxes, sanitizing processors on tool output</td></tr>
+        <tr><td>Browser stream appears unauthenticated in 1.74</td><td><span class="pill high">high</span></td><td>Auth at caddy on <code>/browser/*</code>; verify, then report upstream</td></tr>
+        <tr><td>LinkedIn and social platform terms</td><td><span class="pill high">high</span></td><td>Drafts-only mode, approvals, official APIs where they exist</td></tr>
+        <tr><td>Mastra can reclassify features as Enterprise</td><td><span class="pill med">medium</span></td><td>Own definition tables, CI ban on <code>*/ee</code>, pinned versions</td></tr>
+        <tr><td>Beta and pre-1.0 packages (durable agents, workers, dynamic workflows, Editor 0.x, agent-browser 0.5)</td><td><span class="pill med">medium</span></td><td>Keep glue code thin; pin and test upgrades</td></tr>
+        <tr><td>Restart recovery re-runs a whole delegation</td><td><span class="pill med">medium</span></td><td>Idempotent tools; decision outbox with idempotency keys</td></tr>
+        <tr><td>Scheduler is single-instance and skips missed fires</td><td><span class="pill med">medium</span></td><td>Always-on host; catch-up check at boot</td></tr>
+        <tr><td>SearXNG engines block a single IP</td><td><span class="pill med">medium</span></td><td>Many engines, API-backed engines, caching, backoff</td></tr>
+        <tr><td>Local models too weak for reliable tool calling</td><td><span class="pill med">medium</span></td><td>Hybrid model setup; deterministic browser tools</td></tr>
+        <tr><td>Windows host: slow bind mounts, no rootless Docker</td><td><span class="pill low">low</span></td><td>Linux box or VPS for the server; Windows only for development</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 13 -->
+<section id="decisions">
+  <h2><span class="num">13</span>Decisions for you</h2>
+  <p>These change the design itself, so they need settling before anything else.</p>
+  <ol class="decisions">
+    <li><strong>Models: pay-per-use API, local GPU, or a mix?</strong><p>API keys have no subscription, but they are a third-party service. Fully local needs serious GPU memory for reliable tool calling. A mix is the practical middle.</p></li>
+    <li><strong>Where does it run?</strong><p>A dedicated Linux box or VPS gives rootless Docker, fast volumes and real uptime for schedules. This Windows PC with Docker Desktop works for development but weakens isolation.</p></li>
+    <li><strong>Remote access: self-hosted WireGuard or Headscale, or Tailscale's free tier?</strong><p>Self-hosting matches your no-third-party rule. Tailscale is simpler to run.</p></li>
+    <li><strong>How far should the LinkedIn agent go?</strong><p>Full automation, drafts only, or job search plus external applications only. This decides how much account risk you accept.</p></li>
+    <li><strong>Mobile: PWA first or a native Expo app from the start?</strong><p>A PWA gets free Web Push and shares the web codebase. Native means better background behavior, plus an Apple Developer account for iOS push.</p></li>
+    <li><strong>Agent definitions: our own tables or Mastra Editor's directly?</strong><p>Our tables hedge against license changes and keep the UI ours. Editor directly is less code. I recommend our own tables.</p></li>
+  </ol>
+</section>
+
+<!-- 14 -->
+<section id="verify">
+  <h2><span class="num">14</span>Still unverified</h2>
+  <p>Claims this design leans on that were read from docs or source but not run. Each needs a small spike before committing.</p>
+  <ul>
+    <li>Stored departments resolve their stored specialists when loaded leaves-first at boot.</li>
+    <li>The <code>/api/stored/*</code> routes in <code>@mastra/server</code> carry no license check. The guard was seen only on the Builder.</li>
+    <li>Whether the browser stream WebSocket really skips auth, and whether config can turn it off.</li>
+    <li>MCP client support for legacy SSE servers and a working directory for stdio servers.</li>
+    <li>HyperFrames rendering speed on a CPU-only host.</li>
+    <li>The Mastra client streaming through <code>expo/fetch</code> on mobile.</li>
+    <li>Tracing tags carrying through to subagent spans (needed for per-card cost).</li>
+    <li>Whether the per-thread task checklist survives a restart. The docs disagree on which storage domain holds it.</li>
+  </ul>
+</section>
+
+<!-- 15 -->
+<section id="sources">
+  <h2><span class="num">15</span>Sources</h2>
+  <ul class="sources">
+    <li>Mastra docs, harness: background tasks, subagents, signals, schedules, goals, durable agents, AgentController</li>
+    <li>Mastra docs: Editor, stored-agent versioning, tool, sandbox, browser and blob providers</li>
+    <li>Mastra docs: Agent Builder configuration and deployment (EE gate)</li>
+    <li>Mastra docs: memory, working memory, observational memory, semantic recall</li>
+    <li>Mastra docs: workspace, DockerSandbox, browser providers, MCP client, skills, tool search</li>
+    <li>Mastra docs: server routes, custom routes, auth, pub/sub, storage, observability metrics</li>
+    <li>Package source: @mastra/core 1.74, @mastra/editor 0.15–0.16, @mastra/server 1.74, @mastra/deployer 1.74, @mastra/docker 0.9.2, @mastra/agent-browser 0.5.3, @mastra/factory 0.19.1, @mastra/client-js 1.51</li>
+    <li>Mastra Enterprise License v2.0 and repository LICENSE.md</li>
+    <li>Mastra Factory docs: boards and rules, deployment, storage</li>
+    <li>Agent Plugins spec 1.0 (agent-plugins.org); Agent Skills spec</li>
+    <li>Codex plugin build guide and release notes; Claude Code plugin and marketplace reference</li>
+    <li>HyperFrames repository, CLI docs and render Dockerfile</li>
+    <li>Docker engine security and rootless docs; docker-socket-proxy; gVisor; Sysbox; docker/mcp-gateway</li>
+    <li>Chrome remote-debugging change (Chrome 136); Steel browser; browserless license</li>
+    <li>SearXNG limiter docs; Crawl4AI and Firecrawl self-host docs</li>
+    <li>MinIO community edition timeline; SeaweedFS, Garage, RustFS docs</li>
+    <li>ntfy known issues; Expo push FAQ; UnifiedPush FAQ</li>
+    <li>LinkedIn User Agreement, section 8.2</li>
+  </ul>
+  <p class="foot">Written from three research passes over local copies of the Mastra docs and npm packages, plus web sources, on 6 Oct 2026. Labels like "appears" mark claims read from source but not yet run.</p>
+</section>
+
+  </main>
+</div>
+</body>
+</html>

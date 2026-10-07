@@ -1,0 +1,20 @@
+import { Mastra } from '@mastra/core/mastra';
+import { Agent } from '@mastra/core/agent';
+import { LibSQLStore } from '@mastra/libsql';
+import { startFakeServer } from './fake-openai.mjs';
+const srv = await startFakeServer();
+const mastra = new Mastra({ storage: new LibSQLStore({ id: 'st', url: ':memory:' }), logger: false });
+let argKeys;
+const spec = new Agent({ id: 'spec', name: 'Spec', description: 'd', instructions: 'SPEC', model: { providerId: 'local', modelId: 'spec-model', url: srv.url } });
+const lead = new Agent({ id: 'lead', name: 'Lead', instructions: 'LEAD', model: { providerId: 'local', modelId: 'lead-model', url: srv.url },
+  agents: (a) => { argKeys = Object.keys(a); return { spec }; } });
+mastra.addAgent(spec); mastra.addAgent(lead);
+const g = await lead.generate('hello there');
+console.log('agents resolver arg keys:', argKeys);
+const s = await lead.stream('stream please');
+await s.consumeStream?.(); const t = await s.text; const u = await s.usage;
+console.log('stream text:', t.slice(0,80), 'usage:', JSON.stringify(u));
+for (const e of srv.log) console.log(e.body.model, 'stream=', e.body.stream, 'stream_options=', JSON.stringify(e.body.stream_options), 'auth=', e.auth, 'msgs=', e.body.messages.map(m=>m.role).join(','), 'parallel_tool_calls=', e.body.parallel_tool_calls, 'tool_choice=', e.body.tool_choice);
+const specReq = srv.log.find(e => e.body.model==='spec-model');
+console.log('spec request messages:', JSON.stringify(specReq.body.messages).slice(0, 600));
+srv.close(); process.exit(0);
