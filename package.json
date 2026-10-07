@@ -16,6 +16,7 @@
     "test": "pnpm -r test",
     "test:int": "pnpm --filter @superagent/api test:int",
     "test:e2e": "pnpm --filter @superagent/api test:e2e",
+    "test:live": "pnpm --filter @superagent/api test:live",
     "check:ee": "node scripts/check-ee-imports.mjs",
     "check": "pnpm check:ee && pnpm lint && pnpm typecheck && pnpm test && pnpm test:int",
     "db:up": "docker compose up -d postgres",

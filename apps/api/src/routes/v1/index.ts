@@ -6,6 +6,8 @@ import { problem, validationHook } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 import { APP_VERSION } from '../../version';
 import { registerMeRoutes } from './me';
+import { registerProviderRoutes } from './providers';
+import { registerSettingsRoutes } from './settings';
 import { registerTokenRoutes } from './tokens';
 
 export const V1_PREFIX = '/v1';
@@ -27,6 +29,8 @@ export function createV1Router(deps: AppDeps): OpenAPIHono<AppEnv> {
 
   registerMeRoutes(v1);
   registerTokenRoutes(v1, deps);
+  registerProviderRoutes(v1, deps);
+  registerSettingsRoutes(v1, deps);
 
   v1.openAPIRegistry.registerComponent('securitySchemes', 'bearer', { type: 'http', scheme: 'bearer' });
   v1.doc31('/openapi.json', {

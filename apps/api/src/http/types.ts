@@ -4,6 +4,8 @@ import type { HonoBindings, HonoVariables } from '@mastra/hono';
 import type { TokenService } from '../auth/tokens';
 import type { Config } from '../config';
 import type { Db } from '../db/client';
+import type { ProviderService } from '../modules/providers/service';
+import type { SettingsService } from '../modules/settings/service';
 
 /** Hono environment shared by Mastra's adapter and our routes (requestContext, mastra, ...). */
 export type AppEnv = { Bindings: HonoBindings; Variables: HonoVariables };
@@ -15,4 +17,6 @@ export interface AppDeps {
   mastra: Mastra;
   db: Db;
   tokens: TokenService;
+  providers: ProviderService;
+  settings: SettingsService;
 }
