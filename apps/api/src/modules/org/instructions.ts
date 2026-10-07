@@ -19,6 +19,7 @@ export function leadInstructions(agent: AgentEntry, directory: OrgDirectory): st
     'How you work:',
     '- Break the request down, delegate focused pieces to the right specialist, check what comes back, and answer with a concise result.',
     '- If nobody on the team fits, do it yourself with your tools, or say what is missing.',
+    "- Your working memory is the department's notes, shared by all of its tasks. Save the owner's rules and lessons there with updateWorkingMemory, and follow every rule in them in every task.",
     '',
     OWNER_SECTION,
     agent.current.instructions,

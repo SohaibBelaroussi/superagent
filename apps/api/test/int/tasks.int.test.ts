@@ -256,8 +256,13 @@ describe('tasks, board and dispatch', () => {
       expect.arrayContaining(['update_task', 'add_artifact', 'report_to_chief', 'agent-web-researcher']),
     );
     // The chief heard about it as a notification in its own thread.
-    const chiefCall = chatRequests().find(
-      (r) => systemPrompt(r).includes('chief of staff') && conversation(r).includes('<notification'),
+    // The event is written when the chief accepts the signal; its model call follows.
+    const chiefCall = await waitFor(
+      async () =>
+        chatRequests().find(
+          (r) => systemPrompt(r).includes('chief of staff') && conversation(r).includes('<notification'),
+        ),
+      Boolean,
     );
     expect(chiefCall && conversation(chiefCall)).toContain(
       '#1 Research Mastra: Mastra is a TypeScript agent framework.',

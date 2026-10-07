@@ -23,7 +23,9 @@ export interface FakeOpenAI {
 }
 
 type ChatMessage = { role: string; content: unknown; tool_calls?: Array<{ function?: { name?: string } }> };
-type ToolDef = { function: { name: string } };
+type ToolDef = {
+  function: { name: string; parameters?: { properties?: Record<string, { type?: string }> } };
+};
 
 /**
  * A cooperative model: in each turn (everything after the last user message) it calls tools in this
@@ -31,8 +33,11 @@ type ToolDef = { function: { name: string } };
  * chief create a task, "[artifact]" makes a lead attach a deliverable, "[no-report]" makes a lead stop
  * without reporting, "[slow]" delays every answer in the conversation, "[linger]" only the final (text)
  * answers and "[slow-report]" only the answer that calls report_to_chief. "[fixed-ids]" reuses one tool-call id.
+ * "[remember]" makes an agent update its working memory (the owner profile, or the department notes).
+ * Observational memory's observer and reflector get valid observations back.
  */
 const PRIORITY: Array<(tool: string) => boolean> = [
+  (t) => t === 'updateWorkingMemory',
   (t) => t === 'create_task',
   (t) => t === 'update_task',
   (t) => t.startsWith('agent-'),
@@ -66,6 +71,7 @@ function pickTool(tools: string[], messages: ChatMessage[]): string | undefined 
     !NEVER_AUTOMATIC.has(t) &&
     !(t === 'create_task' && !directives.includes('[assign]')) &&
     !(t === 'add_artifact' && !directives.includes('[artifact]')) &&
+    !(t === 'updateWorkingMemory' && !directives.includes('[remember]')) &&
     !(t === 'report_to_chief' && directives.includes('[no-report]'));
   for (const matches of PRIORITY) {
     const tool = tools.find((t) => matches(t) && allowed(t));
@@ -74,8 +80,18 @@ function pickTool(tools: string[], messages: ChatMessage[]): string | undefined 
   return tools.find(allowed);
 }
 
-function argsFor(tool: string): Record<string, unknown> {
+/** What a "[remember]" puts in working memory: a profile field (schema mode) or notes (template mode). */
+export const REMEMBERED = {
+  preference: 'Prefers answers in French',
+  notes: '# Department notes\n- Rules and preferences from the owner: always cite two sources.\n',
+};
+
+function argsFor(tool: string, def?: ToolDef): Record<string, unknown> {
   if (tool.startsWith('agent-')) return { prompt: 'Find out what Mastra is and return two sources.' };
+  if (tool === 'updateWorkingMemory') {
+    const templateMode = def?.function.parameters?.properties?.memory?.type === 'string';
+    return { memory: templateMode ? REMEMBERED.notes : { preferences: [REMEMBERED.preference] } };
+  }
   switch (tool) {
     case 'create_task':
       return {
@@ -108,6 +124,12 @@ function argsFor(tool: string): Record<string, unknown> {
       return {};
   }
 }
+
+/** Observational memory's observer and reflector expect this shape. */
+export const OBSERVATIONS =
+  '<observations>\nDate: Oct 7, 2026\n* 🔴 (09:00) The owner asked about Mastra; the lead is researching it\n</observations>\n' +
+  '<current-task>\nPrimary: answer the latest request\n</current-task>';
+const OBSERVATIONS_REFLECTED = '<observations>\n* 🔴 The owner researches Mastra\n</observations>';
 
 export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Promise<FakeOpenAI> {
   const requests: RecordedRequest[] = [];
@@ -158,7 +180,8 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
 
     if (req.method === 'POST' && path === '/chat/completions' && body) {
       const messages = (body.messages as ChatMessage[] | undefined) ?? [];
-      const tools = ((body.tools as ToolDef[] | undefined) ?? []).map((t) => t.function.name);
+      const toolDefs = (body.tools as ToolDef[] | undefined) ?? [];
+      const tools = toolDefs.map((t) => t.function.name);
       const toolResult = [...messages].reverse().find((m) => m.role === 'tool');
       const lastUser = [...messages].reverse().find((m) => m.role === 'user');
       const base = { id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1, model: body.model };
@@ -172,7 +195,10 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
         await new Promise((r) => setTimeout(r, SLOW_MS * 2));
       }
       if (tool) {
-        const args = argsFor(tool);
+        const args = argsFor(
+          tool,
+          toolDefs.find((t) => t.function.name === tool),
+        );
         delta = {
           role: 'assistant',
           content: null,
@@ -189,9 +215,15 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
         finish = 'tool_calls';
       } else {
         if (JSON.stringify(messages).includes('[linger]')) await new Promise((r) => setTimeout(r, SLOW_MS));
-        const text = toolResult
-          ? `The tool said ${String(toolResult.content)}. The magic number is 42.`
-          : `pong (${body.model}) ${typeof lastUser?.content === 'string' ? lastUser.content.slice(0, 20) : ''}`.trim();
+        const system = messages.find((m) => m.role === 'system')?.content;
+        const observing = typeof system === 'string' && system.includes('memory consciousness');
+        const text = observing
+          ? system.includes('observation reflector')
+            ? OBSERVATIONS_REFLECTED
+            : OBSERVATIONS
+          : toolResult
+            ? `The tool said ${String(toolResult.content)}. The magic number is 42.`
+            : `pong (${body.model}) ${typeof lastUser?.content === 'string' ? lastUser.content.slice(0, 20) : ''}`.trim();
         delta = { role: 'assistant', content: text };
         finish = 'stop';
       }

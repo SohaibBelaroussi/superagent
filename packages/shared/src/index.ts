@@ -473,3 +473,45 @@ export type KnowledgeHit = z.infer<typeof KnowledgeHitSchema>;
 
 export const KnowledgeSearchResultSchema = z.object({ items: z.array(KnowledgeHitSchema) });
 export type KnowledgeSearchResult = z.infer<typeof KnowledgeSearchResultSchema>;
+
+// --- M4: memory ---
+
+/**
+ * What the agents know about the owner. The chief of staff keeps it (working memory of the `owner`
+ * resource) and every department agent gets a read-only copy. Every field is optional: the chief
+ * updates it piece by piece.
+ */
+export const OwnerProfileSchema = z.object({
+  name: z.string().max(200).optional(),
+  language: z.string().max(100).optional().describe('Language to answer in'),
+  timezone: z.string().max(100).optional(),
+  communicationStyle: z.string().max(1000).optional().describe('How the owner likes answers'),
+  preferences: z.array(z.string().max(500)).max(50).optional(),
+  about: z.string().max(4000).optional().describe('Work, projects and anything else worth knowing'),
+});
+export type OwnerProfile = z.infer<typeof OwnerProfileSchema>;
+
+/** A partial update: fields given are replaced (lists included), null removes a field. */
+export const OwnerProfilePatchSchema = z.object({
+  name: z.string().max(200).nullable().optional(),
+  language: z.string().max(100).nullable().optional(),
+  timezone: z.string().max(100).nullable().optional(),
+  communicationStyle: z.string().max(1000).nullable().optional(),
+  preferences: z.array(z.string().max(500)).max(50).nullable().optional(),
+  about: z.string().max(4000).nullable().optional(),
+});
+export type OwnerProfilePatch = z.infer<typeof OwnerProfilePatchSchema>;
+
+export const DepartmentMemorySchema = z.object({
+  departmentId: z.uuid(),
+  notes: z
+    .string()
+    .nullable()
+    .describe("The department's working notes (markdown), kept by its lead across tasks; null before any"),
+});
+export type DepartmentMemory = z.infer<typeof DepartmentMemorySchema>;
+
+export const UpdateDepartmentMemoryInputSchema = z.object({
+  notes: z.string().max(20_000).describe('Replaces the notes (markdown)'),
+});
+export type UpdateDepartmentMemoryInput = z.infer<typeof UpdateDepartmentMemoryInputSchema>;

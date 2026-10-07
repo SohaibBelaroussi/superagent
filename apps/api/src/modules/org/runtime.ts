@@ -1,7 +1,7 @@
 import { Agent, type ToolsInput } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
-import type { Memory } from '@mastra/memory';
+import type { MemoryProfiles, OwnerProfileProcessor } from '../memory/profiles';
 import { routerId } from '../providers/model-ref';
 import type { SettingsService } from '../settings/service';
 import type { ToolCatalog } from '../tools/catalog';
@@ -15,15 +15,17 @@ export interface CompileDeps {
   directory: OrgDirectory;
   settings: SettingsService;
   catalog: ToolCatalog;
-  /** Shared message history (threads per task, per conversation). */
-  memory: Memory;
+  /** Memory by profile: leads keep department notes, specialists only short history. */
+  memory: MemoryProfiles;
+  /** Adds the owner's profile to every department agent's context. */
+  ownerProfile: OwnerProfileProcessor;
   /** Ledger tools every lead gets (update_task, report_to_chief, ...). */
   leadTools: ToolsInput;
 }
 
 /** Turns one definition (its active version) into a Mastra agent. */
 export function compileAgent(entry: AgentEntry, deps: CompileDeps): Agent {
-  const { directory, settings, catalog, mastra, memory, leadTools } = deps;
+  const { directory, settings, catalog, mastra, memory, leadTools, ownerProfile } = deps;
   const model = entry.current.model;
   return new Agent({
     id: entry.key,
@@ -42,7 +44,8 @@ export function compileAgent(entry: AgentEntry, deps: CompileDeps): Agent {
       entry.role === 'lead'
         ? { ...catalog.build(entry.current.tools), ...leadTools }
         : catalog.build(entry.current.tools),
-    memory,
+    memory: entry.role === 'lead' ? memory.lead : memory.specialist,
+    inputProcessors: [ownerProfile],
     // A lead's team is its department's active specialists, looked up per request so new or
     // edited specialists are picked up immediately. The agents function receives no mastra handle.
     agents:

@@ -4,14 +4,14 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 
 ## Read first
 - [docs/api-plan.md](docs/api-plan.md): milestones M0–M9 and what each must deliver.
-- [docs/decisions.md](docs/decisions.md): settled decisions D01–D23. Build within them; don't reopen them.
+- [docs/decisions.md](docs/decisions.md): settled decisions. Build within them; don't reopen them.
 - [docs/notes/mastra-1.74.md](docs/notes/mastra-1.74.md): verified Mastra behaviour and gotchas. Check it before guessing at a Mastra API.
 - [docs/spikes/](docs/spikes/): runnable reference code for Mastra APIs.
 
 ## Layout
 - `apps/api`: the server. Hono app with Mastra mounted on `/api`, our control plane on `/v1`.
 - `packages/shared`: zod schemas for `/v1` requests and responses (future clients reuse them).
-- `compose.yaml`: Postgres (pgvector) and, under the `app` profile, the packaged API.
+- `compose.yaml`: Postgres (pgvector), SeaweedFS (S3 storage), SearXNG and Crawl4AI (web tools), and, under the `app` profile, the packaged API.
 
 ## Commands (from the repo root)
 - `pnpm db:up`, then `pnpm dev`: the API on http://127.0.0.1:4111 with reload. Docs UI at `/v1/docs`.
@@ -32,6 +32,8 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 - **Organization.** Departments and versioned agent definitions live in our tables (`OrgDirectory` keeps an in-memory view, `AgentRuntime` compiles them into Mastra agents). A lead's team is its department's specialists; specialists see only the delegation prompt.
 - **Tools.** Agents get tools from the code-defined `ToolCatalog`. Anything that fetches a URL for an agent must go through `await assertPublicUrl(url)` (no internal or private addresses; names are resolved and every address checked). A tool that fetches directly must also follow redirects manually and check each hop.
 - **Tasks.** Every task change goes through `TaskService`: one locked read-modify-write that appends its event, published after commit. Only `DispatchService` sends work to agents: new work starts a fresh run on the task's thread (`agent.stream`) or waits for the lead's turn to end, and only steered messages go into a running turn as signals. Its per-task supervisor flags a task once the lead's thread is idle without a report.
+- **Memory.** One Memory per profile (`modules/memory/profiles.ts`): the chief keeps the owner profile (working memory of resource `owner`), leads keep department notes (working memory of `dept:<slug>`), specialists only short history. Read and write them outside runs through `MemoryService`, which validates and merges. Observational memory compresses long threads and runs only for calls on a thread.
+- **Knowledge.** Uploads go through `KnowledgeService`: the file to object storage (`BlobStore`), its passages to Postgres full-text search. Only `POST /v1/knowledge` gets the 20 MiB body limit.
 - **Config writes.** Settings updates, provider deletion and every organization write (departments and agents) run under `settings.lock`.
 - **Errors.** `/v1` errors are problem+json: throw `ApiError`, or return `problem()`.
 - **Schemas.** zod 4 everywhere. Request and response schemas go in `packages/shared`.

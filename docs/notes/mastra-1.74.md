@@ -489,7 +489,30 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 
 **Live result:** the owner's model ran an owner task and a chief-assigned task through `update_task`, delegation and `report_to_chief` into `review`, and the chief announced the task number.
 
-## 16. From earlier research, needed in later milestones
+## 16. Learned while building M4 (2026-10-07)
+
+**Working memory:**
+- Schema mode gives the agent `updateWorkingMemory({ memory: <object> })`, deep-merged (objects merge, lists are replaced, `null` deletes). Every schema field must be optional, or partial updates fail validation. Template mode takes `{ memory: string }` and replaces the whole text. [spike]
+- Resource scope is shared by every thread of the resource, across Memory instances on the same storage. [spike]
+- From server code, `memory.getWorkingMemory({ threadId, resourceId })` and `memory.updateWorkingMemory({ ..., workingMemory })` work without the thread existing. The write neither validates nor merges, so do both yourself (`deepMergeWorkingMemory` is exported). [spike]
+- Mastra's `POST /api/memory/threads/:id/working-memory` skips schema validation too.
+
+**Observational memory (OM):**
+- Options: `{ model, observation: { messageTokens, bufferTokens, failurePolicy }, reflection: { observationTokens, failurePolicy } }`. `model` may be a function, called only when OM observes or reflects. Without a model, OM uses a Google model. [spike]
+- **With thread scope (the default), OM throws when a call has no thread**, which fails the whole call (a direct `/api/agents/:id/generate`). We subclass Memory and leave the OM processor out of `getInputProcessors`/`getOutputProcessors` for calls without one. [spike]
+- **An unresolvable model stops every turn on the thread** once the threshold is crossed (a tripwire, even with `failurePolicy: 'continue'`). Fall back from `fast` to `default`. [spike]
+- With OM on, `lastMessages` no longer caps history: the agent sees observations plus unobserved messages. [spike]
+- The observer expects `<observations>…</observations>` (optionally `<current-task>`); a fake model must answer that, or OM marks messages observed and stores nothing. [spike]
+- `memory.settled()` waits for background observation; call it before closing storage. [src]
+- `memory.getContext({ threadId, resourceId })` returns `hasObservations` and the OM record. [spike]
+
+**Input processors:** `processInput({ messageList })` with `messageList.addSystem(text, tag)` adds context for one run without saving it. Memory processors run first, so working memory is already in place; specialists reached by delegation run the processor too. Type the processor as its class (the generic `Processor` doesn't satisfy `inputProcessors`). [spike]
+
+**SeaweedFS 4.48:** `weed mini -bucket=<name> -master.telemetry=false -admin.ui=false` runs everything in one process and creates the bucket. `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the environment turn on S3 auth (anonymous gets 403). Telemetry is on by default. `GET /healthz` on the S3 port answers 200. [spike]
+
+**Live result:** with "answer in French" in the owner profile, a department answered in French; a rule the lead saved in its notes was applied on the next task (more reliably once the lead's instructions say to follow its notes); the owner's model compressed a long task thread (1683 tokens observed into 725).
+
+## 17. From earlier research, needed in later milestones
 
 - **DockerSandbox 0.9.2:**
   - One long-lived container per sandbox, reused by label.

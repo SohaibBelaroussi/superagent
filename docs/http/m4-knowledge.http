@@ -1,0 +1,55 @@
+# M4 walkthrough: knowledge documents.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Prerequisites: the stack with SeaweedFS (pnpm stack:up, S3_ACCESS_KEY and S3_SECRET_KEY in .env),
+# and a department with a specialist that has the knowledge_search tool (see m2-org.http).
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+@departmentId = paste-a-department-id
+
+### Upload a document shared with every department (text, markdown, CSV, JSON, HTML or PDF, up to 20 MiB)
+# @name shared
+POST {{baseUrl}}/v1/knowledge
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=superagent
+
+--superagent
+Content-Disposition: form-data; name="title"
+
+Retention policy
+--superagent
+Content-Disposition: form-data; name="file"; filename="retention.md"
+Content-Type: text/markdown
+
+# Data retention
+
+Customer records are kept for ninety days, then deleted.
+--superagent--
+
+### Upload one only a department searches
+POST {{baseUrl}}/v1/knowledge
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=superagent
+
+--superagent
+Content-Disposition: form-data; name="departmentId"
+
+{{departmentId}}
+--superagent
+Content-Disposition: form-data; name="file"; filename="discounts.txt"
+Content-Type: text/plain
+
+Discount rules: never exceed fifteen percent.
+--superagent--
+
+### Search like an agent of that department would (its documents and the shared ones)
+GET {{baseUrl}}/v1/knowledge/search?q=how long are customer records kept&departmentId={{departmentId}}
+Authorization: Bearer {{token}}
+
+### All documents
+GET {{baseUrl}}/v1/knowledge
+Authorization: Bearer {{token}}
+
+### Delete one (the file and its passages)
+DELETE {{baseUrl}}/v1/knowledge/{{shared.response.body.id}}
+Authorization: Bearer {{token}}

@@ -40,3 +40,47 @@ describe(`M4 against ${BASE_URL}`, () => {
     expect(gone.items).toEqual([]);
   });
 });
+
+describe(`M4 memory against ${BASE_URL}`, () => {
+  const json = { ...auth, 'content-type': 'application/json' };
+
+  it('edits the owner profile and a department’s notes', async () => {
+    const before = await (await fetch(`${BASE_URL}/v1/profile`, { headers: auth })).json();
+    const marker = `e2e-${Date.now().toString(36)}`;
+    const patched = await fetch(`${BASE_URL}/v1/profile`, {
+      method: 'PATCH',
+      headers: json,
+      body: JSON.stringify({ about: marker }),
+    });
+    expect(patched.status).toBe(200);
+    expect(await patched.json()).toMatchObject({ about: marker });
+    // Leave the profile as it was.
+    await fetch(`${BASE_URL}/v1/profile`, {
+      method: 'PATCH',
+      headers: json,
+      body: JSON.stringify({ about: (before as { about?: string }).about ?? null }),
+    });
+
+    const department = (await (
+      await fetch(`${BASE_URL}/v1/departments`, {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify({ slug: marker, name: `E2E ${marker}` }),
+      })
+    ).json()) as { id: string };
+    const empty = await (
+      await fetch(`${BASE_URL}/v1/departments/${department.id}/memory`, { headers: auth })
+    ).json();
+    expect(empty).toEqual({ departmentId: department.id, notes: null });
+    const put = await fetch(`${BASE_URL}/v1/departments/${department.id}/memory`, {
+      method: 'PUT',
+      headers: json,
+      body: JSON.stringify({ notes: '# Notes\n- Use metric units.' }),
+    });
+    expect(await put.json()).toEqual({ departmentId: department.id, notes: '# Notes\n- Use metric units.' });
+    expect(
+      (await fetch(`${BASE_URL}/v1/departments/${department.id}`, { method: 'DELETE', headers: auth }))
+        .status,
+    ).toBe(204);
+  });
+});

@@ -7,6 +7,7 @@ import type { AppDeps, AppEnv } from '../../http/types';
 import { APP_VERSION } from '../../version';
 import { isUpload, MAX_UPLOAD_BYTES, registerKnowledgeRoutes } from './knowledge';
 import { registerMeRoutes } from './me';
+import { registerMemoryRoutes } from './memory';
 import { registerOrgRoutes } from './org';
 import { registerProviderRoutes } from './providers';
 import { registerSettingsRoutes } from './settings';
@@ -39,6 +40,7 @@ export function createV1Router(deps: AppDeps): OpenAPIHono<AppEnv> {
   registerOrgRoutes(v1, deps);
   registerTaskRoutes(v1, deps);
   registerKnowledgeRoutes(v1, deps);
+  registerMemoryRoutes(v1, deps);
 
   v1.openAPIRegistry.registerComponent('securitySchemes', 'bearer', { type: 'http', scheme: 'bearer' });
   v1.doc31('/openapi.json', {

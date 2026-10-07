@@ -1,0 +1,51 @@
+# M4 walkthrough: the owner profile and department notes.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Prerequisite: a department with a lead (see m2-org.http) and a default model (m1-providers.http).
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+@departmentId = paste-a-department-id
+
+### What the agents know about you (empty at first)
+GET {{baseUrl}}/v1/profile
+Authorization: Bearer {{token}}
+
+### Tell them. Every department agent gets a read-only copy on its next run.
+PATCH {{baseUrl}}/v1/profile
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Sohaib",
+  "language": "English",
+  "communicationStyle": "Short and direct",
+  "preferences": ["Use metric units", "Cite sources as links"]
+}
+
+### Remove a field with null
+PATCH {{baseUrl}}/v1/profile
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "communicationStyle": null }
+
+### The chief also learns as you talk (it updates the same profile)
+POST {{baseUrl}}/api/agents/chief/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "messages": [{ "role": "user", "content": "Note that I prefer answers in French from now on." }],
+  "memory": { "thread": "chief:main", "resource": "owner" }
+}
+
+### A department's notes: rules and lessons its lead keeps across tasks
+GET {{baseUrl}}/v1/departments/{{departmentId}}/memory
+Authorization: Bearer {{token}}
+
+### Correct them; the lead reads the new notes on its next task
+PUT {{baseUrl}}/v1/departments/{{departmentId}}/memory
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "notes": "# Department notes\n- Rules and preferences from the owner: two sources per answer.\n" }

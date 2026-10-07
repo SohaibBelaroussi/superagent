@@ -1,7 +1,6 @@
 import type { Agent } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
-import { Memory } from '@mastra/memory';
 import { PostgresStore } from '@mastra/pg';
 import type { Hono } from 'hono';
 import type pg from 'pg';
@@ -23,6 +22,8 @@ import { KnowledgeService } from './modules/knowledge/service';
 import { EventBus } from './modules/ledger/events';
 import { TaskService } from './modules/ledger/service';
 import { createChiefTools, createLeadTools } from './modules/ledger/tools';
+import { createMemoryProfiles, OwnerProfileProcessor } from './modules/memory/profiles';
+import { MemoryService } from './modules/memory/service';
 import { OrgDirectory } from './modules/org/directory';
 import { AgentRuntime } from './modules/org/runtime';
 import { OrgService } from './modules/org/service';
@@ -45,6 +46,7 @@ export interface System {
   tasks: TaskService;
   dispatch: DispatchService;
   knowledge: KnowledgeService;
+  memory: MemoryService;
   mastra: Mastra;
   app: Hono<AppEnv>;
   /** Drains Mastra and closes the database pool. Does not touch the HTTP server. */
@@ -114,20 +116,39 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     });
     await storage.init();
 
-    // One message history for every agent: a thread per task, the owner's thread with the chief.
-    const memory = new Memory({ storage, options: { lastMessages: 40 } });
+    // A thread per task (resource dept:<slug>) and the owner's thread with the chief (resource owner).
+    const memory = createMemoryProfiles(storage, settings, {
+      observeTokens: config.MEMORY_OBSERVE_TOKENS,
+      reflectTokens: config.MEMORY_REFLECT_TOKENS,
+      observeAhead: config.MEMORY_OBSERVE_AHEAD,
+    });
+    const memoryService = new MemoryService(memory, directory, logger);
     const bus = new EventBus();
     const tasks = new TaskService(db, directory, bus);
     const dispatch = new DispatchService({ mastra, tasks, directory, memory, logger });
     const ledgerTools = { tasks, dispatch, directory };
     mastra.addAgent(
-      createChiefAgent({ directory, settings, catalog, memory, chiefTools: createChiefTools(ledgerTools) }),
+      createChiefAgent({
+        directory,
+        settings,
+        catalog,
+        memory: memory.chief,
+        chiefTools: createChiefTools(ledgerTools),
+      }),
       'chief',
     );
 
     // Agent definitions from our tables become live Mastra agents (decision D14).
     const runtime = new AgentRuntime(
-      { mastra, directory, settings, catalog, memory, leadTools: createLeadTools(ledgerTools) },
+      {
+        mastra,
+        directory,
+        settings,
+        catalog,
+        memory,
+        ownerProfile: new OwnerProfileProcessor(memory.chief, logger),
+        leadTools: createLeadTools(ledgerTools),
+      },
       logger,
     );
     runtime.loadAll();
@@ -151,6 +172,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       dispatch,
       bus,
       knowledge,
+      memory: memoryService,
     });
     return {
       config,
@@ -164,11 +186,14 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       tasks,
       dispatch,
       knowledge,
+      memory: memoryService,
       mastra,
       app,
       async close(drainTimeoutMs = 5_000) {
         await dispatch.close(drainTimeoutMs);
         await mastra.shutdown({ drainTimeout: drainTimeoutMs });
+        // Observational memory may still be writing in the background.
+        await Promise.all([memory.chief.settled(), memory.lead.settled(), memory.specialist.settled()]);
         blobs?.close?.();
         await pool.end();
       },

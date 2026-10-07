@@ -42,6 +42,10 @@ const configSchema = z.object({
   S3_REGION: z.string().min(1).default('us-east-1'),
   S3_ACCESS_KEY: z.string().min(8).optional(),
   S3_SECRET_KEY: z.string().min(16).optional(),
+  // Long threads are compressed into observations past this many tokens (decision D30).
+  MEMORY_OBSERVE_TOKENS: z.coerce.number().int().min(100).default(30_000),
+  MEMORY_REFLECT_TOKENS: z.coerce.number().int().min(100).default(40_000),
+  MEMORY_OBSERVE_AHEAD: z.stringbool().default(true),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15_000),
 });
 
