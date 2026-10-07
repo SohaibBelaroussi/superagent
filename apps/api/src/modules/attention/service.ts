@@ -1,5 +1,6 @@
 import type { AttentionItem } from '@superagent/shared';
 import type { TaskRow } from '../../db/schema';
+import type { BrowserService } from '../browser/service';
 import { approvalId, type DispatchService, type PendingApproval } from '../dispatch/service';
 import type { TaskService, TaskSignals } from '../ledger/service';
 import type { OrgDirectory } from '../org/directory';
@@ -18,6 +19,7 @@ export interface AttentionDeps {
   /** Whether document storage is configured. */
   storageEnabled: boolean;
   workspaces: WorkspaceService;
+  browsers: BrowserService;
 }
 
 /** How long the runner's health is trusted (the inbox is read often; the runner may be down). */
@@ -31,6 +33,7 @@ type Approval = PendingApproval & { agentName: string; departmentId: string };
  */
 export class AttentionService {
   private runnerCheck: { at: number; problem: Promise<string | undefined> } | undefined;
+  private browserCheck: { at: number; problem: Promise<string | undefined> } | undefined;
 
   constructor(private readonly deps: AttentionDeps) {}
 
@@ -60,6 +63,7 @@ export class AttentionService {
       const item = this.taskItem(task, signals.get(task.id) ?? {});
       if (item) items.push(item);
     }
+    items.push(...(await this.identityWaits()));
     items.push(...(await this.health()));
     return items.sort((a, b) => b.since.localeCompare(a.since));
   }
@@ -129,6 +133,39 @@ export class AttentionService {
       };
     }
     return undefined;
+  }
+
+  /** Tasks whose browser waits for an identity another browser is using. */
+  private async identityWaits(): Promise<AttentionItem[]> {
+    const waits = this.deps.browsers.waitingTasks();
+    if (waits.length === 0) return [];
+    const tasks = await this.deps.tasks.byIds(waits.map((wait) => wait.taskId));
+    return waits.flatMap((wait) => {
+      const task = tasks.get(wait.taskId);
+      if (!task) return [];
+      return [
+        {
+          id: `task:${task.id}`,
+          kind: 'problem' as const,
+          title: `#${task.number} ${task.title} waits for the browser identity "${wait.identity}"`,
+          detail: 'Another browser is using it. Closing that browser lets this task go on.',
+          taskId: task.id,
+          taskNumber: task.number,
+          departmentId: task.departmentId,
+          agent: null,
+          tool: null,
+          since: wait.since,
+        },
+      ];
+    });
+  }
+
+  private browserProblem(): Promise<string | undefined> {
+    const now = Date.now();
+    if (!this.browserCheck || now - this.browserCheck.at > RUNNER_CHECK_MS) {
+      this.browserCheck = { at: now, problem: this.deps.browsers.problem() };
+    }
+    return this.browserCheck.problem;
   }
 
   private sandboxProblem(): Promise<string | undefined> {
@@ -216,6 +253,23 @@ export class AttentionService {
         ],
       }[problem ?? ''];
       if (what) items.push(item('sandboxes', what[0] as string, what[1] as string));
+    }
+    const browsing = this.deps.directory
+      .agents()
+      .filter((agent) => agent.current.tools.some((grant) => grant.key === 'browser'));
+    if (browsing.length > 0) {
+      const names = browsing.map((agent) => agent.name).join(', ');
+      const problem = await this.browserProblem();
+      const what = {
+        off: ['Browsers are off', `Set RUNNER_URL and RUNNER_TOKEN: ${names} can't use the browser.`],
+        unreachable: ["The runner can't be reached", `${names} can't use the browser until it is back.`],
+        'no-docker': ["The runner can't reach Docker", `${names} can't use the browser.`],
+        'no-image': [
+          'Browsers are not set up',
+          `Build the browser image ("docker compose --profile browser build browser") and start the egress proxy ("docker compose up -d egress"): ${names} can't use the browser.`,
+        ],
+      }[problem ?? ''];
+      if (what) items.push(item('browsers', what[0] as string, what[1] as string));
     }
     const active = (await this.deps.schedules.list()).filter((s) => s.status === 'active');
     for (const departmentId of new Set(active.map((s) => s.departmentId))) {

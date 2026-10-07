@@ -71,6 +71,13 @@
       "when": 1791384830253,
       "tag": "0009_decisions_status",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791394873712,
+      "tag": "0010_browser_identities",
+      "breakpoints": true
     }
   ]
 }

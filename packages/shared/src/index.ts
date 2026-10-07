@@ -215,12 +215,20 @@ export const DepartmentSlugSchema = z
 export const AgentRoleSchema = z.enum(['lead', 'specialist']);
 export type AgentRole = z.infer<typeof AgentRoleSchema>;
 
+/** A browser identity's name: how agent definitions refer to it. */
+export const BrowserIdentityNameSchema = z
+  .string()
+  .regex(/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/, 'lowercase letters, digits and dashes (max 40)');
+
 export const ToolGrantSchema = z.object({
   key: z.string().min(1).describe('Tool key from GET /v1/catalog/tools'),
   requireApproval: z
     .boolean()
     .default(false)
     .describe('Pause before each call until the owner approves it (GET /v1/attention)'),
+  identity: BrowserIdentityNameSchema.optional().describe(
+    'Browser grant only: the identity (a signed-in browser profile, GET /v1/browser-identities) its browser uses',
+  ),
 });
 export type ToolGrant = z.infer<typeof ToolGrantSchema>;
 
@@ -638,3 +646,100 @@ export type Sandbox = z.infer<typeof SandboxSchema>;
 
 export const SandboxListSchema = z.object({ items: z.array(SandboxSchema) });
 export type SandboxList = z.infer<typeof SandboxListSchema>;
+
+// --- Browsers (M7) ---
+
+export const BrowserIdentitySchema = z.object({
+  id: z.uuid(),
+  name: BrowserIdentityNameSchema,
+  description: z.string(),
+  holder: z
+    .object({
+      kind: z
+        .enum(['task', 'owner'])
+        .describe(
+          "task: a task's browser; owner: a sign-in session (POST /v1/browser-identities/{id}/session)",
+        ),
+      taskId: z.uuid().nullable(),
+      taskNumber: z.number().int().nullable(),
+      until: z.iso.datetime().describe('The lock lapses then unless its browser is still in use'),
+    })
+    .nullable()
+    .describe('Who uses the identity now: one browser at a time, others wait'),
+  lastUsedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type BrowserIdentity = z.infer<typeof BrowserIdentitySchema>;
+
+export const BrowserIdentityListSchema = z.object({ items: z.array(BrowserIdentitySchema) });
+export type BrowserIdentityList = z.infer<typeof BrowserIdentityListSchema>;
+
+export const CreateBrowserIdentityInputSchema = z.object({
+  name: BrowserIdentityNameSchema,
+  description: z.string().trim().max(500).default(''),
+});
+export type CreateBrowserIdentityInput = z.input<typeof CreateBrowserIdentityInputSchema>;
+
+/** A browser the API has open: a task's, an identity's sign-in session, or the page reader's. */
+export const BrowserSessionSchema = z.object({
+  kind: z
+    .enum(['task', 'sign-in', 'reader'])
+    .describe("reader: the shared browser fetch_page falls back to for pages the page service can't read"),
+  taskId: z.uuid().nullable().describe('The task it belongs to (task browsers only)'),
+  taskNumber: z.number().int().nullable(),
+  identity: BrowserIdentityNameSchema.nullable().describe('The identity it is signed in as, if any'),
+  url: z.string().nullable(),
+  title: z.string().nullable(),
+  takenOver: z.boolean().describe("The owner has taken over in the live view: agents' browser tools wait"),
+  viewers: z.number().int().describe('Live views open on it'),
+  openedAt: z.iso.datetime(),
+  lastUsedAt: z.iso.datetime(),
+});
+export type BrowserSession = z.infer<typeof BrowserSessionSchema>;
+
+export const BrowserSessionListSchema = z.object({ items: z.array(BrowserSessionSchema) });
+export type BrowserSessionList = z.infer<typeof BrowserSessionListSchema>;
+
+/**
+ * What a live view sends (WebSocket text, JSON). Mouse and keyboard events go to the page only while
+ * the owner has taken over (always, in a sign-in session). Coordinates are in the frames' pixels.
+ */
+export const BrowserViewerInputSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('mouse'),
+    eventType: z.enum(['mousePressed', 'mouseReleased', 'mouseMoved', 'mouseWheel']),
+    x: z.number(),
+    y: z.number(),
+    button: z.enum(['none', 'left', 'middle', 'right']).optional(),
+    clickCount: z.number().int().min(0).max(3).optional(),
+    deltaX: z.number().optional(),
+    deltaY: z.number().optional(),
+    modifiers: z.number().int().min(0).max(15).optional(),
+  }),
+  z.object({
+    type: z.literal('keyboard'),
+    eventType: z.enum(['keyDown', 'keyUp', 'char']),
+    key: z.string().max(32).optional(),
+    code: z.string().max(32).optional(),
+    text: z.string().max(16).optional(),
+    modifiers: z.number().int().min(0).max(15).optional(),
+  }),
+  z.object({ type: z.literal('takeover'), on: z.boolean() }),
+  z.object({ type: z.literal('navigate'), url: z.string().min(1).max(4096) }),
+]);
+export type BrowserViewerInput = z.infer<typeof BrowserViewerInputSchema>;
+
+/**
+ * What a live view receives: JPEG frames as bare base64 strings, and these JSON events. Mastra's
+ * live-view clients understand the frames, `status`, `url` and `viewport`.
+ */
+export const BrowserViewerEventSchema = z.union([
+  z.object({
+    status: z.enum(['connected', 'streaming', 'browser_closed', 'taken_over', 'released']),
+  }),
+  z.object({ url: z.string() }),
+  z.object({ viewport: z.object({ width: z.number(), height: z.number() }) }),
+  z.object({ error: z.string(), message: z.string() }),
+]);
+export type BrowserViewerEvent = z.infer<typeof BrowserViewerEventSchema>;

@@ -61,6 +61,7 @@ describe('departments and agents', () => {
       'web/web_search',
       'web/fetch_page',
       'knowledge/knowledge_search',
+      'browser/browser',
       'workspace/files',
       'workspace/shell',
     ]);

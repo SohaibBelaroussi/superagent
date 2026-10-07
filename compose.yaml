@@ -44,6 +44,24 @@ services:
     networks: [web]
     restart: unless-stopped
 
+  # The only way out for agents' browsers (decision D34): a forward proxy that reaches public addresses
+  # only (each name resolved here, the address checked is the one dialled). Browsers sit on the
+  # internal browsers network with nothing else; this joins it and a normal network for its way out.
+  egress:
+    build:
+      context: .
+      dockerfile: apps/egress/Dockerfile
+    image: superagent-egress:local
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [browsers, egress]
+    init: true
+    restart: unless-stopped
+
   # S3-compatible storage for uploaded documents (decision D09). One process, telemetry off; only the
   # S3 port is published, on loopback. Its other ports (filer, master, admin) have no auth, so it sits
   # on its own network that only the API joins. It refuses to start without S3 keys (anonymous S3
@@ -85,6 +103,9 @@ services:
       RUNNER_TOKEN: ${RUNNER_TOKEN:-}
       RUNNER_WORKSPACES_VOLUME: superagent-workspaces
       RUNNER_IMAGES: '{"dev":"superagent-sandbox-dev:1"}'
+      RUNNER_BROWSER_IMAGE: superagent-browser:1
+      RUNNER_BROWSER_NETWORK: superagent-browsers
+      RUNNER_BROWSER_PROXY: http://egress:3128
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -106,6 +127,15 @@ services:
       context: infra/sandbox
       dockerfile: dev.Dockerfile
     image: superagent-sandbox-dev:1
+    scale: 0
+
+  # The browser image (Chromium). Built with the stack, never started here: the runner creates each
+  # task's browser from it, on the browsers network.
+  browser:
+    profiles: [app, browser]
+    build:
+      context: infra/browser
+    image: superagent-browser:1
     scale: 0
 
   api:
@@ -149,6 +179,13 @@ networks:
   # The runner and the API only; no way out.
   runner:
     internal: true
+  # Browsers and the egress proxy (decision D34). Internal: no gateway, so the proxy is the only exit.
+  # Named, because the runner attaches the browsers it creates to it.
+  browsers:
+    name: superagent-browsers
+    internal: true
+  # The egress proxy's own way out.
+  egress: {}
 
 volumes:
   pgdata:

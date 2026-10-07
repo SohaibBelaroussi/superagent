@@ -7,6 +7,7 @@ import { bootstrap, type System } from '../../src/bootstrap';
 import { loadConfig } from '../../src/config';
 import { createLogger } from '../../src/logger';
 import { type BlobStore, MemoryBlobStore } from '../../src/modules/knowledge/blobs';
+import type { ResolveHost } from '../../src/modules/tools/web';
 
 export const TEST_ADMIN_TOKEN = `sa_test_${'t'.repeat(40)}`;
 /** Fixed test-only key (32 bytes, base64). */
@@ -44,6 +45,7 @@ export async function startTestSystem(
     blobs?: BlobStore;
     /** Boot on an existing database (a restart) instead of a fresh one. */
     databaseUrl?: string;
+    resolveHost?: ResolveHost;
   } = {},
 ): Promise<System> {
   const config = loadConfig({
@@ -57,5 +59,10 @@ export async function startTestSystem(
   const logger = process.env.TEST_LOG
     ? createLogger({ LOG_LEVEL: 'debug', NODE_ENV: 'development' })
     : noopLogger;
-  return bootstrap(config, { logger, agents: options.agents, blobs: options.blobs ?? new MemoryBlobStore() });
+  return bootstrap(config, {
+    logger,
+    agents: options.agents,
+    blobs: options.blobs ?? new MemoryBlobStore(),
+    resolveHost: options.resolveHost,
+  });
 }

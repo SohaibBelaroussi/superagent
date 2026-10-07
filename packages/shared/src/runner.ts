@@ -88,10 +88,12 @@ export const ProcessStatusSchema = ProcessInfoSchema.extend({
 });
 export type ProcessStatus = z.infer<typeof ProcessStatusSchema>;
 
-/** What the runner can do right now: reach Docker, and which profiles' images are built. */
+/** What the runner can do right now: reach Docker, which profiles' images are built, start browsers. */
 export const RunnerReadySchema = z.object({
   docker: z.boolean(),
   images: z.record(z.string(), z.boolean()),
+  /** The browser image is built and the browsers network exists. */
+  browser: z.boolean(),
 });
 export type RunnerReady = z.infer<typeof RunnerReadySchema>;
 
@@ -176,6 +178,32 @@ export const FsResultSchema = z.object({
 });
 export type FsResult = z.infer<typeof FsResultSchema>;
 
+/** A task's browser container (decision D34). */
+export const RunnerBrowserSchema = z.object({
+  taskId: z.uuid(),
+  container: z.string(),
+  /** The identity whose profile it uses, if any. */
+  identityId: z.uuid().nullable(),
+  state: z.enum(['running', 'stopped']),
+  createdAt: z.iso.datetime(),
+  lastUsedAt: z.iso.datetime().nullable(),
+  /** Connections open to it right now. */
+  connections: z.number().int(),
+});
+export type RunnerBrowser = z.infer<typeof RunnerBrowserSchema>;
+export const RunnerBrowserListSchema = z.object({ items: z.array(RunnerBrowserSchema) });
+
+export const EnsureBrowserInputSchema = z.object({ identityId: z.uuid().optional() });
+export const EnsureBrowserResultSchema = RunnerBrowserSchema.extend({
+  outcome: z.enum(['created', 'connected']),
+  /**
+   * A single-use ticket for the DevTools connection, `GET /browsers/:taskId/cdp?ticket=` (WebSocket),
+   * valid for a minute. A ticket that shows up in an error message is already spent.
+   */
+  ticket: z.string(),
+});
+export type EnsureBrowserResult = z.infer<typeof EnsureBrowserResultSchema>;
+
 /** Errors are `{ code, message }` with these codes. */
 export const RunnerErrorSchema = z.object({ code: z.string(), message: z.string() });
 export type RunnerErrorCode =
@@ -196,4 +224,8 @@ export type RunnerErrorCode =
   | 'fs_timeout'
   | 'disk_full'
   | 'sandboxes_busy'
+  | 'browser_not_found'
+  | 'identity_in_use'
+  | 'browsers_busy'
+  | 'browser_unavailable'
   | 'docker_error';

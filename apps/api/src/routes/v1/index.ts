@@ -1,11 +1,13 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { Scalar } from '@scalar/hono-api-reference';
 import { bodyLimit } from 'hono/body-limit';
+import type { UpgradeWebSocket } from 'hono/ws';
 import { requireAuth } from '../../http/auth';
 import { problem, validationHook } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 import { APP_VERSION } from '../../version';
 import { registerAttentionRoutes } from './attention';
+import { registerBrowserRoutes } from './browser';
 import { isUpload, MAX_UPLOAD_BYTES, registerKnowledgeRoutes } from './knowledge';
 import { registerMeRoutes } from './me';
 import { registerMemoryRoutes } from './memory';
@@ -20,7 +22,7 @@ import { registerWorkspaceRoutes } from './workspace';
 export const V1_PREFIX = '/v1';
 
 /** Our control-plane API. Everything here requires a token, except the API docs outside production. */
-export function createV1Router(deps: AppDeps): OpenAPIHono<AppEnv> {
+export function createV1Router(deps: AppDeps, upgradeWebSocket: UpgradeWebSocket): OpenAPIHono<AppEnv> {
   const v1 = new OpenAPIHono<AppEnv>({ defaultHook: validationHook });
   const docsArePublic = deps.config.NODE_ENV !== 'production';
   const publicPaths = new Set(docsArePublic ? [`${V1_PREFIX}/openapi.json`, `${V1_PREFIX}/docs`] : []);
@@ -47,6 +49,7 @@ export function createV1Router(deps: AppDeps): OpenAPIHono<AppEnv> {
   registerScheduleRoutes(v1, deps);
   registerAttentionRoutes(v1, deps);
   registerWorkspaceRoutes(v1, deps);
+  registerBrowserRoutes(v1, deps, upgradeWebSocket);
 
   v1.openAPIRegistry.registerComponent('securitySchemes', 'bearer', { type: 'http', scheme: 'bearer' });
   v1.doc31('/openapi.json', {

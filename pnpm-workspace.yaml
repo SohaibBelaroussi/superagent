@@ -4,9 +4,11 @@ packages:
 
 # pnpm 10 blocks dependency build scripts by default. esbuild (used by tsx) needs its script;
 # the others are optional native addons (ssh2/cpu-features via testcontainers) or banners.
+# agent-browser's script downloads its native CLI from GitHub: we use only its JavaScript API.
 onlyBuiltDependencies:
   - esbuild
 ignoredBuiltDependencies:
+  - agent-browser
   - cpu-features
   - protobufjs
   - ssh2

@@ -53,6 +53,8 @@ The web tools (search and page reading) use two self-hosted services from `compo
 
 Agents granted `files` or `shell` work in a sandbox container per task, run by the runner (the only service that talks to Docker). In dev, build the sandbox image once with `docker compose --profile app build sandbox-dev`, set `RUNNER_TOKEN` and `RUNNER_URL` in `.env`, and start the runner next to the API with `pnpm dev:runner`. The packaged stack runs it for you.
 
+Agents granted `browser` get a Chromium of their task's own, also run by the runner, with no way out but the egress proxy (public sites only). Build the browser image and start the proxy with `pnpm browsers:up`. Watch a task's browser, or take it over, from the live view (`/v1/tasks/{id}/browser/stream`, a WebSocket). To let agents browse signed in, create a browser identity, sign it in yourself through its sign-in session and live view, and name it in the agent's browser grant. On Ubuntu 24.04 hosts, Chromium's sandbox needs `sysctl kernel.apparmor_restrict_unprivileged_userns=0`.
+
 For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS Code (REST Client) or a JetBrains IDE.
 
 ## API layout
@@ -61,7 +63,7 @@ For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS 
 |---|---|
 | `/health`, `/ready` | Liveness and readiness. Public |
 | `/api/*` | Mastra's built-in routes: agents, threads, memory, schedules. Token required |
-| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your profile, department notes, knowledge documents, schedules, the attention inbox, task files and sandboxes. Token required |
+| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your profile, department notes, knowledge documents, schedules, the attention inbox, task files and sandboxes, browsers, browser identities and live views (WebSockets: a bearer header, or `?apiKey=` from a browser). Token required |
 
 ## Development
 

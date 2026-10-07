@@ -9,7 +9,10 @@ export const LABELS = {
   runner: 'superagent.runner',
   task: 'superagent.task',
   profile: 'superagent.profile',
+  identity: 'superagent.identity',
 } as const;
+/** Where an identity's profile (cookies, storage) is mounted in its browser. */
+export const PROFILE_DIR = '/profile';
 
 const TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -19,6 +22,70 @@ export function isTaskId(value: string): boolean {
 
 export function containerName(config: RunnerConfig, taskId: string): string {
   return `${config.RUNNER_NAME_PREFIX}-${taskId}`;
+}
+
+export function browserName(config: RunnerConfig, taskId: string): string {
+  return `${config.RUNNER_NAME_PREFIX}-browser-${taskId}`;
+}
+
+/** Browsers carry their own runner label, so sandbox and browser listings never mix. */
+export function browserLabel(config: RunnerConfig): string {
+  return `${config.RUNNER_NAME_PREFIX}-browser`;
+}
+
+export function identityVolume(config: RunnerConfig, identityId: string): string {
+  if (!isTaskId(identityId)) throw new Error(`Not an identity id: ${identityId}`);
+  return `${config.RUNNER_IDENTITY_VOLUME_PREFIX}-${identityId}`;
+}
+
+/**
+ * A task's browser (decision D34): Chromium as the sandbox user with no capabilities and a read-only
+ * root, on the browsers network (internal: its only way out is the egress proxy), DevTools on loopback
+ * only. With an identity, its profile volume holds the logged-in state; without one, a throwaway tmpfs.
+ * The seccomp profile lets Chromium build its own renderer sandbox; without it, Chromium runs unsandboxed.
+ */
+export function browserSpec(
+  config: RunnerConfig,
+  input: { taskId: string; identityId?: string; seccomp?: string },
+): Docker.ContainerCreateOptions {
+  const memory = config.RUNNER_BROWSER_MEMORY_MB * 1024 * 1024;
+  return {
+    name: browserName(config, input.taskId),
+    Image: config.RUNNER_BROWSER_IMAGE,
+    User: SANDBOX_USER,
+    Env: [
+      `BROWSER_PROXY=${config.RUNNER_BROWSER_PROXY}`,
+      `BROWSER_BYPASS=${config.RUNNER_BROWSER_BYPASS}`,
+      ...(input.seccomp ? [] : ['BROWSER_SANDBOX=no']),
+    ],
+    Labels: {
+      [LABELS.runner]: browserLabel(config),
+      [LABELS.task]: input.taskId,
+      ...(input.identityId ? { [LABELS.identity]: input.identityId } : {}),
+    },
+    // Chromium saves cookies and drops its profile lock on SIGINT; SIGTERM loses both.
+    StopSignal: 'SIGINT',
+    HostConfig: {
+      NetworkMode: config.RUNNER_BROWSER_NETWORK,
+      CapDrop: ['ALL'],
+      SecurityOpt: ['no-new-privileges:true', ...(input.seccomp ? [`seccomp=${input.seccomp}`] : [])],
+      ReadonlyRootfs: true,
+      Tmpfs: {
+        '/tmp': 'rw,nosuid,nodev,size=1024m',
+        ...(input.identityId ? {} : { [PROFILE_DIR]: 'rw,nosuid,nodev,size=512m,uid=1000,gid=1000' }),
+      },
+      Memory: memory,
+      MemorySwap: memory,
+      NanoCpus: 2e9,
+      PidsLimit: config.RUNNER_BROWSER_PIDS_LIMIT,
+      Init: true,
+      Privileged: false,
+      // The image's /profile is owned by the sandbox user: a fresh identity volume takes that owner.
+      Mounts: input.identityId
+        ? [{ Type: 'volume', Source: identityVolume(config, input.identityId), Target: PROFILE_DIR }]
+        : [],
+    },
+  };
 }
 
 /** The folder of a task inside the workspaces volume. */

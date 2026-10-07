@@ -310,3 +310,23 @@ export const decisions = app.table(
 );
 
 export type DecisionRow = typeof decisions.$inferSelect;
+
+/**
+ * Browser identities (decision D34): signed-in browser profiles. The profile itself is a runner volume;
+ * this row names it and holds its lock, since one browser at a time may use a profile. The lock is a
+ * lease its holder renews while its browser is open, so a crashed holder frees it within minutes.
+ */
+export const browserIdentities = app.table('browser_identities', {
+  id: uuid('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  description: text('description').notNull(),
+  /** task: a task's browser (locked_by_task); owner: the owner's sign-in session. */
+  lockedBy: text('locked_by', { enum: ['task', 'owner'] }),
+  lockedByTask: uuid('locked_by_task'),
+  lockedUntil: timestamp('locked_until', { withTimezone: true }),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export type BrowserIdentityRow = typeof browserIdentities.$inferSelect;

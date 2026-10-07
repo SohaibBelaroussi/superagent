@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import {
+  EnsureBrowserInputSchema,
   EnsureSandboxInputSchema,
   ExecInputSchema,
   FsRequestSchema,
@@ -7,6 +8,7 @@ import {
 } from '@superagent/shared/runner';
 import { Hono } from 'hono';
 import type { z } from 'zod';
+import type { BrowserContainers } from './browsers';
 import type { RunnerConfig } from './config';
 import { dockerMessage } from './docker';
 import { type Logger, RunnerError, type SandboxManager } from './sandboxes';
@@ -42,7 +44,12 @@ function profileOf(query: string | undefined): string {
 }
 
 /** The runner's internal HTTP API. Every route but /health needs the shared bearer token. */
-export function createRunnerApp(manager: SandboxManager, config: RunnerConfig, log: Logger): Hono {
+export function createRunnerApp(
+  manager: SandboxManager,
+  browsers: BrowserContainers,
+  config: RunnerConfig,
+  log: Logger,
+): Hono {
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -64,8 +71,11 @@ export function createRunnerApp(manager: SandboxManager, config: RunnerConfig, l
     await next();
   });
 
-  // Whether sandboxes can actually run: Docker reachable, images built. /health only says the runner is up.
-  app.get('/ready', async (c) => c.json(await manager.ready()));
+  // Whether sandboxes and browsers can actually run. /health only says the runner is up.
+  app.get('/ready', async (c) => {
+    const sandboxes = await manager.ready();
+    return c.json({ ...sandboxes, browser: sandboxes.docker && (await browsers.ready()) });
+  });
 
   app.get('/sandboxes', async (c) => c.json({ items: await manager.list() }));
 
@@ -121,6 +131,36 @@ export function createRunnerApp(manager: SandboxManager, config: RunnerConfig, l
         peek: c.req.query('peek') === '1',
       }),
     );
+  });
+
+  // Browsers (decision D34). Their DevTools connections are WebSocket upgrades, served by
+  // BrowserContainers.relay with a ticket from POST /browsers/:taskId, not by these routes.
+  app.get('/browsers', async (c) => c.json({ items: await browsers.list() }));
+
+  app.get('/browsers/:taskId', async (c) => {
+    const browser = await browsers.get(c.req.param('taskId'));
+    if (!browser) throw new RunnerError(404, 'browser_not_found', 'This task has no browser');
+    return c.json(browser);
+  });
+
+  app.post('/browsers/:taskId', async (c) => {
+    const { identityId } = await body(c.req.raw, EnsureBrowserInputSchema);
+    return c.json(await browsers.ensure(c.req.param('taskId'), identityId));
+  });
+
+  app.delete('/browsers/:taskId', async (c) => {
+    if (!(await browsers.remove(c.req.param('taskId')))) {
+      throw new RunnerError(404, 'browser_not_found', 'This task has no browser');
+    }
+    return c.body(null, 204);
+  });
+
+  /** Deletes an identity's profile volume (404 if it had none). */
+  app.delete('/identities/:identityId', async (c) => {
+    if (!(await browsers.removeIdentity(c.req.param('identityId')))) {
+      throw new RunnerError(404, 'not_found', 'This identity has no profile');
+    }
+    return c.body(null, 204);
   });
 
   return app;

@@ -568,11 +568,29 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - A container whose `start()` fails (say, a volume subpath that doesn't exist) stays behind as `Created`: remove it in the failure path. [spike]
 - `@mastra/docker` (0.9.3, Apache-2.0) is a reference, not a dependency: it would make the API a Docker client and pulls any image. Its setsid/pgid kill and label-based reattach are copied.
 
-## 19. From earlier research, needed in later milestones
+## 19. Learned while building M7 (2026-10-07)
 
-- **Browser:**
-  - `cdpUrl` forces shared scope. A per-task browser needs a custom thread manager; FirecrawlBrowser's source is the template.
-  - **The screencast WebSocket `/browser/:agentId/stream` appears to be registered before auth** in deployer 1.74. Check this under our adapter in M7 and gate it ourselves.
+**Browsers** (`@mastra/agent-browser` 0.5.3, Apache-2.0; it needs `agent-browser` at exactly 0.19.0, the last with a JavaScript `BrowserManager`) [spike]:
+- `new AgentBrowser({ scope: 'shared', cdpUrl: async () => url })` connects to a remote browser; the function runs on every (re)launch, so a single-use URL works. `cdpUrl` with `scope: 'thread'` throws.
+- Every tool calls `browser.setCurrentThread(agent.threadId)` and keeps one current thread per AgentBrowser: a disconnect error clears whatever thread is current by then. Give each browser its own AgentBrowser, and route calls yourself.
+- `getTools()` builds fresh tools bound to that instance; `excludeTools` drops some (`browser_screenshot` sends images to the model). `browser_close` calls `close()`, which over CDP only disconnects: stopping the container is ours.
+- Snapshots are interactive-only unless `interactiveOnly: false`; refs read `@e3` and tools take them as written.
+- `getBrowserState()` and `getTabState()` carry URLs only, no titles: ask the page (`(await getManagerForThread()).getPage().title()`).
+- `startScreencast()` needs a launched browser; `onBrowserReady(cb)` runs `cb` at once if it is running, then on every relaunch.
+- Its `postinstall` downloads a native CLI from GitHub: pnpm blocks it (`ignoredBuiltDependencies`), and the JavaScript API doesn't need it.
+- Mastra's live-view route (`setupBrowserStream` in `@mastra/hono`) has no auth and `MastraServer.init()` doesn't mount it. Ours is a `@hono/node-ws` route on the `/v1` router: upgrades run through the whole app, auth included (a 401 is written to the socket), and `?apiKey=` works where headers can't be set. Its `wss.options.maxPayload` (100 MiB by default) can be lowered after creation. Its upgrade listener is async and starts with `new URL(request.url)`: a malformed target (`GET http://[`) rejects with nobody to catch it and the process exits, so wrap the server it attaches to (`guardUpgrades` in `app.ts`). Any `server.on('upgrade')` of ours parses targets inside a try.
+
+**Chromium in a container** (Debian trixie, Chromium 154) [spike]:
+- DevTools binds `127.0.0.1` whatever `--remote-debugging-address` says, and refuses a Host header that isn't an IP (500). Behind `socat`, rewrite the handshake to `Host: 127.0.0.1:9222`.
+- Its HTTP API drops a request whose connection is half-closed before it answers, ignores HTTP/1.0, and keeps the connection open after answering: send HTTP/1.1, keep your side open, and stop at `Content-Length`. `DevToolsActivePort` isn't written; `/json/version` gives the browser's WebSocket path.
+- Docker's default seccomp profile leaves Chromium with "No usable sandbox!". Adding `clone`, `unshare`, `setns` and `chroot` to it, without the `CAP_SYS_ADMIN` condition, gives renderers their namespace and seccomp-BPF sandbox. Ubuntu 24.04 also restricts user namespaces (`kernel.apparmor_restrict_unprivileged_userns`); CI turns that off.
+- `docker stop` sends SIGTERM, which loses cookies and leaves `Singleton*` locks: set `StopSignal: SIGINT`. A second Chromium on a profile exits 21, so remove stale locks at start and keep a profile to one browser.
+- Idle Chromium runs ~130 threads, ~250 after a few sites: the sandboxes' pids limit (256) is too low; browsers get 1024.
+- `--proxy-bypass-list=<-loopback>` sends even loopback through the proxy; `--webrtc-ip-handling-policy=disable_non_proxied_udp` keeps WebRTC from going around it.
+- Crawl4AI 0.9.4 runs its own Chromium through a built-in pinning proxy (`--proxy-server=127.0.0.1:<port>`) that resolves each name and refuses non-public addresses, and checks crawl URLs before fetching. On an internal network it can't resolve anything, so it stays on its own network.
+
+## 20. From earlier research, needed in later milestones
+
 - **Stored MCP config** has no headers, cwd or OAuth.
 - **Plugins:** Agent Plugins 1.0 = `plugin.json` + `skills/` + `mcp.json`.
 - **Factory patterns to reuse:** phase kinds (resting, working, terminal), seats, decisions outbox with idempotency keys, change-hint SSE.

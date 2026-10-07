@@ -6,6 +6,8 @@ import type { Config } from '../config';
 import type { Db } from '../db/client';
 import type { DecisionService } from '../modules/attention/decisions';
 import type { AttentionService } from '../modules/attention/service';
+import type { IdentityService } from '../modules/browser/identities';
+import type { BrowserService } from '../modules/browser/service';
 import type { DispatchService } from '../modules/dispatch/service';
 import type { KnowledgeService } from '../modules/knowledge/service';
 import type { EventBus } from '../modules/ledger/events';
@@ -41,4 +43,6 @@ export interface AppDeps {
   attention: AttentionService;
   decisions: DecisionService;
   workspaces: WorkspaceService;
+  browsers: BrowserService;
+  identities: IdentityService;
 }

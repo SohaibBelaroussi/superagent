@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { loadBrowserSeccomp } from '../src/browsers';
 import { RunnerConfigSchema } from '../src/config';
 import { TailBuffer } from '../src/docker';
-import { containerName, helperSpec, isTaskId, sandboxSpec, taskSubpath } from '../src/policy';
+import {
+  browserSpec,
+  containerName,
+  helperSpec,
+  identityVolume,
+  isTaskId,
+  sandboxSpec,
+  taskSubpath,
+} from '../src/policy';
 
 const TASK = '01900000-0000-7000-8000-0000000000aa';
 const config = RunnerConfigSchema.parse({ RUNNER_TOKEN: 'x'.repeat(32) });
@@ -91,5 +100,59 @@ describe('output tail', () => {
     const small = new TailBuffer(10);
     small.push(Buffer.from('hi'));
     expect(small.truncated).toBe(false);
+  });
+});
+
+describe('browser policy', () => {
+  const IDENTITY = '01900000-0000-7000-8000-0000000000bb';
+  const seccomp = loadBrowserSeccomp('auto') as string;
+
+  it('runs Chromium hardened, on the browsers network, with its own sandbox', () => {
+    const spec = browserSpec(config, { taskId: TASK, seccomp });
+    expect(spec.name).toBe(`sa-task-browser-${TASK}`);
+    expect(spec.User).toBe('1000:1000');
+    expect(spec.StopSignal).toBe('SIGINT');
+    expect(spec.Env).toEqual(['BROWSER_PROXY=http://egress:3128', 'BROWSER_BYPASS=']);
+    expect(spec.Labels).toEqual({ 'superagent.runner': 'sa-task-browser', 'superagent.task': TASK });
+    expect(spec.HostConfig).toMatchObject({
+      NetworkMode: 'superagent-browsers',
+      CapDrop: ['ALL'],
+      ReadonlyRootfs: true,
+      Privileged: false,
+      PidsLimit: 1024,
+      Memory: 2048 * 1024 * 1024,
+      MemorySwap: 2048 * 1024 * 1024,
+    });
+    expect(spec.HostConfig?.SecurityOpt).toEqual(['no-new-privileges:true', `seccomp=${seccomp}`]);
+    expect(spec.HostConfig?.CapAdd).toBeUndefined();
+    expect(spec.HostConfig?.PortBindings).toBeUndefined();
+    // No identity: a throwaway profile.
+    expect(spec.HostConfig?.Mounts).toEqual([]);
+    expect(spec.HostConfig?.Tmpfs?.['/profile']).toContain('uid=1000');
+  });
+
+  it('allows only the namespace calls Chromium sandboxes its renderers with', () => {
+    const profile = JSON.parse(seccomp) as {
+      defaultAction: string;
+      syscalls: Array<{ names: string[]; action: string; comment?: string }>;
+    };
+    expect(profile.defaultAction).toBe('SCMP_ACT_ERRNO');
+    const added = profile.syscalls.filter((rule) => rule.comment?.startsWith('superagent'));
+    expect(added).toHaveLength(1);
+    expect(added[0]?.names.sort()).toEqual(['chroot', 'clone', 'setns', 'unshare']);
+    expect(added[0]?.action).toBe('SCMP_ACT_ALLOW');
+  });
+
+  it("mounts an identity's profile volume, and runs unsandboxed only when told", () => {
+    const spec = browserSpec(config, { taskId: TASK, identityId: IDENTITY });
+    expect(spec.Labels?.['superagent.identity']).toBe(IDENTITY);
+    expect(spec.HostConfig?.Mounts).toEqual([
+      { Type: 'volume', Source: `superagent-identity-${IDENTITY}`, Target: '/profile' },
+    ]);
+    expect(spec.HostConfig?.Tmpfs?.['/profile']).toBeUndefined();
+    expect(spec.Env).toContain('BROWSER_SANDBOX=no');
+    expect(spec.HostConfig?.SecurityOpt).toEqual(['no-new-privileges:true']);
+    expect(loadBrowserSeccomp('none')).toBeUndefined();
+    expect(() => identityVolume(config, '../x')).toThrow();
   });
 });
