@@ -1,0 +1,18 @@
+import type { IMastraLogger } from '@mastra/core/logger';
+import type { Mastra } from '@mastra/core/mastra';
+import type { HonoBindings, HonoVariables } from '@mastra/hono';
+import type { TokenService } from '../auth/tokens';
+import type { Config } from '../config';
+import type { Db } from '../db/client';
+
+/** Hono environment shared by Mastra's adapter and our routes (requestContext, mastra, ...). */
+export type AppEnv = { Bindings: HonoBindings; Variables: HonoVariables };
+
+/** Everything the HTTP layer needs. Built once in bootstrap(). */
+export interface AppDeps {
+  config: Config;
+  logger: IMastraLogger;
+  mastra: Mastra;
+  db: Db;
+  tokens: TokenService;
+}
