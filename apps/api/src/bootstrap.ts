@@ -1,6 +1,7 @@
 import type { Agent } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
+import { Memory } from '@mastra/memory';
 import { PostgresStore } from '@mastra/pg';
 import type { Hono } from 'hono';
 import type pg from 'pg';
@@ -16,6 +17,10 @@ import { createLogger } from './logger';
 import { createMastra } from './mastra';
 import { createChiefAgent } from './mastra/agents/chief';
 import { createScratchAgent } from './mastra/agents/scratch';
+import { DispatchService } from './modules/dispatch/service';
+import { EventBus } from './modules/ledger/events';
+import { TaskService } from './modules/ledger/service';
+import { createChiefTools, createLeadTools } from './modules/ledger/tools';
 import { OrgDirectory } from './modules/org/directory';
 import { AgentRuntime } from './modules/org/runtime';
 import { OrgService } from './modules/org/service';
@@ -35,6 +40,8 @@ export interface System {
   providers: ProviderService;
   settings: SettingsService;
   org: OrgService;
+  tasks: TaskService;
+  dispatch: DispatchService;
   mastra: Mastra;
   app: Hono<AppEnv>;
   /** Drains Mastra and closes the database pool. Does not touch the HTTP server. */
@@ -83,20 +90,47 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       auth: new ApiTokenAuth(tokens),
       studioToken: config.STUDIO_TOKEN,
       gateways: { [GATEWAY_ID]: new ProviderGateway(registry) },
-      agents: {
-        chief: createChiefAgent({ directory, settings, catalog }),
-        scratch: createScratchAgent(settings),
-        ...options.agents,
-      },
+      agents: { scratch: createScratchAgent(settings), ...options.agents },
     });
     await storage.init();
 
+    // One message history for every agent: a thread per task, the owner's thread with the chief.
+    const memory = new Memory({ storage, options: { lastMessages: 40 } });
+    const bus = new EventBus();
+    const tasks = new TaskService(db, directory, bus);
+    const dispatch = new DispatchService({ mastra, tasks, directory, memory, logger });
+    const ledgerTools = { tasks, dispatch, directory };
+    mastra.addAgent(
+      createChiefAgent({ directory, settings, catalog, memory, chiefTools: createChiefTools(ledgerTools) }),
+      'chief',
+    );
+
     // Agent definitions from our tables become live Mastra agents (decision D14).
-    const runtime = new AgentRuntime({ mastra, directory, settings, catalog }, logger);
+    const runtime = new AgentRuntime(
+      { mastra, directory, settings, catalog, memory, leadTools: createLeadTools(ledgerTools) },
+      logger,
+    );
     runtime.loadAll();
     const org = new OrgService(db, directory, runtime, providers, catalog, logger, settings.lock);
 
-    const app = await createApp({ config, logger, mastra, db, tokens, providers, settings, org, catalog });
+    await dispatch.ensureChiefThread();
+    const interrupted = await dispatch.recoverInterrupted();
+    if (interrupted > 0) logger.warn('Flagged tasks interrupted by a restart', { count: interrupted });
+
+    const app = await createApp({
+      config,
+      logger,
+      mastra,
+      db,
+      tokens,
+      providers,
+      settings,
+      org,
+      catalog,
+      tasks,
+      dispatch,
+      bus,
+    });
     return {
       config,
       logger,
@@ -106,9 +140,12 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       providers,
       settings,
       org,
+      tasks,
+      dispatch,
       mastra,
       app,
       async close(drainTimeoutMs = 5_000) {
+        await dispatch.close(drainTimeoutMs);
         await mastra.shutdown({ drainTimeout: drainTimeoutMs });
         await pool.end();
       },

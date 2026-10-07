@@ -328,3 +328,118 @@ export const CatalogToolSchema = z.object({
 export type CatalogTool = z.infer<typeof CatalogToolSchema>;
 
 export const CatalogToolListSchema = z.object({ items: z.array(CatalogToolSchema) });
+
+// --- Tasks, board and events (M3) ---
+
+/**
+ * inbox: not dispatched yet · queued: sent to the lead · working: the lead is on it ·
+ * waiting: needs the owner · review: done, awaiting the owner · done · failed · cancelled.
+ */
+export const TaskPhaseSchema = z.enum([
+  'inbox',
+  'queued',
+  'working',
+  'waiting',
+  'review',
+  'done',
+  'failed',
+  'cancelled',
+]);
+export type TaskPhase = z.infer<typeof TaskPhaseSchema>;
+
+export const TaskPrioritySchema = z.enum(['low', 'normal', 'high', 'urgent']);
+export type TaskPriority = z.infer<typeof TaskPrioritySchema>;
+
+export const ChecklistItemSchema = z.object({
+  text: z.string().trim().min(1).max(300),
+  done: z.boolean().default(false),
+});
+export type ChecklistItem = z.infer<typeof ChecklistItemSchema>;
+
+export const TaskSchema = z.object({
+  id: z.string(),
+  number: z.number().int().describe('Short number for humans: #42'),
+  departmentId: z.string(),
+  title: z.string(),
+  brief: z.string(),
+  phase: TaskPhaseSchema,
+  priority: TaskPrioritySchema,
+  source: z.enum(['owner', 'chief', 'schedule']),
+  leadAgentId: z.string().nullable(),
+  threadId: z.string().describe('Mastra thread where the lead works on this task'),
+  checklist: z.array(ChecklistItemSchema),
+  progress: z.number().int().nullable(),
+  result: z.string().nullable().describe("The lead's final report"),
+  revision: z.number().int(),
+  dueAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  closedAt: z.string().nullable(),
+});
+export type Task = z.infer<typeof TaskSchema>;
+
+export const TaskListSchema = z.object({
+  items: z.array(TaskSchema),
+  nextCursor: z.string().nullable(),
+});
+
+export const CreateTaskInputSchema = z.object({
+  departmentId: z.string().min(1),
+  title: z.string().trim().min(1).max(200),
+  brief: z.string().trim().min(1).max(20_000),
+  priority: TaskPrioritySchema.default('normal'),
+  dueAt: z.iso.datetime({ offset: true }).optional(),
+  dispatch: z.boolean().default(true).describe('Send it to the department lead right away'),
+});
+export type CreateTaskInput = z.infer<typeof CreateTaskInputSchema>;
+
+/** Owner edits. Phase moves allowed for the owner: done, cancelled, or queued (send it to the lead again). */
+export const UpdateTaskInputSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  priority: TaskPrioritySchema.optional(),
+  dueAt: z.iso.datetime({ offset: true }).nullable().optional(),
+  phase: z.enum(['done', 'cancelled', 'queued']).optional(),
+});
+export type UpdateTaskInput = z.infer<typeof UpdateTaskInputSchema>;
+
+export const TaskMessageInputSchema = z.object({
+  message: z.string().trim().min(1).max(20_000),
+  mode: z
+    .enum(['steer', 'queue'])
+    .default('steer')
+    .describe('steer: deliver now (wakes the lead if idle) · queue: after the current turn'),
+});
+export type TaskMessageInput = z.infer<typeof TaskMessageInputSchema>;
+
+export const TaskEventSchema = z.object({
+  seq: z.number().int().describe('Global, increasing; use as Last-Event-ID'),
+  taskId: z.string(),
+  taskNumber: z.number().int(),
+  departmentId: z.string(),
+  type: z.string(),
+  actor: z.string(),
+  phase: TaskPhaseSchema.describe('Task phase after this event'),
+  data: z.record(z.string(), z.unknown()),
+  createdAt: z.string(),
+});
+export type TaskEvent = z.infer<typeof TaskEventSchema>;
+
+export const TaskEventListSchema = z.object({ items: z.array(TaskEventSchema) });
+
+export const ArtifactSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  kind: z.enum(['text', 'link']),
+  title: z.string(),
+  content: z.string().nullable(),
+  url: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type Artifact = z.infer<typeof ArtifactSchema>;
+
+export const ArtifactListSchema = z.object({ items: z.array(ArtifactSchema) });
+
+export const BoardSchema = z.object({
+  columns: z.array(z.object({ phase: TaskPhaseSchema, tasks: z.array(TaskSchema) })),
+});
+export type Board = z.infer<typeof BoardSchema>;
