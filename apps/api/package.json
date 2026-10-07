@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "tsdown",
-    "start": "node dist/main.js",
+    "start": "node --enable-source-maps dist/main.mjs",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run --project unit",
     "test:int": "vitest run --project int",
