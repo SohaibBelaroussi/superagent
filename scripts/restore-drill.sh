@@ -147,7 +147,8 @@ log "Documents: $documents in the database, all in the backup; $(echo "$files" |
 # 4. Task files and plugins' MCP volumes: each archive reads back whole.
 for archive in "$backup/workspaces.tar.gz" "$backup"/mcp/*.tar.gz; do
   [ -f "$archive" ] || continue
-  entries=$(tar tzf "$archive" | wc -l | tr -d ' ')
+  # From stdin: GNU tar takes a name with a colon (C:...) for a remote host.
+  entries=$(tar tzf - <"$archive" | wc -l | tr -d ' ')
   log "$(basename "$archive"): $entries entries, intact"
 done
 log "Restore drill passed"
