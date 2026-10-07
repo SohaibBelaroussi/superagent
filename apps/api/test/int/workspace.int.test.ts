@@ -14,6 +14,7 @@ import type {
 } from '@superagent/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { System } from '../../src/bootstrap';
+import { RunnerFilesystem } from '../../src/modules/workspace/filesystem';
 import { RunnerClient } from '../../src/modules/workspace/runner-client';
 import { RunnerSandbox } from '../../src/modules/workspace/sandbox';
 import { CODE, type FakeOpenAI, type RecordedRequest, startFakeOpenAI } from '../support/fake-openai';
@@ -185,13 +186,15 @@ describe('task workspaces', () => {
       profile: 'dev',
       command:
         'id -u; ls -A /workspace | wc -l; find / -name secret-a.txt -not -path "/proc/*" 2>/dev/null | wc -l; ' +
-        `node -e "require('net').connect(${new URL(system.config.DATABASE_URL).port || 5432},'host.docker.internal')` +
+        'ls /sys/class/net | tr "\\n" " "; echo; ' +
+        `node -e "require('net').connect(443,'1.1.1.1')` +
         `.on('connect',()=>{console.log('reached');process.exit(0)}).on('error',e=>console.log('blocked',e.code))"`,
     });
-    const [uid, entries, found, net] = look.stdout.trim().split('\n');
+    const [uid, entries, found, interfaces, net] = look.stdout.trim().split('\n');
     expect(uid).toBe('1000');
     expect(entries).toBe('0');
     expect(found).toBe('0');
+    expect(interfaces?.trim()).toBe('lo');
     expect(net).toMatch(/^blocked/);
     // Nothing escapes the workspace through the owner's file routes either.
     expect((await send('GET', `/v1/tasks/${crypto.randomUUID()}/files`)).status).toBe(404);
@@ -224,6 +227,51 @@ describe('task workspaces', () => {
     const slow = await sandbox.executeCommand('sleep 5; echo late', [], { timeout: 500 });
     expect(slow).toMatchObject({ success: false, timedOut: true });
     await client.remove(taskId);
+  });
+
+  it('reads files safely: no pipes, every byte of long output, binaries marked as such', async () => {
+    const client = new RunnerClient(runnerUrl, TOKEN);
+    const taskId = crypto.randomUUID();
+    const sandbox = new RunnerSandbox(client, taskId, 'dev');
+    // A pipe would block a reader forever: it is refused at once.
+    await sandbox.executeCommand(
+      'mkfifo pipe; printf "x\\tevil" > target-name; ln -s "$(cat target-name)" link; printf "a\\0b" > data.bin; printf "\\211PNG\\0" > chart.png; echo hi > notes',
+    );
+    const started = Date.now();
+    await expect(client.fs(taskId, { op: 'read', path: 'pipe' }, { profile: 'dev' })).rejects.toMatchObject({
+      code: 'not_regular',
+    });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    // Names and link targets with tabs list as they are.
+    const listed = await client.fs(taskId, { op: 'list', path: '.' }, { profile: 'dev' });
+    expect(listed.entries?.find((e) => e.path === 'link')).toMatchObject({
+      type: 'symlink',
+      target: 'x\tevil',
+    });
+    // Binaries aren't passed off as text, whatever their name.
+    const files = new RunnerFilesystem(client, taskId, 'dev');
+    expect((await files.stat('chart.png')).mimeType).toBe('image/png');
+    expect((await files.stat('data.bin')).mimeType).toBe('application/x-binary');
+    expect((await files.stat('notes')).mimeType).toBeUndefined();
+    // Long background output arrives whole, in order, however it repeats.
+    const handle = await sandbox.processes.spawn('yes 0123456789 | head -c 700000; echo done >&2');
+    const result = await handle.wait();
+    expect(result.stdout.length).toBe(700_000);
+    expect(result.stdout.startsWith('0123456789\n0123456789\n')).toBe(true);
+    expect(result.stderr).toBe('done\n');
+    await client.remove(taskId);
+  });
+
+  it('leaves no reader container behind for a task without a workspace', async () => {
+    const helpers = () => docker('ps', '-aq', '--filter', `label=superagent.runner=${PREFIX}-helper`).trim();
+    const client = new RunnerClient(runnerUrl, TOKEN);
+    for (let i = 0; i < 2; i++) {
+      await expect(
+        client.fs(crypto.randomUUID(), { op: 'list', path: '.' }, { profile: 'dev', peek: true }),
+      ).rejects.toMatchObject({ code: 'sandbox_not_found' });
+    }
+    expect(helpers()).toBe('');
+    expect((await runner.manager.ready()).images).toEqual({ dev: true });
   });
 
   it('keeps a task in its sandbox across an API restart, and reaps idle ones', async () => {
@@ -303,5 +351,88 @@ describe('task workspaces', () => {
     } finally {
       await plain.close();
     }
+  });
+});
+
+describe('sandbox limits', () => {
+  const RUN = randomBytes(4).toString('hex');
+  const prefix = `sa-lim-${RUN}`;
+  const volume = `sa-lim-ws-${RUN}`;
+  const limits = createRunner(
+    RunnerConfigSchema.parse({
+      RUNNER_TOKEN: TOKEN,
+      RUNNER_IMAGES: JSON.stringify({ dev: IMAGE }),
+      RUNNER_NAME_PREFIX: prefix,
+      RUNNER_WORKSPACES_VOLUME: volume,
+      RUNNER_PIDS_LIMIT: '40',
+      RUNNER_FILE_LIMIT_MB: '1',
+      RUNNER_MIN_FREE_MB: '0',
+      LOG_LEVEL: 'error',
+    }),
+  );
+
+  afterAll(() => {
+    const leftovers = docker('ps', '-aq', '--filter', `label=superagent.runner=${prefix}`).trim();
+    if (leftovers) docker('rm', '-f', ...leftovers.split(/\s+/));
+    try {
+      docker('volume', 'rm', '-f', volume);
+    } catch {
+      // in use while a container is removed
+    }
+  });
+
+  it('stops a command that takes every process slot, then works again', async () => {
+    const taskId = crypto.randomUUID();
+    const started = Date.now();
+    const result = await limits.manager.exec(taskId, {
+      profile: 'dev',
+      command: 'for i in $(seq 1 200); do sleep 60 & done; wait',
+      timeoutMs: 1500,
+    });
+    expect(result.timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(30_000);
+    const after = await limits.manager.exec(taskId, { profile: 'dev', command: 'echo back' });
+    expect(after).toMatchObject({ exitCode: 0, stdout: 'back\n' });
+  });
+
+  it('caps the size of a single file', async () => {
+    const result = await limits.manager.exec(crypto.randomUUID(), {
+      profile: 'dev',
+      command: 'head -c 2000000 /dev/zero > big; echo "exit $?"; stat -c %s big',
+    });
+    const [status, size] = result.stdout.trim().split('\n');
+    expect(status).not.toBe('exit 0');
+    expect(Number(size)).toBeLessThanOrEqual(1024 * 1024);
+  });
+
+  it('runs nothing once the caller gave up', async () => {
+    const taskId = crypto.randomUUID();
+    const aborted = new AbortController();
+    aborted.abort();
+    const result = await limits.manager.exec(
+      taskId,
+      { profile: 'dev', command: 'touch ran' },
+      aborted.signal,
+    );
+    expect(result.killed).toBe(true);
+    const check = await limits.manager.exec(taskId, { profile: 'dev', command: 'ls ran 2>&1 || echo none' });
+    expect(check.stdout.trim()).toMatch(/none|No such file/);
+  });
+
+  it('refuses work while the disk is nearly full', async () => {
+    const full = createRunner(
+      RunnerConfigSchema.parse({
+        RUNNER_TOKEN: TOKEN,
+        RUNNER_IMAGES: JSON.stringify({ dev: IMAGE }),
+        RUNNER_NAME_PREFIX: prefix,
+        RUNNER_WORKSPACES_VOLUME: volume,
+        // More than any disk has.
+        RUNNER_MIN_FREE_MB: String(1024 * 1024 * 1024),
+        LOG_LEVEL: 'error',
+      }),
+    );
+    await expect(
+      full.manager.exec(crypto.randomUUID(), { profile: 'dev', command: 'echo hi' }),
+    ).rejects.toMatchObject({ code: 'disk_full', status: 507 });
   });
 });

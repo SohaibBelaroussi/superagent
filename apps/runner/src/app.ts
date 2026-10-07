@@ -64,6 +64,9 @@ export function createRunnerApp(manager: SandboxManager, config: RunnerConfig, l
     await next();
   });
 
+  // Whether sandboxes can actually run: Docker reachable, images built. /health only says the runner is up.
+  app.get('/ready', async (c) => c.json(await manager.ready()));
+
   app.get('/sandboxes', async (c) => c.json({ items: await manager.list() }));
 
   app.get('/sandboxes/:taskId', async (c) => {
@@ -94,8 +97,16 @@ export function createRunnerApp(manager: SandboxManager, config: RunnerConfig, l
   );
 
   app.get('/sandboxes/:taskId/processes/:execId', async (c) => {
-    const tail = Math.min(Math.max(Number(c.req.query('tailBytes') ?? 256 * 1024) || 0, 1), 4 * 1024 * 1024);
-    return c.json(await manager.process(c.req.param('taskId'), c.req.param('execId'), tail));
+    const offset = (name: string) => Math.max(Number.parseInt(c.req.query(name) ?? '0', 10) || 0, 0);
+    const maxBytes = Number.parseInt(c.req.query('maxBytes') ?? String(256 * 1024), 10) || 256 * 1024;
+    return c.json(
+      await manager.process(
+        c.req.param('taskId'),
+        c.req.param('execId'),
+        { out: offset('outFrom'), err: offset('errFrom') },
+        maxBytes,
+      ),
+    );
   });
 
   app.delete('/sandboxes/:taskId/processes/:execId', async (c) =>

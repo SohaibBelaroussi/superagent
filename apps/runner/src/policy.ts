@@ -61,6 +61,14 @@ export function sandboxSpec(
       PidsLimit: config.RUNNER_PIDS_LIMIT,
       Init: true,
       Privileged: false,
+      // No single file bigger than this (a sandbox can't fill the disk with one fallocate).
+      Ulimits: [
+        {
+          Name: 'fsize',
+          Soft: config.RUNNER_FILE_LIMIT_MB * 1024 * 1024,
+          Hard: config.RUNNER_FILE_LIMIT_MB * 1024 * 1024,
+        },
+      ],
       // NoCopy: Docker would otherwise copy the image's /workspace into an empty folder, as root.
       Mounts: [
         {

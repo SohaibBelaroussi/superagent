@@ -32,6 +32,10 @@ describe('sandbox policy', () => {
     ]);
     expect(spec.HostConfig?.Binds).toBeUndefined();
     expect(spec.HostConfig?.CapAdd).toBeUndefined();
+    // One file can't fill the disk.
+    expect(spec.HostConfig?.Ulimits).toEqual([
+      { Name: 'fsize', Soft: 2048 * 1024 * 1024, Hard: 2048 * 1024 * 1024 },
+    ]);
   });
 
   it('lets only the volume preparation run as root, with nothing but CHOWN', () => {
@@ -70,6 +74,10 @@ describe('sandbox policy', () => {
       RunnerConfigSchema.parse({ RUNNER_TOKEN: 'x'.repeat(32), RUNNER_IMAGES: '{"dev":"bad image"}' }),
     ).toThrow();
     expect(() => RunnerConfigSchema.parse({ RUNNER_TOKEN: 'short' })).toThrow();
+    // The example value from .env.example is public: never accepted.
+    expect(() =>
+      RunnerConfigSchema.parse({ RUNNER_TOKEN: 'change-me-runner-token-at-least-32-characters' }),
+    ).toThrow();
   });
 });
 

@@ -25,6 +25,64 @@ import { type RunnerClient, RunnerRequestError } from './runner-client';
 const MAX_READ_BYTES = 10 * 1024 * 1024;
 
 /**
+ * Mime types by extension. Mastra's read_file decides from them whether a file is text, a media part
+ * it can show the model (images, PDFs) or a binary it only describes.
+ */
+const MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.gz': 'application/gzip',
+  '.tgz': 'application/gzip',
+  '.tar': 'application/x-tar',
+  '.7z': 'application/x-7z-compressed',
+  '.sqlite': 'application/vnd.sqlite3',
+  '.db': 'application/vnd.sqlite3',
+  '.wasm': 'application/wasm',
+  '.pyc': 'application/x-python-code',
+  '.so': 'application/x-sharedlib',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.json': 'application/json',
+  '.md': 'text/markdown',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.ts': 'text/typescript',
+  '.py': 'text/x-python',
+  '.sh': 'application/x-sh',
+  '.yaml': 'application/yaml',
+  '.yml': 'application/yaml',
+  '.xml': 'application/xml',
+};
+
+/** A file's mime type; one that looks binary is never passed off as text, whatever its name. */
+export function mimeTypeOf(path: string, binary: boolean): string | undefined {
+  const known = MIME_TYPES[posix.extname(path).toLowerCase()];
+  if (known && !(binary && (known.startsWith('text/') || known === 'application/json'))) return known;
+  // Not text, and nothing more specific known: read_file describes it instead of decoding it.
+  return binary ? 'application/x-binary' : undefined;
+}
+
+/**
  * A task's files, in its sandbox (decision D33). Every operation runs inside the task's container, so
  * a symlink planted there resolves there, never in the API's filesystem.
  */
@@ -153,6 +211,7 @@ export class RunnerFilesystem extends MastraFilesystem {
       size: stat.size,
       createdAt: modifiedAt,
       modifiedAt,
+      ...(stat.type === 'file' ? { mimeType: mimeTypeOf(stat.path, stat.binary) } : {}),
     };
   }
 

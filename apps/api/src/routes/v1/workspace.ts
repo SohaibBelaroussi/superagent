@@ -97,7 +97,7 @@ export function registerWorkspaceRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps):
     const { id } = c.req.valid('param');
     const { path, depth } = c.req.valid('query');
     const task = await tasks.get(id);
-    return c.json(await workspaces.files(task, workspacePath(path), depth), 200);
+    return c.json(await workspaces.files(task, workspacePath(path), depth, c.req.raw.signal), 200);
   });
 
   const download = async (c: Context<AppEnv>, id: string, rawPath: string) => {
@@ -105,7 +105,7 @@ export function registerWorkspaceRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps):
     const path = workspacePath(rawPath);
     if (path === '.')
       throw new ApiError(400, 'is_directory', 'That is the workspace folder: list it instead');
-    const { content } = await workspaces.download(task, path);
+    const { content } = await workspaces.download(task, path, c.req.raw.signal);
     const name = posix.basename(path).replace(/[^\w.-]+/g, '_') || 'file';
     return c.body(new Uint8Array(content), 200, {
       'content-type': 'application/octet-stream',

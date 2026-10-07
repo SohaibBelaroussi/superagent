@@ -562,6 +562,10 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - `setsid --wait sh -c …` makes the command a process-group leader without detaching it; `kill -TERM -<pgid>` (dash rejects `kill -- -<pgid>`) stops it with its children.
 - A command started with `setsid … &` outlives the exec that started it (`Init: true` reaps it), so background output goes to files in the container.
 - Inside a container on Docker Desktop the socket is `root:root 0660`: a non-root runner needs `group_add: ["0"]`; on a Linux host, the docker group's id.
+- A process-group kill is itself a `docker exec`: once a sandbox's processes take every pid slot, no kill (or any exec) gets in. Escalate to `container.kill()`, and give every exec a deadline. [spike]
+- Reading a FIFO blocks forever (`head` waits for a writer): file operations accept regular files only and run under `timeout -s KILL`. [spike]
+- `HostConfig.Ulimits: [{ Name: 'fsize', ... }]` caps the size of any file a sandbox writes (bytes). Docker's local volumes have no size limit, so free space is checked before work; on a server, give the workspaces volume its own disk. [spike]
+- A container whose `start()` fails (say, a volume subpath that doesn't exist) stays behind as `Created`: remove it in the failure path. [spike]
 - `@mastra/docker` (0.9.3, Apache-2.0) is a reference, not a dependency: it would make the API a Docker client and pulls any image. Its setsid/pgid kill and label-based reattach are copied.
 
 ## 19. From earlier research, needed in later milestones

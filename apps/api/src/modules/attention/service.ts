@@ -30,7 +30,7 @@ type Approval = PendingApproval & { agentName: string; departmentId: string };
  * approval, leads' questions, tasks that stalled, results to review, and setup problems.
  */
 export class AttentionService {
-  private runnerCheck: { at: number; healthy: Promise<boolean> } | undefined;
+  private runnerCheck: { at: number; problem: Promise<string | undefined> } | undefined;
 
   constructor(private readonly deps: AttentionDeps) {}
 
@@ -131,12 +131,12 @@ export class AttentionService {
     return undefined;
   }
 
-  private runnerHealthy(): Promise<boolean> {
+  private sandboxProblem(): Promise<string | undefined> {
     const now = Date.now();
     if (!this.runnerCheck || now - this.runnerCheck.at > RUNNER_CHECK_MS) {
-      this.runnerCheck = { at: now, healthy: this.deps.workspaces.healthy() };
+      this.runnerCheck = { at: now, problem: this.deps.workspaces.problem() };
     }
-    return this.runnerCheck.healthy;
+    return this.runnerCheck.problem;
   }
 
   /** Setup problems that stop work. */
@@ -199,23 +199,23 @@ export class AttentionService {
       );
     if (sandboxed.length > 0) {
       const names = sandboxed.map((agent) => agent.name).join(', ');
-      if (!this.deps.workspaces.enabled) {
-        items.push(
-          item(
-            'sandboxes',
-            'Sandboxes are off',
-            `Set RUNNER_URL and RUNNER_TOKEN: ${names} can't use files or commands.`,
-          ),
-        );
-      } else if (!(await this.runnerHealthy())) {
-        items.push(
-          item(
-            'sandboxes',
-            "The sandbox runner can't be reached",
-            `${names} can't use files or commands until it is back.`,
-          ),
-        );
-      }
+      const problem = await this.sandboxProblem();
+      const what = {
+        off: ['Sandboxes are off', `Set RUNNER_URL and RUNNER_TOKEN: ${names} can't use files or commands.`],
+        unreachable: [
+          "The sandbox runner can't be reached",
+          `${names} can't use files or commands until it is back.`,
+        ],
+        'no-docker': [
+          "The sandbox runner can't reach Docker",
+          `Check its access to the Docker socket (DOCKER_SOCKET_GID on Linux): ${names} can't use files or commands.`,
+        ],
+        'no-image': [
+          'The sandbox image is not built',
+          `Build it with "docker compose --profile app build sandbox-dev": ${names} can't use files or commands.`,
+        ],
+      }[problem ?? ''];
+      if (what) items.push(item('sandboxes', what[0] as string, what[1] as string));
     }
     const active = (await this.deps.schedules.list()).filter((s) => s.status === 'active');
     for (const departmentId of new Set(active.map((s) => s.departmentId))) {

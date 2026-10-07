@@ -41,6 +41,11 @@ export interface ExecSpec {
   /** Written to the command's stdin, which is then closed. */
   stdin?: Buffer;
   maxOutputBytes: number;
+  /**
+   * Stops waiting after this long: the stream is dropped and the outcome says `abandoned`. A command
+   * that can't be killed (no free process slot for the kill) must not hold its caller forever.
+   */
+  deadlineMs?: number;
 }
 
 export interface ExecOutcome {
@@ -50,6 +55,8 @@ export interface ExecOutcome {
   stderr: Buffer;
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
+  /** The deadline passed first; the command may still be running. */
+  abandoned: boolean;
 }
 
 /** Runs a command in a running container and waits for it, keeping the end of its output. */
@@ -86,7 +93,20 @@ export async function execIn(
     // Half-closes the connection: the command sees end of input and goes on.
     stream.end();
   }
-  await ended;
+  const finished = spec.deadlineMs
+    ? await Promise.race([ended.then(() => true), sleep(spec.deadlineMs).then(() => false)])
+    : await ended.then(() => true);
+  if (!finished) {
+    stream.destroy();
+    return {
+      exitCode: null,
+      stdout: stdout.value(),
+      stderr: stderr.value(),
+      stdoutTruncated: stdout.truncated,
+      stderrTruncated: stderr.truncated,
+      abandoned: true,
+    };
+  }
   // With stdin attached, the stream can close before the process has exited.
   let info = await exec.inspect();
   for (let i = 0; info.Running && i < 500; i++) {
@@ -99,6 +119,7 @@ export async function execIn(
     stderr: stderr.value(),
     stdoutTruncated: stdout.truncated,
     stderrTruncated: stderr.truncated,
+    abandoned: false,
   };
 }
 

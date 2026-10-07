@@ -4,7 +4,9 @@ import type {
   ExecResult,
   FsRequest,
   FsResult,
+  ProcessInfo,
   ProcessStatus,
+  RunnerReady,
   RunnerSandbox,
 } from '@superagent/shared/runner';
 
@@ -61,16 +63,19 @@ export class RunnerClient {
     return this.request('POST', `/sandboxes/${taskId}/exec`, input, signal);
   }
 
-  async processes(
-    taskId: string,
-  ): Promise<Array<Pick<ProcessStatus, 'execId' | 'command' | 'running' | 'exitCode'>>> {
-    return (await this.request<{ items: ProcessStatus[] }>('GET', `/sandboxes/${taskId}/processes`)).items;
+  async processes(taskId: string): Promise<ProcessInfo[]> {
+    return (await this.request<{ items: ProcessInfo[] }>('GET', `/sandboxes/${taskId}/processes`)).items;
   }
 
-  process(taskId: string, execId: string, tailBytes?: number): Promise<ProcessStatus | undefined> {
-    const query = tailBytes ? `?tailBytes=${tailBytes}` : '';
+  /** A background process and its output from the given offsets; undefined once it is gone. */
+  process(
+    taskId: string,
+    execId: string,
+    from: { out: number; err: number } = { out: 0, err: 0 },
+  ): Promise<ProcessStatus | undefined> {
+    const query = new URLSearchParams({ outFrom: String(from.out), errFrom: String(from.err) });
     return this.orUndefined(() =>
-      this.request<ProcessStatus>('GET', `/sandboxes/${taskId}/processes/${execId}${query}`),
+      this.request<ProcessStatus>('GET', `/sandboxes/${taskId}/processes/${execId}?${query}`),
     );
   }
 
@@ -92,12 +97,12 @@ export class RunnerClient {
     return this.request('POST', `/sandboxes/${taskId}/fs?${query}`, request, signal);
   }
 
-  async healthy(): Promise<boolean> {
+  /** Whether the runner can run sandboxes (Docker reachable, images built); undefined if it's down. */
+  async ready(): Promise<RunnerReady | undefined> {
     try {
-      const response = await fetch(`${this.base}/health`, { signal: AbortSignal.timeout(3_000) });
-      return response.ok;
+      return await this.request<RunnerReady>('GET', '/ready', undefined, AbortSignal.timeout(5_000));
     } catch {
-      return false;
+      return undefined;
     }
   }
 

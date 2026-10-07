@@ -6,7 +6,10 @@ const duration = (fallback: number, min = 1_000) => z.coerce.number().int().min(
 
 export const RunnerConfigSchema = z.object({
   /** Shared with the API, which sends it as a bearer token. */
-  RUNNER_TOKEN: z.string().min(32, 'must be at least 32 characters'),
+  RUNNER_TOKEN: z
+    .string()
+    .min(32, 'must be at least 32 characters')
+    .refine((token) => !token.startsWith('change-me'), 'replace the example value with a generated one'),
   RUNNER_HOST: z.string().default('127.0.0.1'),
   RUNNER_PORT: z.coerce.number().int().min(0).max(65_535).default(4120),
   /** The named volume holding every task's folder, tasks/<id>. A sandbox mounts only its own. */
@@ -44,6 +47,14 @@ export const RunnerConfigSchema = z.object({
   RUNNER_PIDS_LIMIT: z.coerce.number().int().min(16).default(256),
   /** /tmp is a tmpfs (the root filesystem is read-only); it counts against the memory limit. */
   RUNNER_TMP_MB: z.coerce.number().int().min(16).default(512),
+  /** The largest file a sandbox may write (RLIMIT_FSIZE). */
+  RUNNER_FILE_LIMIT_MB: z.coerce.number().int().min(1).default(2048),
+  /** Commands and writes are refused while the workspaces' disk has less free space than this. */
+  RUNNER_MIN_FREE_MB: z.coerce.number().int().min(0).default(2048),
+  /** Sandboxes running at once; at the limit, the least recently used idle one is stopped first. */
+  RUNNER_MAX_RUNNING: z.coerce.number().int().min(1).default(8),
+  /** How long one file operation may take. */
+  RUNNER_FS_TIMEOUT_MS: duration(30_000, 100),
   /** For commands that don't set their own timeout. */
   RUNNER_EXEC_TIMEOUT_MS: duration(120_000, 100),
   /** Output kept per stream (the end of it, like a terminal's scrollback). */

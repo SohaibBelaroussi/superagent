@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder';
 import {
   type CommandResult,
   type ExecuteCommandOptions,
@@ -10,9 +11,13 @@ import {
   type SpawnProcessOptions,
 } from '@mastra/core/workspace';
 import type { ProcessStatus } from '@superagent/shared/runner';
-import { MAX_FOREGROUND_MS, type RunnerClient } from './runner-client';
+import { MAX_FOREGROUND_MS, type RunnerClient, RunnerRequestError } from './runner-client';
 
-const POLL_MS = 500;
+/** Polling a background process backs off from this to POLL_MAX_MS. */
+const POLL_START_MS = 250;
+const POLL_MAX_MS = 3_000;
+/** The runner bounds a background command's lifetime at this. */
+const MAX_BACKGROUND_MS = 30 * 60_000;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Strings only: Mastra's env overlay may carry unset keys. */
@@ -30,11 +35,15 @@ function cleanEnv(
 
 const quote = (arg: string) => `'${arg.replaceAll("'", `'"'"'`)}'`;
 
-/** A background command in a task's sandbox. Its output lives in the sandbox; this handle polls it. */
+/**
+ * A background command in a task's sandbox. Its output lives in files there; this handle reads them
+ * on from where it stopped, so nothing is skipped or repeated however much the command writes.
+ */
 class RunnerProcessHandle extends ProcessHandle {
   readonly pid: string;
   private code: number | undefined;
-  private seen = { out: '', err: '' };
+  private readonly offset = { out: 0, err: 0 };
+  private readonly decoders = { out: new StringDecoder('utf8'), err: new StringDecoder('utf8') };
 
   constructor(
     private readonly client: RunnerClient,
@@ -52,22 +61,48 @@ class RunnerProcessHandle extends ProcessHandle {
     return this.code;
   }
 
-  /** Pulls the process's state and new output from the sandbox. False once it is gone. */
+  /** Pulls the process's state and its new output. False once it is gone (its sandbox stopped). */
   async refresh(): Promise<boolean> {
-    const status = await this.client.process(this.taskId, this.pid);
-    if (!status) {
-      // The sandbox stopped (and its processes with it).
-      this.code ??= 137;
-      return false;
+    // Each answer carries at most a slice per stream: read on until caught up.
+    for (let round = 0; round < 16; round++) {
+      let status: ProcessStatus | undefined;
+      try {
+        status = await this.client.process(this.taskId, this.pid, this.offset);
+      } catch (error) {
+        // The runner couldn't read it this time (say, every process slot is taken): not an exit.
+        if (error instanceof RunnerRequestError && error.status >= 500) return true;
+        throw error;
+      }
+      if (!status) {
+        this.code ??= 137;
+        return false;
+      }
+      if (!this.absorb(status)) return true;
     }
-    this.absorb(status);
     return true;
   }
 
-  absorb(status: ProcessStatus): void {
-    this.deliver('out', status.stdout);
-    this.deliver('err', status.stderr);
-    if (!status.running) this.code = status.exitCode ?? 137;
+  /** Takes in one slice of output; true if more is waiting. Sets the exit code once all is read. */
+  absorb(status: ProcessStatus): boolean {
+    const out = Buffer.from(status.stdoutBase64, 'base64');
+    const err = Buffer.from(status.stderrBase64, 'base64');
+    this.offset.out += out.length;
+    this.offset.err += err.length;
+    this.emit('out', this.decoders.out.write(out));
+    this.emit('err', this.decoders.err.write(err));
+    const more = this.offset.out < status.stdoutSize || this.offset.err < status.stderrSize;
+    if (!status.running && !more) {
+      this.emit('out', this.decoders.out.end());
+      this.emit('err', this.decoders.err.end());
+      this.code = status.exitCode ?? 137;
+    }
+    return more;
+  }
+
+  /** It never started (say, its folder doesn't exist). */
+  failed(exitCode: number, stderr: string): void {
+    this.emit('err', stderr);
+    this.code = exitCode;
   }
 
   async kill(): Promise<boolean> {
@@ -82,9 +117,13 @@ class RunnerProcessHandle extends ProcessHandle {
 
   override async wait(): Promise<CommandResult> {
     const started = Date.now();
+    let delay = POLL_START_MS;
     while (this.code === undefined) {
       if (!(await this.refresh())) break;
-      if (this.code === undefined) await sleep(POLL_MS);
+      if (this.code === undefined) {
+        await sleep(delay);
+        delay = Math.min(delay * 2, POLL_MAX_MS);
+      }
     }
     const exitCode = this.code ?? 137;
     return {
@@ -97,20 +136,10 @@ class RunnerProcessHandle extends ProcessHandle {
     };
   }
 
-  /** Emits what's new since the last poll (the runner sends the end of the output). */
-  private deliver(stream: 'out' | 'err', latest: string): void {
-    const seen = this.seen[stream];
-    let fresh: string;
-    if (latest.startsWith(seen)) fresh = latest.slice(seen.length);
-    else {
-      const anchor = seen.slice(-200);
-      const at = anchor ? latest.lastIndexOf(anchor) : -1;
-      fresh = at >= 0 ? latest.slice(at + anchor.length) : latest;
-    }
-    this.seen[stream] = latest;
-    if (!fresh) return;
-    if (stream === 'out') this.emitStdout(fresh);
-    else this.emitStderr(fresh);
+  private emit(stream: 'out' | 'err', chunk: string): void {
+    if (!chunk) return;
+    if (stream === 'out') this.emitStdout(chunk);
+    else this.emitStderr(chunk);
   }
 }
 
@@ -133,14 +162,14 @@ class RunnerProcessManager extends SandboxProcessManager<RunnerSandbox> {
         cwd: options.cwd,
         env: cleanEnv(this.sandbox?.getEnv(), options.env),
         background: true,
+        ...(options.timeout
+          ? { timeoutMs: Math.min(Math.max(options.timeout, 1000), MAX_BACKGROUND_MS) }
+          : {}),
       },
       options.abortSignal,
     );
     const handle = new RunnerProcessHandle(this.client, this.taskId, result.execId, command, options);
-    if (result.exitCode !== null) {
-      // It couldn't start (say, its folder doesn't exist).
-      handle.absorb({ ...result, command, running: false });
-    }
+    if (result.exitCode !== null) handle.failed(result.exitCode, result.stderr);
     this._tracked.set(handle.pid, handle);
     return handle;
   }
@@ -162,10 +191,10 @@ class RunnerProcessManager extends SandboxProcessManager<RunnerSandbox> {
       return tracked;
     }
     if (this._dismissed.has(pid) || !/^[a-f0-9]{12}$/.test(pid)) return undefined;
-    const status = await this.client.process(this.taskId, pid);
-    if (!status) return undefined;
-    const handle = new RunnerProcessHandle(this.client, this.taskId, pid, status.command);
-    handle.absorb(status);
+    const info = (await this.client.processes(this.taskId)).find((process) => process.execId === pid);
+    if (!info) return undefined;
+    const handle = new RunnerProcessHandle(this.client, this.taskId, pid, info.command);
+    if (!(await handle.refresh())) return undefined;
     this._tracked.set(pid, handle);
     return handle;
   }

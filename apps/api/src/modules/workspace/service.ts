@@ -158,6 +158,7 @@ export class WorkspaceService {
     task: TaskRow,
     path: string,
     depth: number,
+    signal?: AbortSignal,
   ): Promise<{ items: WorkspaceEntry[]; truncated: boolean }> {
     const runner = this.requireRunner();
     const result = await this.wrap(
@@ -166,6 +167,7 @@ export class WorkspaceService {
           task.id,
           { op: 'list', path, maxDepth: depth, limit: 2_000 },
           { profile: this.deps.profile, peek: true },
+          signal,
         ),
       task,
     );
@@ -175,7 +177,11 @@ export class WorkspaceService {
     };
   }
 
-  async download(task: TaskRow, path: string): Promise<{ content: Buffer; size: number }> {
+  async download(
+    task: TaskRow,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<{ content: Buffer; size: number }> {
     const runner = this.requireRunner();
     const result = await this.wrap(
       () =>
@@ -183,6 +189,7 @@ export class WorkspaceService {
           task.id,
           { op: 'read', path, maxBytes: MAX_DOWNLOAD_BYTES },
           { profile: this.deps.profile, peek: true },
+          signal,
         ),
       task,
     );
@@ -196,9 +203,14 @@ export class WorkspaceService {
     return { content: Buffer.from(result.contentBase64 ?? '', 'base64'), size: result.size ?? 0 };
   }
 
-  /** Whether the runner answers (for health checks). */
-  async healthy(): Promise<boolean> {
-    return this.deps.client ? this.deps.client.healthy() : false;
+  /** What stops sandboxes from working right now, if anything (for the attention inbox). */
+  async problem(): Promise<string | undefined> {
+    if (!this.deps.client) return 'off';
+    const ready = await this.deps.client.ready();
+    if (!ready) return 'unreachable';
+    if (!ready.docker) return 'no-docker';
+    if (ready.images[this.deps.profile] === false) return 'no-image';
+    return undefined;
   }
 
   private sandbox(client: RunnerClient, taskId: string): RunnerSandbox {
@@ -252,6 +264,10 @@ export class WorkspaceService {
           throw new ApiError(400, 'is_directory', 'That is a folder: list it instead');
         case 'not_directory':
           throw new ApiError(400, 'not_directory', 'That is a file: download it instead');
+        case 'not_regular':
+          throw new ApiError(400, 'not_regular', 'That is not a regular file (a pipe, socket or device)');
+        case 'fs_timeout':
+          throw new ApiError(504, 'workspace_timeout', 'Reading the workspace took too long');
         case 'invalid_request':
           throw new ApiError(400, 'invalid_path', error.message);
         case 'runner_unreachable':

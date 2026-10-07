@@ -11,6 +11,8 @@ export const EXIT = {
   notDirectory: 20,
   exists: 17,
   notEmpty: 39,
+  /** A FIFO, socket or device: reading or writing it could block forever. */
+  notRegular: 22,
 } as const;
 
 /**
@@ -21,12 +23,14 @@ export const FOREGROUND = `d=/tmp/.sa/fg/$1; mkdir -p "$d" || exit 126; cd -- "$
 exec setsid --wait sh -c 'echo $$ > "$1/pid"; exec sh -c "$2"' sa "$d" "$3"`;
 
 /**
- * Starts $3 in folder $2 in the background: output to /tmp/.sa/bg/$1/{out,err}, the exit status to
- * exit. It outlives the exec that started it, and the runner.
+ * Starts $3 in folder $2 in the background, killed after $4 seconds if $4 is set: output to
+ * /tmp/.sa/bg/$1/{out,err}, the exit status to exit. It outlives the exec that started it, and the runner.
  */
 export const BACKGROUND = `d=/tmp/.sa/bg/$1; mkdir -p "$d" || exit 126; printf '%s' "$3" > "$d/cmd"
 : > "$d/out"; : > "$d/err"; cd -- "$2" || exit 127
-setsid sh -c 'echo $$ > "$1/pid"; sh -c "$2" > "$1/out" 2> "$1/err" < /dev/null; echo $? > "$1/exit"' sa "$d" "$3" > /dev/null 2>&1 &
+setsid sh -c 'echo $$ > "$1/pid"
+if [ -n "$3" ]; then timeout -k 5 "$3" sh -c "$2"; else sh -c "$2"; fi > "$1/out" 2> "$1/err" < /dev/null
+echo $? > "$1/exit"' sa "$d" "$3" "$4" > /dev/null 2>&1 &
 echo started`;
 
 /** Stops the process group of exec $2 (fg or bg in $1): TERM, then KILL after two seconds. */
@@ -35,14 +39,17 @@ kill -TERM -$p 2>/dev/null || exit 3
 for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 -$p 2>/dev/null || exit 0; sleep 0.2; done
 kill -KILL -$p 2>/dev/null; exit 0`;
 
-/** One background process: state line, command (base64), then size and tail (base64) of out and err. */
+/**
+ * One background process: its state line, command (base64), then for out and err: the total size and
+ * (base64) at most $4 bytes from offset $2 (out) and $3 (err).
+ */
 export const PROCESS_STATUS = `d=/tmp/.sa/bg/$1; [ -d "$d" ] || exit 44
 if [ -f "$d/exit" ]; then echo "exit $(cat "$d/exit")"
 elif p=$(cat "$d/pid" 2>/dev/null) && kill -0 -$p 2>/dev/null; then echo running
 else echo gone; fi
 base64 -w0 < "$d/cmd"; echo
-stat -c %s "$d/out" 2>/dev/null || echo 0; tail -c "$2" "$d/out" 2>/dev/null | base64 -w0; echo
-stat -c %s "$d/err" 2>/dev/null || echo 0; tail -c "$2" "$d/err" 2>/dev/null | base64 -w0; echo`;
+stat -c %s "$d/out" 2>/dev/null || echo 0; tail -c +$(($2 + 1)) "$d/out" 2>/dev/null | head -c "$4" | base64 -w0; echo
+stat -c %s "$d/err" 2>/dev/null || echo 0; tail -c +$(($3 + 1)) "$d/err" 2>/dev/null | head -c "$4" | base64 -w0; echo`;
 
 /** Every background process: id, state and command (base64), tab-separated. */
 export const PROCESS_LIST = `for d in /tmp/.sa/bg/*/; do [ -d "$d" ] || continue; id=$(basename "$d")
@@ -55,23 +62,33 @@ printf '%s\\t%s\\t%s\\n' "$id" "$s" "$(base64 -w0 < "$d/cmd")"; done`;
 export const ANY_LIVE = `for d in /tmp/.sa/bg/*/; do [ -f "$d/exit" ] && continue
 p=$(cat "$d/pid" 2>/dev/null) || continue; kill -0 -$p 2>/dev/null && { echo live; exit 0; }; done; echo idle`;
 
-/** File $1: its size on stderr, then at most $2 bytes of it. */
+/** Free space, in KiB, on the workspace's filesystem. */
+export const FREE_SPACE = `df -Pk /workspace | tail -n 1`;
+
+/** Regular file $1: its size on stderr, then at most $2 bytes of it. */
 export const READ = `p=$1; [ -e "$p" ] || exit ${EXIT.notFound}; [ -d "$p" ] && exit ${EXIT.isDirectory}
+[ -f "$p" ] || exit ${EXIT.notRegular}
 stat -L -c %s -- "$p" >&2 || exit 1; head -c "$2" -- "$p"`;
 
 /** Writes stdin to file $1. $2: overwrite, create (refuse an existing file) or append. */
 export const WRITE = `p=$1; [ -d "$p" ] && exit ${EXIT.isDirectory}
+if [ -e "$p" ] && [ ! -f "$p" ]; then exit ${EXIT.notRegular}; fi
 if [ "$2" = create ] && { [ -e "$p" ] || [ -L "$p" ]; }; then exit ${EXIT.exists}; fi
 dir=$(dirname -- "$p"); if [ -e "$dir" ] && [ ! -d "$dir" ]; then exit ${EXIT.notDirectory}; fi
 mkdir -p -- "$dir" || exit ${EXIT.notDirectory}
 if [ "$2" = append ]; then cat >> "$p"; else cat > "$p"; fi`;
 
-/** Entries under folder $1 to depth $2, at most $3: type, size, mtime, link target, path; NUL-ended. */
+/**
+ * Entries under folder $1 to depth $2, at most $3: type, size, mtime, link target and path, each field
+ * NUL-ended (names and link targets may hold tabs or newlines).
+ */
 export const LIST = `p=$1; [ -e "$p" ] || exit ${EXIT.notFound}; [ -d "$p" ] || exit ${EXIT.notDirectory}
-find "$p" -mindepth 1 -maxdepth "$2" -printf '%y\\t%s\\t%T@\\t%l\\t%P\\0' | head -z -n "$3"`;
+find "$p" -mindepth 1 -maxdepth "$2" -printf '%y\\0%s\\0%T@\\0%l\\0%P\\0' | head -z -n $((5 * $3))`;
 
-/** Type, size and mtime of $1, following symlinks. */
-export const STAT = `p=$1; [ -e "$p" ] || exit ${EXIT.notFound}; find -L "$p" -maxdepth 0 -printf '%y\\t%s\\t%T@\\n'`;
+/** Type, size and mtime of $1, following symlinks, and for a regular file whether it looks binary. */
+export const STAT = `p=$1; [ -e "$p" ] || exit ${EXIT.notFound}; b=0
+if [ -f "$p" ] && head -c 4096 -- "$p" | od -An -tx1 -v | grep -q ' 00'; then b=1; fi
+find -L "$p" -maxdepth 0 -printf "%y\\t%s\\t%T@\\t$b\\n"`;
 
 /** Makes folder $1; $2 = 1 for parents too (and no error if it exists). */
 export const MKDIR = `p=$1; if [ -d "$p" ]; then [ "$2" = 1 ] && exit 0; exit ${EXIT.exists}; fi

@@ -7,8 +7,10 @@ import type {
   FsOperation,
   FsResult,
   FsStat,
+  ProcessInfo,
   ProcessStatus,
   RunnerErrorCode,
+  RunnerReady,
   RunnerSandbox,
 } from '@superagent/shared/runner';
 import type Docker from 'dockerode';
@@ -64,11 +66,25 @@ const FS_EXIT: Record<number, [number, RunnerErrorCode, string]> = {
   [scripts.EXIT.notDirectory]: [409, 'not_directory', 'Not a folder'],
   [scripts.EXIT.exists]: [409, 'exists', 'It exists already'],
   [scripts.EXIT.notEmpty]: [409, 'not_empty', 'The folder is not empty'],
+  [scripts.EXIT.notRegular]: [409, 'not_regular', 'Not a regular file (a pipe, socket or device)'],
 };
+/** `timeout -s KILL` ends a file snippet that ran too long with 137. */
+const KILLED_BY_TIMEOUT = 137;
+/** How long a foreground command may outlive its timeout before the container itself is killed. */
+const KILL_GRACE_MS = 15_000;
+/** Helpers (readers, folder makers) older than this are leftovers. */
+const HELPER_MAX_AGE_MS = 10 * 60_000;
+/** Free space is checked at most this often per sandbox. */
+const DISK_CHECK_MS = 10_000;
+/** The most a process status returns per stream; callers read on from the offset. */
+export const MAX_PROCESS_SLICE = 1024 * 1024;
 
 const text = (buffer: Buffer) => buffer.toString('utf8');
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** What setsid --wait says about a child we killed: noise next to timedOut/killed. */
 const SETSID_NOISE = /^setsid: child \d+ did not exit normally.*\n?/gm;
+/** Docker refuses a volume subpath that isn't there: the task never had a workspace. */
+const MISSING_SUBPATH = /no such file or directory|cannot access path|not a directory/i;
 
 /**
  * One sandbox container per task (decision D10). Every command and file operation runs inside the
@@ -78,6 +94,7 @@ export class SandboxManager {
   private readonly lastUsed = new Map<string, number>();
   private readonly inFlight = new Map<string, number>();
   private readonly locks = new Map<string, Promise<unknown>>();
+  private readonly diskChecks = new Map<string, number>();
   private volumeReady: Promise<void> | undefined;
 
   constructor(
@@ -93,12 +110,16 @@ export class SandboxManager {
       const name = containerName(this.config, taskId);
       const existing = await this.inspect(name);
       if (existing) {
-        if (!existing.State.Running) await this.start(name);
+        if (!existing.State.Running) {
+          await this.makeRoom(taskId);
+          await this.start(name);
+        }
         this.touch(taskId);
         return { ...this.describe(await this.mustInspect(name)), outcome: 'connected' as const };
       }
       const image = this.imageFor(profile);
       await this.requireImage(image);
+      await this.makeRoom(taskId);
       await this.prepareVolume(image);
       await this.runHelper(
         helperSpec(this.config, {
@@ -118,11 +139,7 @@ export class SandboxManager {
   }
 
   async list(): Promise<RunnerSandbox[]> {
-    const containers = await this.docker.listContainers({
-      all: true,
-      filters: { label: [`${LABELS.runner}=${this.config.RUNNER_NAME_PREFIX}`] },
-    });
-    return containers.flatMap((container) => {
+    return (await this.sandboxContainers()).flatMap((container) => {
       const taskId = container.Labels[LABELS.task];
       if (!taskId) return [];
       const used = this.lastUsed.get(taskId);
@@ -149,61 +166,80 @@ export class SandboxManager {
   /** Removes the task's container; its files stay in the workspaces volume. */
   remove(taskId: string): Promise<boolean> {
     this.requireTaskId(taskId);
-    return this.locked(taskId, async () => {
-      try {
-        await this.docker.getContainer(containerName(this.config, taskId)).remove({ force: true });
-      } catch (error) {
-        if (isDockerNotFound(error)) return false;
-        throw error;
-      }
-      this.lastUsed.delete(taskId);
-      this.log.info('Sandbox removed', { taskId });
-      return true;
-    });
+    return this.locked(taskId, () => this.removeNow(taskId));
+  }
+
+  /** Whether Docker answers and which profiles' images are built (for the API's health checks). */
+  async ready(): Promise<RunnerReady> {
+    let docker = true;
+    try {
+      await this.docker.ping();
+    } catch {
+      docker = false;
+    }
+    const images: Record<string, boolean> = {};
+    for (const [profile, image] of Object.entries(this.config.RUNNER_IMAGES)) {
+      images[profile] = docker && (await this.hasImage(image));
+    }
+    return { docker, images };
   }
 
   /** Runs a command in the task's sandbox, or starts it in the background. */
   exec(taskId: string, input: ExecRequest, signal?: AbortSignal): Promise<ExecResult> {
     return this.using(taskId, async () => {
+      const started = Date.now();
+      const nothing = (killed: boolean, stderr = ''): ExecResult => ({
+        execId: '000000000000',
+        exitCode: null,
+        stdout: '',
+        stderr,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        timedOut: false,
+        killed,
+        durationMs: Date.now() - started,
+      });
       await this.ensure(taskId, input.profile);
+      // Cancelled while the sandbox was being created: don't run it at all.
+      if (signal?.aborted) return nothing(true);
       const container = this.docker.getContainer(containerName(this.config, taskId));
+      await this.requireDiskSpace(taskId, container);
       const execId = randomBytes(6).toString('hex');
       const cwd = this.resolvePath(input.cwd ?? '.');
       const env = [...BASE_ENV, ...Object.entries(input.env ?? {}).map(([key, value]) => `${key}=${value}`)];
-      const started = Date.now();
       if (input.background) {
+        const seconds = input.timeoutMs ? String(Math.ceil(input.timeoutMs / 1000)) : '';
         const outcome = await execIn(this.docker, container, {
-          cmd: ['sh', '-c', scripts.BACKGROUND, 'sa', execId, cwd, input.command],
+          cmd: ['sh', '-c', scripts.BACKGROUND, 'sa', execId, cwd, input.command, seconds],
           user: SANDBOX_USER,
           workingDir: WORKSPACE_DIR,
           env,
           maxOutputBytes: 64 * 1024,
+          deadlineMs: 30_000,
         });
+        if (outcome.abandoned) {
+          throw new RunnerError(503, 'docker_error', 'The sandbox did not start the command in time');
+        }
         return {
+          ...nothing(false, outcome.exitCode === 0 ? '' : text(outcome.stderr)),
           execId,
           exitCode: outcome.exitCode === 0 ? null : (outcome.exitCode ?? 1),
-          stdout: '',
-          stderr: outcome.exitCode === 0 ? '' : text(outcome.stderr),
-          stdoutTruncated: false,
-          stderrTruncated: false,
-          timedOut: false,
-          killed: false,
-          durationMs: Date.now() - started,
         };
       }
+      const timeoutMs = input.timeoutMs ?? this.config.RUNNER_EXEC_TIMEOUT_MS;
       let timedOut = false;
       let killed = false;
-      const stop = () => void this.killGroup(container, 'fg', execId).catch(() => {});
+      let finished = false;
+      const stop = () => void this.stopCommand(taskId, container, execId, () => finished);
       const timer = setTimeout(() => {
         timedOut = true;
         stop();
-      }, input.timeoutMs ?? this.config.RUNNER_EXEC_TIMEOUT_MS);
+      }, timeoutMs);
       const onAbort = () => {
         killed = true;
         stop();
       };
-      if (signal?.aborted) onAbort();
-      else signal?.addEventListener('abort', onAbort, { once: true });
+      signal?.addEventListener('abort', onAbort, { once: true });
       try {
         const outcome = await execIn(this.docker, container, {
           cmd: ['sh', '-c', scripts.FOREGROUND, 'sa', execId, cwd, input.command],
@@ -211,7 +247,13 @@ export class SandboxManager {
           workingDir: WORKSPACE_DIR,
           env,
           maxOutputBytes: this.config.RUNNER_MAX_OUTPUT_BYTES,
+          deadlineMs: timeoutMs + KILL_GRACE_MS,
         });
+        if (outcome.abandoned) {
+          // Nothing could kill it: everything in the sandbox goes, files stay.
+          timedOut = true;
+          await this.killContainer(taskId, container);
+        }
         return {
           execId,
           exitCode: outcome.exitCode,
@@ -224,6 +266,7 @@ export class SandboxManager {
           durationMs: Date.now() - started,
         };
       } finally {
+        finished = true;
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
         void this.run(container, ['rm', '-rf', '--', `/tmp/.sa/fg/${execId}`]).catch(() => {});
@@ -231,61 +274,60 @@ export class SandboxManager {
     });
   }
 
-  /** A background process's state and the end of its output. */
-  async process(taskId: string, execId: string, tailBytes: number): Promise<ProcessStatus> {
+  /**
+   * A background process's state and the next slice of its output: bytes from `from.out` and
+   * `from.err`, at most `maxBytes` each.
+   */
+  async process(
+    taskId: string,
+    execId: string,
+    from: { out: number; err: number },
+    maxBytes: number,
+  ): Promise<ProcessStatus> {
     this.requireExecId(execId);
     const container = await this.runningContainer(taskId);
-    const outcome = await this.run(container, [
-      'sh',
-      '-c',
-      scripts.PROCESS_STATUS,
-      'sa',
-      execId,
-      String(tailBytes),
-    ]);
+    const slice = Math.min(Math.max(maxBytes, 1), MAX_PROCESS_SLICE);
+    const outcome = await this.run(
+      container,
+      ['sh', '-c', scripts.PROCESS_STATUS, 'sa', execId, String(from.out), String(from.err), String(slice)],
+      undefined,
+      // Two base64 slices and a few short lines.
+      2 * Math.ceil(slice / 3) * 4 + 64 * 1024,
+    );
     if (outcome.exitCode === scripts.EXIT.notFound) {
       throw new RunnerError(404, 'not_found', `No process ${execId} in this sandbox`);
+    }
+    if (outcome.exitCode !== 0 || outcome.stdoutTruncated) {
+      throw new RunnerError(503, 'docker_error', 'The process status could not be read; try again');
     }
     const [state = 'gone', command = '', outSize = '0', out = '', errSize = '0', err = ''] = text(
       outcome.stdout,
     ).split('\n');
-    const stdout = Buffer.from(out, 'base64');
-    const stderr = Buffer.from(err, 'base64');
-    const exit = /^exit (-?\d+)$/.exec(state);
     return {
-      execId,
-      command: text(Buffer.from(command, 'base64')),
-      running: state === 'running',
-      // A process that is gone without a status was killed.
-      exitCode: exit ? Number(exit[1]) : state === 'gone' ? 137 : null,
-      stdout: text(stdout),
-      stderr: text(stderr),
-      stdoutTruncated: Number(outSize) > stdout.length,
-      stderrTruncated: Number(errSize) > stderr.length,
+      ...this.info(execId, state, command),
+      stdoutSize: Number(outSize) || 0,
+      stderrSize: Number(errSize) || 0,
+      stdoutBase64: out,
+      stderrBase64: err,
     };
   }
 
-  async processes(
-    taskId: string,
-  ): Promise<Array<Omit<ProcessStatus, 'stdout' | 'stderr' | 'stdoutTruncated' | 'stderrTruncated'>>> {
+  async processes(taskId: string): Promise<ProcessInfo[]> {
     const container = await this.runningContainer(taskId).catch((error: unknown) => {
       if (error instanceof RunnerError && error.code === 'sandbox_not_found') return undefined;
       throw error;
     });
     if (!container) return [];
     const outcome = await this.run(container, ['sh', '-c', scripts.PROCESS_LIST]);
+    if (outcome.exitCode !== 0) {
+      throw new RunnerError(503, 'docker_error', 'The processes could not be listed; try again');
+    }
     return text(outcome.stdout)
       .split('\n')
       .filter(Boolean)
       .map((line) => {
         const [execId = '', state = '', command = ''] = line.split('\t');
-        const exit = /^exit (-?\d+)$/.exec(state);
-        return {
-          execId,
-          command: text(Buffer.from(command, 'base64')),
-          running: state === 'running',
-          exitCode: exit ? Number(exit[1]) : state === 'gone' ? 137 : null,
-        };
+        return this.info(execId, state, command);
       });
   }
 
@@ -293,7 +335,10 @@ export class SandboxManager {
   async killProcess(taskId: string, execId: string): Promise<boolean> {
     this.requireExecId(execId);
     const container = await this.runningContainer(taskId);
-    return this.killGroup(container, 'bg', execId);
+    const outcome = await this.run(container, ['sh', '-c', scripts.KILL, 'sa', 'bg', execId]);
+    if (outcome.exitCode === 0) return true;
+    if (outcome.exitCode === 3) return false;
+    throw new RunnerError(503, 'docker_error', 'The process could not be stopped; try again');
   }
 
   /**
@@ -308,7 +353,9 @@ export class SandboxManager {
     return this.using(taskId, async () => {
       if (!options.peek) {
         await this.ensure(taskId, options.profile);
-        return this.fsOp(this.docker.getContainer(containerName(this.config, taskId)), request, false);
+        const container = this.docker.getContainer(containerName(this.config, taskId));
+        if (WRITE_OPS.has(request.op)) await this.requireDiskSpace(taskId, container);
+        return this.fsOp(container, request, false);
       }
       const name = containerName(this.config, taskId);
       const existing = await this.inspect(name);
@@ -320,13 +367,9 @@ export class SandboxManager {
     });
   }
 
-  /** Stops idle sandboxes and removes long-stopped ones. Their files stay. */
+  /** Stops idle sandboxes, removes long-stopped ones and sweeps leftover helpers. Files stay. */
   async reap(now = Date.now()): Promise<void> {
-    const containers = await this.docker.listContainers({
-      all: true,
-      filters: { label: [`${LABELS.runner}=${this.config.RUNNER_NAME_PREFIX}`] },
-    });
-    for (const summary of containers) {
+    for (const summary of await this.sandboxContainers()) {
       const taskId = summary.Labels[LABELS.task];
       if (!taskId || !isTaskId(taskId)) continue;
       try {
@@ -334,30 +377,46 @@ export class SandboxManager {
         if (summary.State === 'running') {
           const info = await container.inspect();
           const last = this.lastUsed.get(taskId) ?? Date.parse(info.State.StartedAt);
-          if (now - last < this.config.RUNNER_IDLE_STOP_MS || (this.inFlight.get(taskId) ?? 0) > 0) continue;
-          if (text((await this.run(container, ['sh', '-c', scripts.ANY_LIVE])).stdout).trim() === 'live') {
+          if (now - last < this.config.RUNNER_IDLE_STOP_MS || this.busy(taskId)) continue;
+          if (await this.hasLiveProcess(container)) {
             this.touch(taskId);
             continue;
           }
           await this.locked(taskId, async () => {
-            if ((this.inFlight.get(taskId) ?? 0) > 0) return;
+            if (this.busy(taskId)) return;
             await container.stop({ t: 5 });
             this.log.info('Sandbox stopped (idle)', { taskId });
           });
         } else {
-          const info = await container.inspect();
-          const finished = Date.parse(info.State.FinishedAt);
-          if (Number.isFinite(finished) && now - finished > this.config.RUNNER_REMOVE_AFTER_MS) {
-            await this.remove(taskId);
-          }
+          // Decided under the lock: a command may be bringing it back right now.
+          await this.locked(taskId, async () => {
+            const info = await container.inspect();
+            if (info.State.Running || this.busy(taskId)) return;
+            const finished = Date.parse(info.State.FinishedAt);
+            // A container that never ran reports year 1: count from its creation instead.
+            const since = Number.isFinite(finished) && finished > 0 ? finished : Date.parse(info.Created);
+            if (now - since > this.config.RUNNER_REMOVE_AFTER_MS) await this.removeNow(taskId);
+          });
         }
       } catch (error) {
         this.log.warn('Reaping a sandbox failed', { taskId, error: dockerMessage(error) });
       }
     }
+    await this.sweepHelpers(now);
   }
 
   // --- helpers ---
+
+  private info(execId: string, state: string, command: string): ProcessInfo {
+    const exit = /^exit (-?\d+)$/.exec(state);
+    return {
+      execId,
+      command: text(Buffer.from(command, 'base64')),
+      running: state === 'running',
+      // A process that is gone without a status was killed.
+      exitCode: exit ? Number(exit[1]) : state === 'gone' ? 137 : null,
+    };
+  }
 
   private async fsOp(
     container: Docker.Container,
@@ -407,10 +466,11 @@ export class SandboxManager {
           undefined,
           16 * 1024 * 1024,
         );
-        const entries = text(outcome.stdout)
-          .split('\0')
-          .filter(Boolean)
-          .map((record) => this.entry(record));
+        const fields = outcome.stdout.toString('utf8').split('\0');
+        const entries: FsEntry[] = [];
+        for (let i = 0; i + 4 < fields.length; i += 5) {
+          entries.push(this.entry(fields.slice(i, i + 5)));
+        }
         return { entries: entries.slice(0, limit), truncated: entries.length > limit };
       }
       case 'stat':
@@ -440,7 +500,7 @@ export class SandboxManager {
 
   private async stat(container: Docker.Container, target: string): Promise<FsStat> {
     const outcome = await this.fsRun(container, scripts.STAT, [target]);
-    const [type = '', size = '0', mtime = '0'] = text(outcome.stdout).trim().split('\t');
+    const [type = '', size = '0', mtime = '0', binary = '0'] = text(outcome.stdout).trim().split('\t');
     const mtimeMs = Math.floor(Number(mtime) * 1000);
     return {
       path: path.posix.relative(WORKSPACE_DIR, target) || '.',
@@ -448,13 +508,13 @@ export class SandboxManager {
       size: Number(size),
       modifiedAt: new Date(mtimeMs).toISOString(),
       mtimeMs,
+      binary: binary === '1',
     };
   }
 
-  private entry(record: string): FsEntry {
-    const [type = '', size = '0', mtime = '0', target = '', ...rest] = record.split('\t');
+  private entry([type = '', size = '0', mtime = '0', target = '', relative = '']: string[]): FsEntry {
     return {
-      path: rest.join('\t'),
+      path: relative,
       type: type === 'f' ? 'file' : type === 'd' ? 'directory' : type === 'l' ? 'symlink' : 'other',
       size: Number(size),
       modifiedAt: new Date(Math.floor(Number(mtime) * 1000)).toISOString(),
@@ -462,7 +522,7 @@ export class SandboxManager {
     };
   }
 
-  /** Runs a file snippet, turning its exit codes into errors. */
+  /** Runs a file snippet under a time limit, turning its exit codes into errors. */
   private async fsRun(
     container: Docker.Container,
     script: string,
@@ -470,7 +530,17 @@ export class SandboxManager {
     stdin?: Buffer,
     maxOutputBytes = 1024 * 1024,
   ): Promise<ExecOutcome> {
-    const outcome = await this.run(container, ['sh', '-c', script, 'sa', ...args], stdin, maxOutputBytes);
+    const seconds = String(Math.ceil(this.config.RUNNER_FS_TIMEOUT_MS / 1000));
+    const outcome = await this.run(
+      container,
+      ['timeout', '-s', 'KILL', seconds, 'sh', '-c', script, 'sa', ...args],
+      stdin,
+      maxOutputBytes,
+      this.config.RUNNER_FS_TIMEOUT_MS + 10_000,
+    );
+    if (outcome.abandoned || outcome.exitCode === KILLED_BY_TIMEOUT) {
+      throw new RunnerError(504, 'fs_timeout', 'The file operation took too long');
+    }
     if (outcome.exitCode === 0) return outcome;
     const known = outcome.exitCode === null ? undefined : FS_EXIT[outcome.exitCode];
     if (known) throw new RunnerError(known[0], known[1], known[2]);
@@ -481,7 +551,13 @@ export class SandboxManager {
     );
   }
 
-  private run(container: Docker.Container, cmd: string[], stdin?: Buffer, maxOutputBytes = 1024 * 1024) {
+  private run(
+    container: Docker.Container,
+    cmd: string[],
+    stdin?: Buffer,
+    maxOutputBytes = 1024 * 1024,
+    deadlineMs = 30_000,
+  ) {
     return execIn(this.docker, container, {
       cmd,
       user: SANDBOX_USER,
@@ -489,12 +565,100 @@ export class SandboxManager {
       env: BASE_ENV,
       stdin,
       maxOutputBytes,
+      deadlineMs,
     });
   }
 
-  private async killGroup(container: Docker.Container, kind: 'fg' | 'bg', execId: string): Promise<boolean> {
-    const outcome = await this.run(container, ['sh', '-c', scripts.KILL, 'sa', kind, execId]);
-    return outcome.exitCode === 0;
+  /**
+   * Stops a foreground command: its process group, retried until the pid file exists or the command
+   * ends; if no kill gets through (say, every process slot is taken), the container itself.
+   */
+  private async stopCommand(
+    taskId: string,
+    container: Docker.Container,
+    execId: string,
+    finished: () => boolean,
+  ): Promise<void> {
+    const until = Date.now() + 5_000;
+    while (!finished() && Date.now() < until) {
+      const outcome = await this.run(
+        container,
+        ['sh', '-c', scripts.KILL, 'sa', 'fg', execId],
+        undefined,
+        4096,
+        5_000,
+      )
+        .then((o) => o.exitCode)
+        .catch(() => null);
+      if (outcome === 0) return;
+      await sleep(200);
+    }
+    if (!finished()) await this.killContainer(taskId, container);
+  }
+
+  private async killContainer(taskId: string, container: Docker.Container): Promise<void> {
+    try {
+      await container.kill();
+      this.log.warn('Sandbox killed: a command could not be stopped', { taskId });
+    } catch (error) {
+      if ((error as { statusCode?: number }).statusCode !== 409) {
+        this.log.error('Killing a sandbox failed', { taskId, error: dockerMessage(error) });
+      }
+    }
+  }
+
+  private async hasLiveProcess(container: Docker.Container): Promise<boolean> {
+    const outcome = await this.run(container, ['sh', '-c', scripts.ANY_LIVE], undefined, 4096, 10_000);
+    // Can't tell (say, no process slot free): treat it as busy rather than stop it under a command.
+    return outcome.exitCode !== 0 || text(outcome.stdout).trim() === 'live';
+  }
+
+  /** Refuses work while the workspaces' disk is nearly full (checked every few seconds per sandbox). */
+  private async requireDiskSpace(taskId: string, container: Docker.Container): Promise<void> {
+    if (this.config.RUNNER_MIN_FREE_MB <= 0) return;
+    const last = this.diskChecks.get(taskId);
+    if (last && Date.now() - last < DISK_CHECK_MS) return;
+    const outcome = await this.run(container, ['sh', '-c', scripts.FREE_SPACE], undefined, 4096, 10_000);
+    const availableKb = Number(text(outcome.stdout).trim().split(/\s+/)[3]);
+    if (Number.isFinite(availableKb) && availableKb < this.config.RUNNER_MIN_FREE_MB * 1024) {
+      this.diskChecks.delete(taskId);
+      throw new RunnerError(
+        507,
+        'disk_full',
+        `The workspaces disk is nearly full (${Math.floor(availableKb / 1024)} MiB free): delete files before running more`,
+      );
+    }
+    this.diskChecks.set(taskId, Date.now());
+  }
+
+  /** At the running limit, stops the least recently used idle sandbox, or refuses. */
+  private async makeRoom(taskId: string): Promise<void> {
+    const running = (await this.sandboxContainers()).filter(
+      (c) => c.State === 'running' && c.Labels[LABELS.task] !== taskId,
+    );
+    if (running.length < this.config.RUNNER_MAX_RUNNING) return;
+    const candidates = running
+      .map((c) => ({ container: c, taskId: c.Labels[LABELS.task] ?? '' }))
+      .filter((c) => isTaskId(c.taskId) && !this.busy(c.taskId))
+      .sort((a, b) => (this.lastUsed.get(a.taskId) ?? 0) - (this.lastUsed.get(b.taskId) ?? 0));
+    for (const candidate of candidates) {
+      const container = this.docker.getContainer(candidate.container.Id);
+      // Under its own lock: a command may be about to use it.
+      const stopped = await this.locked(candidate.taskId, async () => {
+        if (this.busy(candidate.taskId) || (await this.hasLiveProcess(container).catch(() => true)))
+          return false;
+        await container.stop({ t: 5 });
+        return true;
+      });
+      if (!stopped) continue;
+      this.log.info('Sandbox stopped to make room', { taskId: candidate.taskId, for: taskId });
+      return;
+    }
+    throw new RunnerError(
+      503,
+      'sandboxes_busy',
+      `${running.length} sandboxes are busy (the limit is ${this.config.RUNNER_MAX_RUNNING}); try again later`,
+    );
   }
 
   /** Paths are relative to /workspace. Confined paths (the owner's file routes) may not leave it. */
@@ -514,18 +678,19 @@ export class SandboxManager {
   ): Promise<T> {
     const image = this.imageFor(profile);
     await this.requireImage(image);
-    let container: Docker.Container;
+    const container = await this.docker.createContainer(
+      helperSpec(this.config, { image, cmd: ['sleep', '120'], mount: { taskId, readOnly: true } }),
+    );
     try {
-      container = await this.docker.createContainer(
-        helperSpec(this.config, { image, cmd: ['sleep', '120'], mount: { taskId, readOnly: true } }),
-      );
-      await container.start();
-    } catch (error) {
-      // The task's folder doesn't exist: it never had a sandbox.
-      this.log.debug('No workspace to read', { taskId, error: dockerMessage(error) });
-      throw new RunnerError(404, 'sandbox_not_found', 'This task has no workspace');
-    }
-    try {
+      try {
+        await container.start();
+      } catch (error) {
+        if (MISSING_SUBPATH.test(dockerMessage(error))) {
+          // The task's folder doesn't exist: no agent ever worked in it.
+          throw new RunnerError(404, 'sandbox_not_found', 'This task has no workspace');
+        }
+        throw error;
+      }
       return await fn(container);
     } finally {
       await container.remove({ force: true }).catch(() => {});
@@ -572,6 +737,43 @@ export class SandboxManager {
     }
   }
 
+  /** Removes helpers a crash or an error left behind. */
+  private async sweepHelpers(now: number): Promise<void> {
+    const helpers = await this.docker
+      .listContainers({
+        all: true,
+        filters: { label: [`${LABELS.runner}=${this.config.RUNNER_NAME_PREFIX}-helper`] },
+      })
+      .catch(() => []);
+    for (const helper of helpers) {
+      if (now - helper.Created * 1000 < HELPER_MAX_AGE_MS) continue;
+      await this.docker
+        .getContainer(helper.Id)
+        .remove({ force: true })
+        .catch(() => {});
+    }
+  }
+
+  private sandboxContainers(): Promise<Docker.ContainerInfo[]> {
+    return this.docker.listContainers({
+      all: true,
+      filters: { label: [`${LABELS.runner}=${this.config.RUNNER_NAME_PREFIX}`] },
+    });
+  }
+
+  private async removeNow(taskId: string): Promise<boolean> {
+    try {
+      await this.docker.getContainer(containerName(this.config, taskId)).remove({ force: true });
+    } catch (error) {
+      if (isDockerNotFound(error)) return false;
+      throw error;
+    }
+    this.lastUsed.delete(taskId);
+    this.diskChecks.delete(taskId);
+    this.log.info('Sandbox removed', { taskId });
+    return true;
+  }
+
   private async runningContainer(taskId: string): Promise<Docker.Container> {
     this.requireTaskId(taskId);
     const name = containerName(this.config, taskId);
@@ -593,12 +795,19 @@ export class SandboxManager {
     return image;
   }
 
-  private async requireImage(image: string): Promise<void> {
+  private async hasImage(image: string): Promise<boolean> {
     try {
       await this.docker.getImage(image).inspect();
+      return true;
     } catch (error) {
-      if (!isDockerNotFound(error)) throw error;
-      // Never pulled: only images built or loaded on purpose run.
+      if (isDockerNotFound(error)) return false;
+      throw error;
+    }
+  }
+
+  private async requireImage(image: string): Promise<void> {
+    // Never pulled: only images built or loaded on purpose run.
+    if (!(await this.hasImage(image))) {
       throw new RunnerError(503, 'image_missing', `The sandbox image ${image} is not built on this host`);
     }
   }
@@ -642,6 +851,10 @@ export class SandboxManager {
 
   private touch(taskId: string): void {
     this.lastUsed.set(taskId, Date.now());
+  }
+
+  private busy(taskId: string): boolean {
+    return (this.inFlight.get(taskId) ?? 0) > 0;
   }
 
   /** Marks the task busy while `fn` runs, so the reaper leaves its sandbox alone. */

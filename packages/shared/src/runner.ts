@@ -67,22 +67,33 @@ export const ExecResultSchema = z.object({
 });
 export type ExecResult = z.infer<typeof ExecResultSchema>;
 
-export const ProcessStatusSchema = z.object({
+export const ProcessInfoSchema = z.object({
   execId: z.string(),
   command: z.string(),
   running: z.boolean(),
   exitCode: z.number().int().nullable(),
-  stdout: z.string(),
-  stderr: z.string(),
-  stdoutTruncated: z.boolean(),
-  stderrTruncated: z.boolean(),
+});
+export type ProcessInfo = z.infer<typeof ProcessInfoSchema>;
+export const ProcessListSchema = z.object({ items: z.array(ProcessInfoSchema) });
+
+/**
+ * A background process and a slice of its output: the bytes from the offsets asked for (at most
+ * `maxBytes` each), and each stream's total size, so the caller reads on from where it stopped.
+ */
+export const ProcessStatusSchema = ProcessInfoSchema.extend({
+  stdoutSize: z.number(),
+  stderrSize: z.number(),
+  stdoutBase64: z.string(),
+  stderrBase64: z.string(),
 });
 export type ProcessStatus = z.infer<typeof ProcessStatusSchema>;
-export const ProcessListSchema = z.object({
-  items: z.array(
-    ProcessStatusSchema.omit({ stdout: true, stderr: true, stdoutTruncated: true, stderrTruncated: true }),
-  ),
+
+/** What the runner can do right now: reach Docker, and which profiles' images are built. */
+export const RunnerReadySchema = z.object({
+  docker: z.boolean(),
+  images: z.record(z.string(), z.boolean()),
 });
+export type RunnerReady = z.infer<typeof RunnerReadySchema>;
 
 const path = z.string().min(1).max(4096);
 export const FsRequestSchema = z.discriminatedUnion('op', [
@@ -148,6 +159,8 @@ export const FsStatSchema = z.object({
   modifiedAt: z.iso.datetime(),
   /** Modification time in ms since the epoch, for expectedMtimeMs. */
   mtimeMs: z.number(),
+  /** A regular file whose first bytes include NUL: not text. */
+  binary: z.boolean(),
 });
 export type FsStat = z.infer<typeof FsStatSchema>;
 
@@ -178,5 +191,9 @@ export type RunnerErrorCode =
   | 'not_empty'
   | 'stale'
   | 'too_large'
+  | 'not_regular'
   | 'fs_error'
+  | 'fs_timeout'
+  | 'disk_full'
+  | 'sandboxes_busy'
   | 'docker_error';
