@@ -52,8 +52,12 @@ export function createRunner(
     browsers,
     attach(server) {
       server.on('upgrade', (req, socket, head) => {
+        socket.on('error', () => socket.destroy());
         if (browsers.handles(req)) {
-          void browsers.relay(req, socket, head);
+          browsers.relay(req, socket, head).catch((error: unknown) => {
+            logger.warn('A DevTools relay failed', { error: dockerMessage(error) });
+            socket.destroy();
+          });
           return;
         }
         socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');

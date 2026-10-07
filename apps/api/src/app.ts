@@ -1,4 +1,5 @@
-import type { Server } from 'node:http';
+import type { IncomingMessage, Server } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { createNodeWebSocket } from '@hono/node-ws';
 import { MastraServer } from '@mastra/hono';
 import { sql } from 'drizzle-orm';
@@ -23,6 +24,34 @@ export interface HttpApp {
 
 /** Live-view messages are small: mouse and keyboard events, a URL. */
 const MAX_WS_MESSAGE_BYTES = 64 * 1024;
+
+type UpgradeListener = (request: IncomingMessage, socket: Duplex, head: Buffer) => unknown;
+
+/**
+ * @hono/node-ws parses each upgrade's request target with `new URL` before anything else, in an async
+ * listener: a malformed one ("GET http://[") rejects with nobody to catch it, and the process exits.
+ * Its listener gets requests that parse, and a failure closes that socket only.
+ */
+function guardUpgrades(server: Server): Server {
+  const guarded = {
+    on(event: string, listener: UpgradeListener) {
+      server.on(event, (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+        socket.on('error', () => socket.destroy());
+        try {
+          new URL(request.url ?? '/', 'http://localhost');
+        } catch {
+          socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+          return;
+        }
+        Promise.resolve()
+          .then(() => listener(request, socket, head))
+          .catch(() => socket.destroy());
+      });
+      return guarded;
+    },
+  };
+  return guarded as unknown as Server;
+}
 
 /**
  * Route map:
@@ -91,7 +120,7 @@ export async function createApp(deps: AppDeps): Promise<HttpApp> {
   app.route(V1_PREFIX, createV1Router(deps, websockets.upgradeWebSocket));
   return {
     app,
-    injectWebSocket: (server) => websockets.injectWebSocket(server),
+    injectWebSocket: (server) => websockets.injectWebSocket(guardUpgrades(server)),
     closeWebSockets: () => {
       for (const client of websockets.wss.clients) client.close(1001, 'Server shutting down');
     },

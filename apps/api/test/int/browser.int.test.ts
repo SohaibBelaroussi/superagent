@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { type AddressInfo, connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerType, serve } from '@hono/node-server';
@@ -446,4 +446,68 @@ describe('browsers', () => {
     const list = (await (await send('GET', '/v1/browsers')).json()) as BrowserSessionList;
     expect(list.items.some((item) => item.kind === 'reader')).toBe(true);
   }, 120_000);
+
+  it('closes the browser of a task that closed while it started', async () => {
+    const created = await send('POST', '/v1/tasks', {
+      departmentId: web.id,
+      title: 'Cancelled early',
+      brief: 'Nothing.',
+      dispatch: false,
+    });
+    const task = (await created.json()) as Task;
+    const goto = system.browsers.toolsFor({ requireApproval: false }).browser_goto as {
+      execute(input: unknown, context: unknown): Promise<unknown>;
+    };
+    const call = goto.execute(
+      { url: `${ORIGIN}/index.html` },
+      { requestContext: new Map([['superagent.taskId', task.id]]) },
+    );
+    // The browser takes a second or two to start: the task closes first.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await send('POST', `/v1/tasks/${task.id}/cancel`, {})).status).toBe(200);
+    expect(await call).toMatchObject({ success: false, code: 'task_closed' });
+    expect((await send('GET', `/v1/tasks/${task.id}/browser`)).status).toBe(404);
+    expect((await runner.browsers.list()).some((b) => b.taskId === task.id)).toBe(false);
+  }, 60_000);
+
+  it('survives malformed upgrade requests', async () => {
+    const malformed = [
+      'GET http://[ HTTP/1.1',
+      'Host: x',
+      'Connection: Upgrade',
+      'Upgrade: websocket',
+      'Sec-WebSocket-Version: 13',
+      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+      '',
+      '',
+    ].join('\r\n');
+    const [host, port] = apiUrl.split(':');
+    expect(await rawRequest(Number(port), malformed, host)).toMatch(/^HTTP\/1\.1 400/);
+    expect((await fetch(`http://${apiUrl}/health`)).status).toBe(200);
+    expect(await rawRequest(Number(port), 'GET http://[ HTTP/1.1\r\nHost: x\r\n\r\n', host)).toMatch(
+      /^HTTP\/1\.1 /,
+    );
+    expect((await fetch(`http://${apiUrl}/health`)).status).toBe(200);
+    // The runner too: a bad target is no DevTools connection.
+    const runnerPort = Number(new URL(runnerUrl).port);
+    expect(await rawRequest(runnerPort, malformed)).toMatch(/^HTTP\/1\.1 404/);
+    expect((await fetch(`${runnerUrl}/health`)).status).toBe(200);
+  });
 });
+
+/** Sends raw bytes to a server and returns whatever comes back before it closes (or 5 s pass). */
+function rawRequest(port: number, request: string, host = '127.0.0.1'): Promise<string> {
+  return new Promise((resolve) => {
+    let data = '';
+    const socket = connect(port, host, () => socket.write(request));
+    socket.on('data', (chunk) => {
+      data += chunk.toString();
+    });
+    socket.on('close', () => resolve(data));
+    socket.on('error', () => resolve(data));
+    setTimeout(() => {
+      socket.destroy();
+      resolve(data);
+    }, 5_000);
+  });
+}

@@ -13,7 +13,8 @@ const port = Number(process.env.EGRESS_PORT || 3128);
 const quiet = process.env.LOG_LEVEL === 'warn' || process.env.LOG_LEVEL === 'error';
 
 const server = createEgressProxy({
-  connectPorts: ports(process.env.EGRESS_CONNECT_PORTS, '443'),
+  // 80 too: browsers tunnel ws:// through a proxy with CONNECT.
+  connectPorts: ports(process.env.EGRESS_CONNECT_PORTS, '443,80'),
   httpPorts: ports(process.env.EGRESS_HTTP_PORTS, '80'),
   log: (event) => {
     if (quiet && event.action === 'allow') return;

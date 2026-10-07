@@ -487,6 +487,12 @@ export class BrowserService {
     browser.onBrowserReady(() => void this.startStream(session));
     browser.onBrowserClosed(() => this.broadcast(key, { status: 'browser_closed' }));
     this.deps.logger.info('Browser opened', { kind: spec.kind, key, identity: identity?.name ?? null });
+    // A task that closed while its browser started had nothing to close then: close it now. Once the
+    // session is registered, a later close finds it through the event bus.
+    if (spec.taskId && TERMINAL_PHASES.has((await this.deps.tasks.get(spec.taskId)).phase)) {
+      await this.close(key, 'its task closed');
+      throw new BrowserUnavailableError('task_closed', 'This task is closed.', 'Stop working on it.');
+    }
     return session;
   }
 

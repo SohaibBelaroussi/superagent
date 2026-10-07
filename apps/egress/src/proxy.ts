@@ -37,6 +37,17 @@ const HOP_BY_HOP = [
   'upgrade',
 ];
 
+/** The headers meant for the far end: hop-by-hop ones and any the Connection header names go. */
+function endToEnd(headers: http.IncomingHttpHeaders): http.IncomingHttpHeaders {
+  const named = String(headers.connection ?? '')
+    .split(',')
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  const copy = { ...headers };
+  for (const name of [...HOP_BY_HOP, ...named]) delete copy[name];
+  return copy;
+}
+
 const defaultResolve = async (host: string) =>
   (await lookup(host, { all: true, verbatim: true })).map((entry) => entry.address);
 
@@ -78,28 +89,30 @@ export function createEgressProxy(options: EgressOptions): http.Server {
       if (!options.httpPorts.has(port)) throw new Refused(`port ${port}`);
       const address = await publicAddress(target.hostname);
       log({ action: 'allow', kind: 'http', host: target.hostname, address, port });
-      const headers = { ...req.headers };
-      for (const name of HOP_BY_HOP) delete headers[name];
       const upstream = http.request(
         {
           host: address,
           port,
           method: req.method,
           path: `${target.pathname}${target.search}`,
-          headers: { ...headers, host: target.host },
+          headers: { ...endToEnd(req.headers), host: target.host },
           setHost: false,
           timeout: connectTimeoutMs,
         },
         (response) => {
-          res.writeHead(response.statusCode ?? 502, response.headers);
+          res.writeHead(response.statusCode ?? 502, endToEnd(response.headers));
           response.pipe(res);
         },
       );
+      // Connecting gets connectTimeoutMs; after that, a request idle this long is dropped either way.
+      upstream.on('socket', (socket) => socket.once('connect', () => upstream.setTimeout(idleTimeoutMs)));
+      req.setTimeout(idleTimeoutMs, () => upstream.destroy(new Error('idle')));
       upstream.on('timeout', () => upstream.destroy(new Error('timeout')));
       upstream.on('error', () => {
         if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
         res.end('Upstream failed\n');
       });
+      res.on('close', () => upstream.destroy());
       req.pipe(upstream);
     } catch (error) {
       const reason = error instanceof Refused ? error.message : 'bad request';

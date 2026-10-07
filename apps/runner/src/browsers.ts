@@ -45,6 +45,15 @@ export function loadBrowserSeccomp(setting: string): string | undefined {
   return JSON.stringify(JSON.parse(readFileSync(file, 'utf8')));
 }
 
+/** An upgrade's request target, or undefined when it doesn't parse ("GET http://[" would throw). */
+function parseTarget(req: IncomingMessage): URL | undefined {
+  try {
+    return new URL(req.url ?? '/', 'http://runner');
+  } catch {
+    return undefined;
+  }
+}
+
 function refuse(socket: Duplex, status: number, reason: string): void {
   socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
@@ -148,7 +157,8 @@ export class BrowserContainers {
 
   /** Whether an upgrade request is a DevTools connection, which `relay` serves. */
   handles(req: IncomingMessage): boolean {
-    return CDP_PATH.test(new URL(req.url ?? '/', 'http://runner').pathname);
+    const url = parseTarget(req);
+    return Boolean(url && CDP_PATH.test(url.pathname));
   }
 
   /**
@@ -157,9 +167,9 @@ export class BrowserContainers {
    */
   async relay(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     socket.on('error', () => socket.destroy());
-    const url = new URL(req.url ?? '/', 'http://runner');
-    const taskId = CDP_PATH.exec(url.pathname)?.[1];
-    if (!taskId || !isTaskId(taskId)) return refuse(socket, 404, 'Not Found');
+    const url = parseTarget(req);
+    const taskId = url ? CDP_PATH.exec(url.pathname)?.[1] : undefined;
+    if (!url || !taskId || !isTaskId(taskId)) return refuse(socket, 404, 'Not Found');
     if (!this.useTicket(taskId, url.searchParams.get('ticket') ?? '')) {
       return refuse(socket, 401, 'Unauthorized');
     }
@@ -184,6 +194,12 @@ export class BrowserContainers {
     } catch (error) {
       this.log.warn('A DevTools connection failed', { taskId, error: dockerMessage(error) });
       return refuse(socket, 502, 'Bad Gateway');
+    }
+    stream.on('error', () => socket.destroy());
+    // The client may have left while the exec started: its close is gone, so nothing would count it out.
+    if (socket.destroyed) {
+      stream.destroy();
+      return;
     }
     const extensions = req.headers['sec-websocket-extensions'];
     stream.write(
@@ -223,7 +239,6 @@ export class BrowserContainers {
       stream.destroy();
       done();
     });
-    stream.on('error', () => socket.destroy());
     stream.on('end', () => socket.end());
     stream.on('close', () => {
       socket.destroy();

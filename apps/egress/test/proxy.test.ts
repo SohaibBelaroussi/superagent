@@ -33,7 +33,11 @@ function raw(port: number, request: string, after?: (socket: net.Socket) => void
 }
 
 describe('egress proxy', () => {
-  const upstream = http.createServer((req, res) => res.end(`hello from ${req.headers.host}${req.url}`));
+  const upstream = http.createServer((req, res) =>
+    res.end(
+      req.url === '/headers' ? JSON.stringify(req.headers) : `hello from ${req.headers.host}${req.url}`,
+    ),
+  );
   const echo = net.createServer((socket) => socket.pipe(socket));
   const names: Record<string, string[]> = {
     'public.example': ['127.0.0.1'],
@@ -84,6 +88,26 @@ describe('egress proxy', () => {
     );
     expect(answer).toMatch(/^HTTP\/1\.1 200/);
     expect(answer).toContain(`hello from public.example:${upstreamPort}/page?x=1`);
+  });
+
+  it('drops hop-by-hop headers and the ones Connection names', async () => {
+    const answer = await raw(
+      lenientPort,
+      [
+        `GET http://public.example:${upstreamPort}/headers HTTP/1.1`,
+        `Host: public.example:${upstreamPort}`,
+        'Connection: close, X-Hop',
+        'X-Hop: secret',
+        'Proxy-Authorization: Basic eDp5',
+        'X-Kept: yes',
+        '',
+        '',
+      ].join('\r\n'),
+    );
+    const seen = JSON.parse(answer.slice(answer.indexOf('{'))) as Record<string, string>;
+    expect(seen['x-kept']).toBe('yes');
+    expect(seen['x-hop']).toBeUndefined();
+    expect(seen['proxy-authorization']).toBeUndefined();
   });
 
   it('tunnels CONNECT to a public address', async () => {
