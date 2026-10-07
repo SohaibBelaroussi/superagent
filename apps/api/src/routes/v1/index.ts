@@ -5,11 +5,13 @@ import { requireAuth } from '../../http/auth';
 import { problem, validationHook } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 import { APP_VERSION } from '../../version';
+import { registerAttentionRoutes } from './attention';
 import { isUpload, MAX_UPLOAD_BYTES, registerKnowledgeRoutes } from './knowledge';
 import { registerMeRoutes } from './me';
 import { registerMemoryRoutes } from './memory';
 import { registerOrgRoutes } from './org';
 import { registerProviderRoutes } from './providers';
+import { registerScheduleRoutes } from './schedules';
 import { registerSettingsRoutes } from './settings';
 import { registerTaskRoutes } from './tasks';
 import { registerTokenRoutes } from './tokens';
@@ -41,6 +43,8 @@ export function createV1Router(deps: AppDeps): OpenAPIHono<AppEnv> {
   registerTaskRoutes(v1, deps);
   registerKnowledgeRoutes(v1, deps);
   registerMemoryRoutes(v1, deps);
+  registerScheduleRoutes(v1, deps);
+  registerAttentionRoutes(v1, deps);
 
   v1.openAPIRegistry.registerComponent('securitySchemes', 'bearer', { type: 'http', scheme: 'bearer' });
   v1.doc31('/openapi.json', {

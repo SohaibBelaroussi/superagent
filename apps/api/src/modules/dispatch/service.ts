@@ -1,7 +1,9 @@
 import type { Agent } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
-import type { TaskRow } from '../../db/schema';
+import { and, eq, inArray } from 'drizzle-orm';
+import type { Db } from '../../db/client';
+import { decisions, type TaskRow } from '../../db/schema';
 import { ApiError } from '../../http/problem';
 import { truncate } from '../../util/text';
 import { type PhaseActor, TERMINAL_PHASES } from '../ledger/phases';
@@ -17,9 +19,12 @@ const FAILED_FINISH_REASONS = new Set(['error', 'retry', 'aborted', 'other', 'un
 /** How often a supervised task thread is checked, and how long it must stay idle before deciding. */
 const POLL_MS = 200;
 const IDLE_CONFIRM_MS = 600;
+/** Every so many busy polls (about 5 s), check whether the run on the thread waits for an approval. */
+const APPROVAL_CHECK_POLLS = 25;
 
 export interface DispatchDeps {
   mastra: Mastra;
+  db: Db;
   tasks: TaskService;
   directory: OrgDirectory;
   memory: MemoryProfiles;
@@ -43,9 +48,36 @@ interface Supervision {
   steers: Array<Pending & { signalId: string }>;
   /** Why the last run we started ended badly, if it did. */
   problem?: string;
+  /** A run stopped for the owner's approval: supervision rests until the decision. */
+  parked: boolean;
+  /** Polls the thread has been busy, to look for approvals on runs we don't hold. */
+  busyPolls: number;
   running: boolean;
   stopped: boolean;
 }
+
+/** A tool call waiting for the owner, on one of a lead's suspended runs. */
+export interface PendingApproval {
+  agentKey: string;
+  runId: string;
+  toolCallId: string;
+  tool: string;
+  args: unknown;
+  threadId?: string;
+  /** When the run stopped for it. */
+  since: Date;
+}
+
+/** The attention id of a tool call waiting for approval (decision D32). */
+export const approvalId = (call: { runId: string; toolCallId: string }) =>
+  `approval:${call.runId}:${call.toolCallId}`;
+
+type RunOutput = {
+  text: PromiseLike<string>;
+  finishReason: PromiseLike<string | undefined>;
+  suspendPayload?: PromiseLike<unknown>;
+  runId?: string;
+};
 
 function briefFor(task: TaskRow, note?: string): string {
   return [
@@ -67,6 +99,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 export class DispatchService {
   private readonly supervisions = new Map<string, Supervision>();
+  /**
+   * Runs we hold that are still going. Mastra lists a run as suspended from the moment it suspends until
+   * a resumed run ends, so a run's tool calls wait for the owner only once we have let go of it.
+   */
+  private readonly holding = new Set<string>();
+  /** Approval ids decided in this process (the decisions table has the others). */
+  private readonly decided = new Set<string>();
   private closing = false;
 
   constructor(private readonly deps: DispatchDeps) {}
@@ -81,8 +120,21 @@ export class DispatchService {
     for (const supervision of this.supervisions.values()) supervision.stopped = true;
     this.supervisions.clear();
     const runtime = this.runtime();
+    // Runs waiting for an approval count as active but never end on their own; they resume after a
+    // restart (aborting one would spoil it), so they are left alone.
+    const suspended = new Set<string>();
+    for (const agent of Object.values(this.deps.mastra.listAgents()) as Agent[]) {
+      try {
+        for (const run of (await agent.listSuspendedRuns()).runs) {
+          // A run we hold is going (carrying out an approval, say) and is stopped like any other.
+          if (!this.holding.has(run.runId)) suspended.add(run.runId);
+        }
+      } catch {
+        // an agent without memory has none
+      }
+    }
     const stopAll = () => {
-      const runs = runtime.listActiveThreadRuns();
+      const runs = runtime.listActiveThreadRuns().filter((run) => !suspended.has(run.runId));
       for (const run of runs) {
         runtime.abortThreadStream({
           resourceId: run.resourceId,
@@ -126,6 +178,7 @@ export class DispatchService {
   /** Sends a task to its department's lead, on the task's own thread. */
   async dispatch(task: TaskRow, actor: PhaseActor, actorLabel: string, note?: string): Promise<TaskRow> {
     const lead = this.requireLead(task.departmentId);
+    if (task.phase !== 'inbox') await this.refuseIfApprovalPending(task);
     await this.ensureTaskThread(task);
     this.announceWork(task.id);
     const queued = await this.deps.tasks.transition(task.id, 'queued', actor, actorLabel, {
@@ -157,6 +210,7 @@ export class DispatchService {
     }
     if (task.phase === 'inbox') return this.dispatch(task, 'owner', actorLabel, text);
     const lead = this.requireLead(task.departmentId);
+    await this.refuseIfApprovalPending(task);
     const from = actorLabel === 'chief' ? 'chief' : 'owner';
     const pending: Pending = {
       message: {
@@ -191,11 +245,28 @@ export class DispatchService {
 
   /** Cancels a task, stopping the lead's run on it and dropping messages waiting for it. */
   async cancel(task: TaskRow, reason: string | undefined, actorLabel: string): Promise<TaskRow> {
+    const approvals = await this.pendingApprovals(task);
     const cancelled = await this.deps.tasks.transition(task.id, 'cancelled', 'owner', actorLabel, {
       data: reason ? { reason } : {},
     });
     this.stopSupervision(task.id);
     this.stopRuns(task);
+    // Declining a stopped run ends it for good, so it no longer waits in attention.
+    for (const approval of approvals) {
+      try {
+        const output = await this.agent(approval.agentKey).declineToolCall({
+          runId: approval.runId,
+          toolCallId: approval.toolCallId,
+          reason: 'The task was cancelled',
+        });
+        Promise.resolve(output.text).catch(() => {});
+      } catch (error) {
+        this.deps.logger.warn('Could not decline an approval of a cancelled task', {
+          taskId: task.id,
+          error,
+        });
+      }
+    }
     return cancelled;
   }
 
@@ -241,6 +312,11 @@ export class DispatchService {
   async recoverInterrupted(): Promise<number> {
     const interrupted = await this.deps.tasks.openTasks(['queued', 'working']);
     for (const task of interrupted) {
+      const [approval] = await this.pendingApprovals(task);
+      if (approval) {
+        await this.parkForApproval(task, this.supervision(task.id), approval);
+        continue;
+      }
       const reason = 'The server restarted while the lead was working on this task';
       const flagged = await this.deps.tasks.transition(task.id, 'waiting', 'system', 'system', {
         data: { reason },
@@ -248,6 +324,175 @@ export class DispatchService {
       await this.notifyChief(flagged, 'task-interrupted', `#${task.number} ${task.title}: ${reason}`, 'high');
     }
     return interrupted.length;
+  }
+
+  /** Tool calls on the task's thread waiting for the owner (from its lead's suspended runs). */
+  async pendingApprovals(task: TaskRow): Promise<PendingApproval[]> {
+    const lead =
+      (task.leadAgentId ? this.deps.directory.agent(task.leadAgentId) : undefined) ??
+      this.deps.directory.leadOf(task.departmentId);
+    if (!lead) return [];
+    return this.approvalsOf(lead.key, { threadId: task.threadId, resourceId: task.resourceId });
+  }
+
+  /** Every tool call waiting for the owner. A specialist's gated call surfaces on its lead's run. */
+  async listApprovals(): Promise<PendingApproval[]> {
+    const approvals: PendingApproval[] = [];
+    for (const lead of this.deps.directory.agents({ role: 'lead' })) {
+      approvals.push(...(await this.approvalsOf(lead.key)));
+    }
+    return approvals;
+  }
+
+  /** Tool calls on one agent's suspended runs that wait for the owner. */
+  async approvalsOf(
+    agentKey: string,
+    filter: { threadId?: string; resourceId?: string } = {},
+  ): Promise<PendingApproval[]> {
+    let runs: Awaited<ReturnType<Agent['listSuspendedRuns']>>['runs'];
+    try {
+      runs = (await this.agent(agentKey).listSuspendedRuns(filter)).runs;
+    } catch {
+      return []; // the agent is not registered (any more)
+    }
+    const calls = runs.flatMap((run) =>
+      this.holding.has(run.runId)
+        ? []
+        : run.toolCalls.flatMap((call) =>
+            call.toolCallId
+              ? [
+                  {
+                    agentKey,
+                    runId: run.runId,
+                    toolCallId: call.toolCallId,
+                    tool: call.toolName ?? 'a tool',
+                    args: call.args,
+                    threadId: run.threadId,
+                    since: run.suspendedAt ? new Date(run.suspendedAt) : new Date(),
+                  },
+                ]
+              : [],
+          ),
+    );
+    // A decided call stays listed until its resumed run ends, or for good if that run was cut short.
+    const open = calls.filter((call) => !this.decided.has(approvalId(call)));
+    if (open.length === 0) return open;
+    const rows = await this.deps.db
+      .select({ target: decisions.target })
+      .from(decisions)
+      .where(and(inArray(decisions.target, open.map(approvalId)), eq(decisions.status, 'applied')));
+    const done = new Set(rows.map((row) => row.target));
+    return open.filter((call) => !done.has(approvalId(call)));
+  }
+
+  /**
+   * The owner's decision on a tool call waiting for approval. The run carries on (with the tool's
+   * result, or the decline and its reason) and is supervised again.
+   */
+  async resolveApproval(
+    approval: PendingApproval,
+    decision: 'approve' | 'decline',
+    reason: string | undefined,
+    actorLabel: string,
+  ): Promise<TaskRow | undefined> {
+    const agent = this.agent(approval.agentKey);
+    const task = approval.threadId ? await this.deps.tasks.getByThread(approval.threadId) : undefined;
+    if (task) this.announceWork(task.id);
+    // Resuming the same call twice would run the tool twice.
+    const id = approvalId(approval);
+    this.decided.add(id);
+    let output: RunOutput;
+    try {
+      output =
+        decision === 'approve'
+          ? await agent.approveToolCall({ runId: approval.runId, toolCallId: approval.toolCallId })
+          : await agent.declineToolCall({ runId: approval.runId, toolCallId: approval.toolCallId, reason });
+    } catch (error) {
+      this.decided.delete(id);
+      throw error;
+    }
+    this.holding.add(approval.runId);
+    if (!task) {
+      const release = () => this.holding.delete(approval.runId);
+      Promise.resolve(output.finishReason).then(release, release);
+      Promise.resolve(output.text).catch(() => {});
+      return undefined;
+    }
+    let resumed = task;
+    try {
+      await this.deps.tasks.note(task.id, 'approval_decided', actorLabel, {
+        decision,
+        tool: approval.tool,
+        toolCallId: approval.toolCallId,
+        ...(reason ? { reason } : {}),
+      });
+      resumed =
+        (await this.deps.tasks.transitionIf(
+          task.id,
+          'working',
+          'system',
+          actorLabel,
+          (t) => t.phase === 'waiting',
+          {
+            reason:
+              decision === 'approve'
+                ? `The owner approved ${approval.tool}`
+                : `The owner declined ${approval.tool}`,
+          },
+        )) ?? (await this.deps.tasks.get(task.id));
+    } finally {
+      // The run carries on whatever the ledger said: watch it, and let go of it when it ends.
+      const supervision = this.supervision(task.id);
+      supervision.parked = false;
+      supervision.busyPolls = 0;
+      supervision.problem = undefined;
+      supervision.generation += 1;
+      this.watchOutput(resumed, supervision, output);
+      this.supervise(resumed, supervision);
+    }
+    return resumed;
+  }
+
+  private async refuseIfApprovalPending(task: TaskRow): Promise<void> {
+    if ((await this.pendingApprovals(task)).length > 0) {
+      throw new ApiError(
+        409,
+        'approval_pending',
+        `Task #${task.number} is waiting for your approval of a tool call: approve or decline it first (GET /v1/attention)`,
+      );
+    }
+  }
+
+  /** A run stopped for the owner's approval: the task waits, the chief is told, supervision rests. */
+  private async parkForApproval(
+    task: TaskRow,
+    supervision: Supervision,
+    approval: { tool: string; args?: unknown; runId?: string; toolCallId?: string },
+  ): Promise<void> {
+    if (supervision.parked) return;
+    supervision.parked = true;
+    const reason = `Waiting for the owner to approve ${approval.tool}`;
+    const flagged = await this.deps.tasks.transitionIf(
+      task.id,
+      'waiting',
+      'system',
+      'system',
+      (current) => current.phase === 'queued' || current.phase === 'working',
+      { reason },
+    );
+    await this.deps.tasks.note(task.id, 'approval_requested', 'system', {
+      tool: approval.tool,
+      args: truncate(JSON.stringify(approval.args ?? null), 2000),
+      ...(approval.runId ? { runId: approval.runId } : {}),
+      ...(approval.toolCallId ? { toolCallId: approval.toolCallId } : {}),
+    });
+    const current = flagged ?? (await this.deps.tasks.get(task.id));
+    await this.notifyChief(
+      current,
+      'approval-needed',
+      `#${current.number} ${current.title}: the lead wants to run ${approval.tool} and needs the owner's approval`,
+      'high',
+    );
   }
 
   /** New work for a task the lead now has (phase queued): a fresh run, or after the current turn. */
@@ -300,21 +545,48 @@ export class DispatchService {
       const output = await this.agent(lead.key).stream(contents, {
         memory: { thread: task.threadId, resource: task.resourceId },
       });
-      Promise.resolve(output.finishReason).then(
-        (reason) => {
-          if (reason && FAILED_FINISH_REASONS.has(reason)) {
+      this.watchOutput(task, supervision, output);
+    } catch (error) {
+      supervision.problem = `The lead's run could not start: ${errorMessage(error)}`;
+      this.deps.logger.warn('A lead run could not start', { taskId: task.id, error });
+    }
+  }
+
+  /** How a run we hold ends: a problem for the supervisor, or a stop for the owner's approval. */
+  private watchOutput(task: TaskRow, supervision: Supervision, output: RunOutput): void {
+    const runId = output.runId;
+    if (runId) this.holding.add(runId);
+    Promise.resolve(output.finishReason)
+      .then(
+        async (reason) => {
+          if (reason === 'suspended') {
+            const payload = (await Promise.resolve(output.suspendPayload).catch(() => undefined)) as
+              | { toolName?: string; args?: unknown; toolCallId?: string }
+              | undefined;
+            await this.parkForApproval(task, supervision, {
+              tool: payload?.toolName ?? 'a tool',
+              args: payload?.args,
+              runId: output.runId,
+              toolCallId: payload?.toolCallId,
+            }).catch((error: unknown) =>
+              this.deps.logger.error('Could not park a task for approval', { taskId: task.id, error }),
+            );
+          } else if (reason && FAILED_FINISH_REASONS.has(reason)) {
             supervision.problem = `The lead's run ended unexpectedly (${reason})`;
           }
         },
         (error: unknown) => {
           supervision.problem = `The lead's run failed: ${errorMessage(error)}`;
         },
-      );
-      Promise.resolve(output.text).catch(() => {});
-    } catch (error) {
-      supervision.problem = `The lead's run could not start: ${errorMessage(error)}`;
-      this.deps.logger.warn('A lead run could not start', { taskId: task.id, error });
-    }
+      )
+      .catch((error: unknown) =>
+        this.deps.logger.error('Watching a lead run failed', { taskId: task.id, error }),
+      )
+      .finally(() => {
+        // Parked by now if it stopped for an approval, which the owner can now decide.
+        if (runId) this.holding.delete(runId);
+      });
+    Promise.resolve(output.text).catch(() => {});
   }
 
   /**
@@ -329,7 +601,15 @@ export class DispatchService {
   private supervision(taskId: string): Supervision {
     let supervision = this.supervisions.get(taskId);
     if (!supervision) {
-      supervision = { generation: 0, queued: [], steers: [], running: false, stopped: false };
+      supervision = {
+        generation: 0,
+        queued: [],
+        steers: [],
+        parked: false,
+        busyPolls: 0,
+        running: false,
+        stopped: false,
+      };
       this.supervisions.set(taskId, supervision);
     }
     return supervision;
@@ -357,8 +637,17 @@ export class DispatchService {
     let idleSince: number | undefined;
     while (!this.closing && !supervision.stopped) {
       await sleep(POLL_MS);
+      if (supervision.parked) return;
       if (this.threadBusy(task)) {
         idleSince = undefined;
+        supervision.busyPolls += 1;
+        if (supervision.busyPolls % APPROVAL_CHECK_POLLS === 0) {
+          const [approval] = await this.pendingApprovals(task);
+          if (approval) {
+            await this.parkForApproval(task, supervision, approval);
+            return;
+          }
+        }
         continue;
       }
       idleSince ??= Date.now();

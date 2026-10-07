@@ -37,6 +37,8 @@ export class OrgService {
     private readonly logger: IMastraLogger,
     /** Shared with settings updates and provider deletion: model references must not race a delete. */
     private readonly configLock: Mutex,
+    /** How many tool calls on an agent's runs wait for the owner (from dispatch). */
+    private readonly approvalsWaiting: (agentKey: string) => Promise<number> = async () => 0,
   ) {}
 
   // --- departments ---
@@ -239,6 +241,15 @@ export class OrgService {
 
   private async archiveAgentLocked(id: string): Promise<void> {
     const agent = this.activeAgent(id);
+    // Deciding a call needs its agent: once archived, the call could never be approved or declined.
+    const waiting = await this.approvalsWaiting(agent.key);
+    if (waiting > 0) {
+      throw new ApiError(
+        409,
+        'approvals_pending',
+        `${agent.name} has ${waiting === 1 ? 'a tool call' : `${waiting} tool calls`} waiting for your decision: approve or decline first (GET /v1/attention)`,
+      );
+    }
     await this.db
       .update(agentDefinitions)
       .set({ archivedAt: new Date(), updatedAt: new Date() })
@@ -285,15 +296,6 @@ export class OrgService {
       if (seen.has(grant.key))
         throw new ApiError(400, 'duplicate_tool', `Tool "${grant.key}" is listed twice`);
       seen.add(grant.key);
-      // Mastra would pause the run before the call, and nothing can approve it until the attention
-      // inbox exists: the agent would just stop answering.
-      if (grant.requireApproval) {
-        throw new ApiError(
-          400,
-          'approval_not_available',
-          `Tool approvals arrive with the attention inbox (M5). Grant "${grant.key}" without requireApproval for now.`,
-        );
-      }
     }
   }
 

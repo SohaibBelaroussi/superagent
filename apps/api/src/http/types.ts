@@ -4,6 +4,8 @@ import type { HonoBindings, HonoVariables } from '@mastra/hono';
 import type { TokenService } from '../auth/tokens';
 import type { Config } from '../config';
 import type { Db } from '../db/client';
+import type { DecisionService } from '../modules/attention/decisions';
+import type { AttentionService } from '../modules/attention/service';
 import type { DispatchService } from '../modules/dispatch/service';
 import type { KnowledgeService } from '../modules/knowledge/service';
 import type { EventBus } from '../modules/ledger/events';
@@ -11,6 +13,7 @@ import type { TaskService } from '../modules/ledger/service';
 import type { MemoryService } from '../modules/memory/service';
 import type { OrgService } from '../modules/org/service';
 import type { ProviderService } from '../modules/providers/service';
+import type { ScheduleService } from '../modules/schedules/service';
 import type { SettingsService } from '../modules/settings/service';
 import type { ToolCatalog } from '../modules/tools/catalog';
 
@@ -33,4 +36,7 @@ export interface AppDeps {
   bus: EventBus;
   knowledge: KnowledgeService;
   memory: MemoryService;
+  schedules: ScheduleService;
+  attention: AttentionService;
+  decisions: DecisionService;
 }

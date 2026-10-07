@@ -46,6 +46,8 @@ const configSchema = z.object({
   MEMORY_OBSERVE_TOKENS: z.coerce.number().int().min(100).default(30_000),
   MEMORY_REFLECT_TOKENS: z.coerce.number().int().min(100).default(40_000),
   MEMORY_OBSERVE_AHEAD: z.stringbool().default(true),
+  // How often due schedules are looked for (decision D31).
+  SCHEDULER_TICK_MS: z.coerce.number().int().min(100).default(15_000),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15_000),
 });
 

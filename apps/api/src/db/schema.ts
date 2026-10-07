@@ -158,6 +158,8 @@ export const tasks = app.table(
     result: text('result'),
     revision: integer('revision').notNull().default(0),
     idempotencyKey: text('idempotency_key').unique(),
+    /** The schedule that created the task (no foreign key: deleting a schedule keeps its tasks). */
+    scheduleId: uuid('schedule_id'),
     dueAt: timestamp('due_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -260,3 +262,51 @@ export const departmentNotes = app.table('department_notes', {
   notes: text('notes').notNull(),
   updatedAt: updatedAt(),
 });
+
+// --- schedules and decisions (M5) ---
+
+/** Recurring tasks, fired by our own ticker (decision D31). */
+export const schedules = app.table(
+  'schedules',
+  {
+    id: uuid('id').primaryKey(),
+    departmentId: uuid('department_id')
+      .notNull()
+      .references(() => departments.id),
+    title: text('title').notNull(),
+    brief: text('brief').notNull(),
+    priority: text('priority', { enum: ['low', 'normal', 'high', 'urgent'] }).notNull(),
+    cron: text('cron').notNull(),
+    timezone: text('timezone').notNull(),
+    status: text('status', { enum: ['active', 'paused'] }).notNull(),
+    /** Null while paused. A fire claims the row by moving this forward (compare-and-set). */
+    nextFireAt: timestamp('next_fire_at', { withTimezone: true }),
+    lastFireAt: timestamp('last_fire_at', { withTimezone: true }),
+    lastTaskId: uuid('last_task_id'),
+    createdBy: text('created_by').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('schedules_due_idx').on(t.status, t.nextFireAt)],
+);
+
+export type ScheduleRow = typeof schedules.$inferSelect;
+
+/** The owner's decisions on attention items, once each: a retried request returns the first outcome. */
+export const decisions = app.table(
+  'decisions',
+  {
+    id: uuid('id').primaryKey(),
+    idempotencyKey: text('idempotency_key').notNull().unique(),
+    kind: text('kind', { enum: ['approve', 'decline'] }).notNull(),
+    target: text('target').notNull(),
+    reason: text('reason'),
+    status: text('status', { enum: ['applied', 'failed'] }).notNull(),
+    taskId: uuid('task_id'),
+    error: text('error'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('decisions_target_idx').on(t.target)],
+);
+
+export type DecisionRow = typeof decisions.$inferSelect;

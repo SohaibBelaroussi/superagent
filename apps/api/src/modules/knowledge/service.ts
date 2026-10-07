@@ -173,6 +173,11 @@ export class KnowledgeService {
       .limit(options.limit);
   }
 
+  /** Whether documents can be stored (object storage is configured). */
+  get enabled(): boolean {
+    return Boolean(this.blobs);
+  }
+
   private storage(): BlobStore {
     if (!this.blobs) {
       throw new ApiError(503, 'storage_not_configured', 'Document storage is not configured (S3_* settings)');

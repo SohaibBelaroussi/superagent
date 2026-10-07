@@ -205,12 +205,12 @@ const archiveAgent = createRoute({
   path: '/agents/{id}',
   tags: ['agents'],
   summary: 'Archive an agent',
-  description: 'Stops the agent; its versions are kept.',
+  description: 'Stops the agent; its versions are kept. Decide its pending tool calls first.',
   request: { params },
   responses: {
     204: { description: 'Archived' },
     404: problemResponse('Not found'),
-    409: problemResponse('Archived'),
+    409: problemResponse('Archived already, or tool calls wait for your decision'),
   },
 });
 

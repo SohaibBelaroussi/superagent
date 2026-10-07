@@ -16,6 +16,8 @@ import { createLogger } from './logger';
 import { createMastra } from './mastra';
 import { createChiefAgent } from './mastra/agents/chief';
 import { createScratchAgent } from './mastra/agents/scratch';
+import { DecisionService } from './modules/attention/decisions';
+import { AttentionService } from './modules/attention/service';
 import { DispatchService } from './modules/dispatch/service';
 import { type BlobStore, S3BlobStore } from './modules/knowledge/blobs';
 import { KnowledgeService } from './modules/knowledge/service';
@@ -32,6 +34,8 @@ import { ProviderGateway } from './modules/providers/gateway';
 import { GATEWAY_ID } from './modules/providers/model-ref';
 import { ProviderRegistry } from './modules/providers/registry';
 import { ProviderService } from './modules/providers/service';
+import { ScheduleService } from './modules/schedules/service';
+import { createScheduleTools } from './modules/schedules/tools';
 import { SettingsService } from './modules/settings/service';
 import { ToolCatalog } from './modules/tools/catalog';
 
@@ -48,6 +52,8 @@ export interface System {
   dispatch: DispatchService;
   knowledge: KnowledgeService;
   memory: MemoryService;
+  schedules: ScheduleService;
+  attention: AttentionService;
   mastra: Mastra;
   app: Hono<AppEnv>;
   /** Drains Mastra and closes the database pool. Does not touch the HTTP server. */
@@ -133,15 +139,25 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     const memoryTools = createMemoryTools(memoryService, directory);
     const bus = new EventBus();
     const tasks = new TaskService(db, directory, bus);
-    const dispatch = new DispatchService({ mastra, tasks, directory, memory, logger });
+    const dispatch = new DispatchService({ mastra, db, tasks, directory, memory, logger });
     const ledgerTools = { tasks, dispatch, directory };
+    const schedules = new ScheduleService({
+      db,
+      directory,
+      tasks,
+      dispatch,
+      settings,
+      logger,
+      tickMs: config.SCHEDULER_TICK_MS,
+    });
+    const scheduleTools = createScheduleTools(schedules, directory);
     mastra.addAgent(
       createChiefAgent({
         directory,
         settings,
         catalog,
         memory: memory.chief,
-        chiefTools: { ...createChiefTools(ledgerTools), ...memoryTools.chief },
+        chiefTools: { ...createChiefTools(ledgerTools), ...memoryTools.chief, ...scheduleTools.chief },
         ownerProfile: new OwnerProfileProcessor(memoryService, true),
       }),
       'chief',
@@ -157,16 +173,37 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         memory,
         ownerProfile: new OwnerProfileProcessor(memoryService, false),
         memoryService,
-        leadTools: { ...createLeadTools(ledgerTools), ...memoryTools.lead },
+        leadTools: { ...createLeadTools(ledgerTools), ...memoryTools.lead, ...scheduleTools.lead },
       },
       logger,
     );
     runtime.loadAll();
-    const org = new OrgService(db, directory, runtime, providers, catalog, logger, settings.lock);
+    const org = new OrgService(
+      db,
+      directory,
+      runtime,
+      providers,
+      catalog,
+      logger,
+      settings.lock,
+      async (key) => (await dispatch.approvalsOf(key)).length,
+    );
 
     await dispatch.ensureChiefThread();
     const interrupted = await dispatch.recoverInterrupted();
     if (interrupted > 0) logger.warn('Flagged tasks interrupted by a restart', { count: interrupted });
+    // The first tick also catches up on fires missed while the server was down.
+    schedules.start();
+    const attention = new AttentionService({
+      dispatch,
+      directory,
+      tasks,
+      schedules,
+      settings,
+      providers,
+      storageEnabled: knowledge.enabled,
+    });
+    const decisions = new DecisionService(db, attention, dispatch, logger);
 
     const app = await createApp({
       config,
@@ -183,6 +220,9 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       bus,
       knowledge,
       memory: memoryService,
+      schedules,
+      attention,
+      decisions,
     });
     return {
       config,
@@ -197,9 +237,12 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       dispatch,
       knowledge,
       memory: memoryService,
+      schedules,
+      attention,
       mastra,
       app,
       async close(drainTimeoutMs = 5_000) {
+        await schedules.stop();
         await dispatch.close(drainTimeoutMs);
         await mastra.shutdown({ drainTimeout: drainTimeoutMs });
         // Observational memory may still be writing in the background.

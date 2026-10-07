@@ -22,6 +22,8 @@ export interface NewTask {
   priority: TaskPriority;
   dueAt?: Date;
   source: 'owner' | 'chief' | 'schedule';
+  /** The schedule that fired it, if any. */
+  scheduleId?: string;
   /** Repeated calls with the same key return the first task (e.g. a tool call replayed after a restart). */
   idempotencyKey?: string;
 }
@@ -98,6 +100,7 @@ export class TaskService {
           resourceId: `dept:${department.slug}`,
           dueAt: input.dueAt,
           idempotencyKey: input.idempotencyKey,
+          scheduleId: input.scheduleId,
         })
         .returning();
       if (!task) throw new Error('Task insert returned no row');
@@ -142,6 +145,7 @@ export class TaskService {
   async list(filter: {
     departmentId?: string;
     phase?: TaskPhase;
+    scheduleId?: string;
     limit: number;
     before?: number;
   }): Promise<{ items: TaskRow[]; nextCursor: string | null }> {
@@ -152,6 +156,7 @@ export class TaskService {
         and(
           filter.departmentId ? eq(tasks.departmentId, filter.departmentId) : undefined,
           filter.phase ? eq(tasks.phase, filter.phase) : undefined,
+          filter.scheduleId ? eq(tasks.scheduleId, filter.scheduleId) : undefined,
           filter.before ? lt(tasks.number, filter.before) : undefined,
         ),
       )

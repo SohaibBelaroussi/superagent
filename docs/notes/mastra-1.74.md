@@ -328,7 +328,7 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - `create` takes `{ id?, agentId, cron, prompt, name?, timezone?, threadId?, resourceId?, signalType?, ifActive?, ifIdle?, metadata?, status? }`.
 - Hooks: `new Mastra({ schedules: { prepare, onFinish, onError, onAbort } })`.
 - Ids are normalized (e.g. `agent_standup`).
-- Fires missed during downtime are not replayed. The scheduler is single-instance.
+- Fires that come due at boot are lost, and schedules delete themselves in some cases: see §17. We use our own scheduler (D31).
 
 **Background tasks:**
 - Config: `new Mastra({ backgroundTasks: { enabled: true, globalConcurrency: 10, perAgentConcurrency: 5, defaultTimeoutMs: 300000 } })`.
@@ -336,9 +336,9 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - HTTP routes are read-only: `GET /api/background-tasks`, `/:id`, `/stream`.
 
 **Approvals:**
-- `agent.listSuspendedRuns({ resourceId?, threadId? })` returns `{ runs: [{ runId, threadId, toolCalls: [{ toolName, requiresApproval }] }], total }`.
-- Then `approveToolCall({ runId, toolCallId?, memory })` or `declineToolCall({ ..., reason? })`.
-- This survives agent swaps.
+- `agent.listSuspendedRuns({ threadId?, resourceId?, fromDate?, toDate?, perPage?, page? })` returns `{ runs: [{ runId, status, threadId, resourceId, suspendedAt, toolCalls: [{ toolCallId, toolName, args, requiresApproval }] }], total }`, read from storage.
+- Then `approveToolCall({ runId, toolCallId? })` or `declineToolCall({ runId, toolCallId?, reason? })`; memory comes from the snapshot. Both return a stream to consume.
+- This survives restarts and agent swaps (same id). Details in §17.
 
 **Pub/sub:**
 - `mastra.pubsub.publish(topic, { type, data, runId }, { localOnly? })`. **`runId` is required.**
@@ -519,7 +519,29 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 
 **Live result:** with "answer in French" in the owner profile, a department answered in French; a rule the lead saved in its notes was applied on the next task (more reliably once the lead's instructions say to follow its notes); the owner's model compressed a long task thread (1683 tokens observed into 725).
 
-## 17. From earlier research, needed in later milestones
+## 17. Learned while building M5 (2026-10-07)
+
+**Mastra schedules** (we built our own instead, D31):
+- The scheduler claims due rows by compare-and-set on `nextFireAt` and publishes the fire; the agent-schedule worker sends it as a signal (`<schedule>` user message) to the target thread, or calls `generate` without memory when there is no thread. [spike]
+- **Fires due at boot are lost:** the first tick claims the overdue row before the worker subscribes to the in-process pubsub, so there is no trigger row, hook or run. Several missed fires collapse into that one lost claim. A fire due during `stopWorkers` can be lost the same way. [spike]
+- **Schedules delete themselves:** a missing thread at fire time deletes the row; an unregistered agent gets it deleted after `scheduler.missesBeforeDelete` ticks (default 3), or at once on `run()`. `agentId` can't be updated, so replacing a lead means recreating its schedules. [spike]
+- `onFinish` fires as soon as the signal is accepted, not when the run ends. Without started workers, `run()` returns a claim id and nothing happens. [spike]
+- `computeNextFireAt(cron, { timezone, after })` and `validateCron(cron, timezone)` are exported from `@mastra/core/workflows`; we use them for our own schedules. [src]
+
+**Tool approvals:**
+- A gated call (`requireApproval: true` in the grant) ends the stream with `finishReason: 'suspended'` and an empty text; `await output.suspendPayload` is `{ toolCallId, toolName, args, resumeSchema }`. The tool doesn't run. [spike]
+- After approval the model sees the tool's result; after a decline it sees the reason (or "Tool call was not approved by the user"). A second approve throws `AGENT_RESUME_NO_SNAPSHOT_FOUND`. [spike]
+- **Restart:** a new process lists the same run and tool call, and approving it runs the tool and finishes the turn. [spike]
+- **A decided call still looks pending:** `listSuspendedRuns` keeps returning the run, same tool call, from the moment it suspends (before the suspending stream has finished) until the resumed run ends. Approving it again resumes it again and the tool runs twice. Dispatch lists a call only once the run is parked and nothing of ours holds it, and never after a decision (the decisions table). Found by the live test. [spike]
+- **In the same process a suspended run keeps its thread busy** (`getActiveThreadRunId` returns it) until a restart, a new run on the thread, or the lazy sweep (`MASTRA_SUSPENDED_RUN_TTL_MS`, 30 minutes, only when another run starts). Dispatch parks the task in `waiting` instead of waiting for idle. [spike]
+- **`agent.stream` is never blocked by a suspended run**: the new run leaves the pending call out, and a later approval appends its reply at the end of the thread. Hence the 409 on new work while a call waits. [spike]
+- **Aborting a suspended run spoils it:** a later approve runs the tool and then ends `aborted` without a model call. To cancel, abort and then decline. [spike]
+- A specialist's gated tool suspends the lead's run too; `lead.listSuspendedRuns` lists it with the specialist's tool name and arguments, and approving the lead's run carries both on. [spike]
+- Approving or declining needs the agent registered (the snapshot names it). We refuse to archive a lead with calls waiting (409 `approvals_pending`). [spike]
+- A thrown tool error goes back to the model as the tool's result; the run carries on. [spike]
+- Mastra's own `/api/agents/:id/approve-tool-call` and `decline-tool-call` routes (and Studio) bypass our decisions log; a task resumed that way still reports through the ledger. [src]
+
+## 18. From earlier research, needed in later milestones
 
 - **DockerSandbox 0.9.2:**
   - One long-lived container per sandbox, reused by label.
