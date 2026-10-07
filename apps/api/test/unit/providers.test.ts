@@ -34,6 +34,16 @@ describe('SecretBox', () => {
     expect(() => new SecretBox(Buffer.alloc(32, 2).toString('base64')).open(sealed, 'ctx')).toThrow();
   });
 
+  it('rejects truncated authentication tags', () => {
+    const [version, iv, tag, ciphertext] = box.seal('sk-very-secret', 'ctx').split('.');
+    const shortTag = Buffer.from(tag ?? '', 'base64url')
+      .subarray(0, 4)
+      .toString('base64url');
+    expect(() => box.open([version, iv, shortTag, ciphertext].join('.'), 'ctx')).toThrow(
+      /authentication tag/,
+    );
+  });
+
   it('rejects keys that are not 32 bytes', () => {
     expect(() => new SecretBox(Buffer.alloc(16).toString('base64'))).toThrow(/32 bytes/);
   });
@@ -61,13 +71,18 @@ describe('model discovery parsing', () => {
 
   it('accepts common variants and ignores junk', () => {
     expect(
-      parseModelList({ models: [{ name: 'a' }, { model: 'b' }, 'c', 42, null] }).map((m) => m.modelId),
+      parseModelList({ models: [{ name: 'a' }, { model: 'b' }, 'c', 42, null] })?.map((m) => m.modelId),
     ).toEqual(['a', 'b', 'c']);
     expect(parseModelList(['x', 'x', ' y '])).toEqual([
       { modelId: 'x', kind: 'chat' },
       { modelId: 'y', kind: 'chat' },
     ]);
-    expect(parseModelList({ unexpected: true })).toEqual([]);
+  });
+
+  it('returns null, not an empty list, when there is no model list at all', () => {
+    expect(parseModelList({ unexpected: true })).toBeNull();
+    expect(parseModelList(null)).toBeNull();
+    expect(parseModelList({ data: [] })).toEqual([]);
   });
 
   it('guesses embedding models from their id', () => {

@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
 const FORMAT_VERSION = 'v1';
+const TAG_BYTES = 16;
 
 /**
  * Encrypts secrets at rest (provider API keys, headers) with AES-256-GCM.
@@ -31,9 +32,14 @@ export class SecretBox {
     if (version !== FORMAT_VERSION || !iv || !tag || ciphertext === undefined) {
       throw new Error('Unsupported sealed secret format');
     }
-    const decipher = createDecipheriv('aes-256-gcm', this.key, Buffer.from(iv, 'base64url'));
+    const authTag = Buffer.from(tag, 'base64url');
+    // Without a fixed length GCM accepts truncated tags (down to 4 bytes), which weakens forgery resistance.
+    if (authTag.length !== TAG_BYTES) throw new Error('Invalid authentication tag');
+    const decipher = createDecipheriv('aes-256-gcm', this.key, Buffer.from(iv, 'base64url'), {
+      authTagLength: TAG_BYTES,
+    });
     decipher.setAAD(Buffer.from(context, 'utf8'));
-    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+    decipher.setAuthTag(authTag);
     return Buffer.concat([decipher.update(Buffer.from(ciphertext, 'base64url')), decipher.final()]).toString(
       'utf8',
     );

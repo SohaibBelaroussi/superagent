@@ -54,7 +54,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
 
     const tokens = new TokenService(db, config.SUPERAGENT_ADMIN_TOKEN, { logger });
     const box = new SecretBox(config.SUPERAGENT_ENCRYPTION_KEY);
-    const registry = new ProviderRegistry(db, box);
+    const registry = new ProviderRegistry(db, box, logger);
     await registry.reload();
     const providers = new ProviderService(db, box, registry, logger);
     const settings = new SettingsService(db, SettingsService.defaultsFor(config.DEFAULT_TIMEZONE));

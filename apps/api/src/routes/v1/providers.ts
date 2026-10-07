@@ -24,6 +24,7 @@ function toProvider(p: ResolvedProvider): Provider {
     name: p.name,
     baseUrl: p.baseUrl,
     hasApiKey: p.apiKey !== null,
+    secretsReadable: p.secretsReadable,
     headerNames: Object.keys(p.headers).sort(),
     strictJson: p.strictJson,
     enabled: p.enabled,
@@ -189,15 +190,18 @@ export function registerProviderRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): 
 
   v1.openapi(deleteProvider, async (c) => {
     const { id } = c.req.valid('param');
-    const roles = deps.settings.rolesUsingProvider(deps.providers.get(id).slug);
-    if (roles.length > 0) {
-      throw new ApiError(
-        409,
-        'provider_in_use',
-        `Used by model roles: ${roles.join(', ')}. Change them first.`,
-      );
-    }
-    await deps.providers.remove(id);
+    // Under the settings lock, so no role can be pointed at this provider while it's being deleted.
+    await deps.settings.lock.run(async () => {
+      const roles = deps.settings.rolesUsingProvider(deps.providers.get(id).slug);
+      if (roles.length > 0) {
+        throw new ApiError(
+          409,
+          'provider_in_use',
+          `Used by model roles: ${roles.join(', ')}. Change them first.`,
+        );
+      }
+      await deps.providers.remove(id);
+    });
     return c.body(null, 204);
   });
 
@@ -235,7 +239,14 @@ export function registerProviderRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): 
         'No chat model known: pass "model", or refresh models first',
       );
     }
-    const result = await runProviderTest({ mastra: deps.mastra, provider, model, embeddingModel });
+    const result = await runProviderTest({
+      mastra: deps.mastra,
+      provider,
+      model,
+      embeddingModel,
+      // Stop calling the provider if the client goes away.
+      signal: c.req.raw.signal,
+    });
     deps.logger.info('Provider test finished', {
       providerId: provider.id,
       ok: result.ok,

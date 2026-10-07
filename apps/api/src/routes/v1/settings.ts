@@ -35,8 +35,8 @@ export function registerSettingsRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): 
   v1.openapi(getSettings, (c) => c.json(deps.settings.get(), 200));
 
   v1.openapi(updateSettings, async (c) => {
-    const next = await deps.settings.update(c.req.valid('json'), (ref, label) =>
-      deps.providers.assertUsable(ref, label),
+    const next = await deps.settings.update(c.req.valid('json'), (ref, label, kind) =>
+      deps.providers.assertUsable(ref, label, kind),
     );
     deps.logger.info('Settings updated', { keys: Object.keys(c.req.valid('json')) });
     return c.json(next, 200);

@@ -7,6 +7,7 @@ export interface RecordedRequest {
   method: string;
   path: string;
   authorization: string | undefined;
+  headers: Record<string, string | string[] | undefined>;
   body: Record<string, unknown> | undefined;
 }
 
@@ -16,6 +17,8 @@ export interface FakeOpenAI {
   requests: RecordedRequest[];
   /** Models listed by GET /models. */
   models: string[];
+  /** How GET /models answers: a normal list, an HTML login page, or an empty list. */
+  modelsMode: 'list' | 'html' | 'empty';
   close(): Promise<void>;
 }
 
@@ -24,14 +27,20 @@ type ToolDef = { function: { name: string } };
 
 export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Promise<FakeOpenAI> {
   const requests: RecordedRequest[] = [];
-  const state = { models };
+  const state: { models: string[]; modelsMode: FakeOpenAI['modelsMode'] } = { models, modelsMode: 'list' };
 
   const server = createServer(async (req, res) => {
     let raw = '';
     for await (const chunk of req) raw += chunk;
     const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : undefined;
     const path = (req.url ?? '').replace(/^\/v1/, '');
-    requests.push({ method: req.method ?? 'GET', path, authorization: req.headers.authorization, body });
+    requests.push({
+      method: req.method ?? 'GET',
+      path,
+      authorization: req.headers.authorization,
+      headers: { ...req.headers },
+      body,
+    });
 
     const send = (status: number, payload: unknown) => {
       res.writeHead(status, { 'content-type': 'application/json' });
@@ -39,7 +48,12 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
     };
 
     if (req.method === 'GET' && path === '/models') {
-      return send(200, { object: 'list', data: state.models.map((id) => ({ id, object: 'model' })) });
+      if (state.modelsMode === 'html') {
+        res.writeHead(200, { 'content-type': 'text/html' });
+        return res.end('<html><body>Please sign in</body></html>');
+      }
+      const listed = state.modelsMode === 'empty' ? [] : state.models;
+      return send(200, { object: 'list', data: listed.map((id) => ({ id, object: 'model' })) });
     }
 
     if (req.method === 'POST' && path === '/embeddings' && body) {
@@ -119,6 +133,12 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
     },
     set models(next: string[]) {
       state.models = next;
+    },
+    get modelsMode() {
+      return state.modelsMode;
+    },
+    set modelsMode(next: FakeOpenAI['modelsMode']) {
+      state.modelsMode = next;
     },
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };

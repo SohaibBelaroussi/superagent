@@ -59,8 +59,19 @@ const BaseUrlSchema = z
   .transform((url) => url.replace(/\/+$/, ''))
   .describe('OpenAI-compatible base URL, usually ending in /v1');
 
+// Keys and header values travel in HTTP headers: line breaks or other control characters make HTTP
+// clients throw, quoting the full (secret) value in the error message.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+const headerSafe = (value: string) => !/[\u0000-\u001f\u007f]/.test(value);
+const HEADER_SAFE = 'must not contain line breaks or other control characters';
+
+const ApiKeySchema = z.string().trim().min(1).max(4096).refine(headerSafe, HEADER_SAFE);
+
 const HeadersSchema = z
-  .record(z.string().min(1), z.string())
+  .record(
+    z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'not a valid header name'),
+    z.string().max(4096).refine(headerSafe, HEADER_SAFE),
+  )
   .describe('Extra headers sent with every request');
 
 export const ProviderSchema = z.object({
@@ -69,6 +80,11 @@ export const ProviderSchema = z.object({
   name: z.string(),
   baseUrl: z.string(),
   hasApiKey: z.boolean().describe('Keys are stored encrypted and never returned'),
+  secretsReadable: z
+    .boolean()
+    .describe(
+      'false when the stored key or headers cannot be decrypted (encryption key changed): set them again',
+    ),
   headerNames: z.array(z.string()),
   strictJson: z.boolean().describe('Send strict JSON schemas for structured output'),
   enabled: z.boolean(),
@@ -83,7 +99,7 @@ export const CreateProviderInputSchema = z.object({
   slug: ProviderSlugSchema,
   name: z.string().trim().min(1).max(100),
   baseUrl: BaseUrlSchema,
-  apiKey: z.string().min(1).max(4096).optional(),
+  apiKey: ApiKeySchema.optional(),
   headers: HeadersSchema.optional(),
   strictJson: z.boolean().default(false),
   enabled: z.boolean().default(true),
@@ -94,7 +110,7 @@ export type CreateProviderInput = z.infer<typeof CreateProviderInputSchema>;
 export const UpdateProviderInputSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   baseUrl: BaseUrlSchema.optional(),
-  apiKey: z.string().min(1).max(4096).nullable().optional(),
+  apiKey: ApiKeySchema.nullable().optional(),
   headers: HeadersSchema.nullable().optional(),
   strictJson: z.boolean().optional(),
   enabled: z.boolean().optional(),

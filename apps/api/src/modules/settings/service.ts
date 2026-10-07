@@ -1,8 +1,9 @@
-import type { ModelRef, ModelRole, Settings, UpdateSettingsInput } from '@superagent/shared';
+import type { ModelKind, ModelRef, ModelRole, Settings, UpdateSettingsInput } from '@superagent/shared';
 import { ModelRolesSchema, SettingsSchema } from '@superagent/shared';
 import type { Db } from '../../db/client';
 import { settings as settingsTable } from '../../db/schema';
 import { ApiError } from '../../http/problem';
+import { Mutex } from '../../util/mutex';
 import { isValidTimezone } from '../../util/text';
 import { routerId, unconfiguredRouterId } from '../providers/model-ref';
 
@@ -14,6 +15,8 @@ const KEYS: readonly SettingsKey[] = ['models', 'timezone', 'concurrency'];
 /** Server-wide settings, cached in memory and persisted as one row per top-level key. */
 export class SettingsService {
   private current: Settings;
+  /** Serializes configuration writes that must not interleave (settings updates, provider deletion). */
+  readonly lock = new Mutex();
 
   constructor(
     private readonly db: Db,
@@ -57,36 +60,42 @@ export class SettingsService {
     return MODEL_ROLES.filter((role) => this.current.models[role]?.provider === slug);
   }
 
-  async update(
+  /**
+   * Serialized with `lock`, which also guards provider deletion: concurrent updates can't lose each
+   * other's changes, and a role can't be pointed at a provider that is being deleted.
+   */
+  update(
     input: UpdateSettingsInput,
-    assertUsable: (ref: ModelRef, label: string) => void,
+    assertUsable: (ref: ModelRef, label: string, kind: ModelKind) => void,
   ): Promise<Settings> {
-    const next: Settings = {
-      models: { ...this.current.models, ...input.models },
-      timezone: input.timezone ?? this.current.timezone,
-      concurrency: { ...this.current.concurrency, ...input.concurrency },
-    };
-    if (!isValidTimezone(next.timezone)) {
-      throw new ApiError(400, 'invalid_timezone', `"${next.timezone}" is not an IANA timezone`);
-    }
-    for (const role of MODEL_ROLES) {
-      const ref = input.models?.[role];
-      if (ref) assertUsable(ref, `models.${role}`);
-    }
-
-    await this.db.transaction(async (tx) => {
-      for (const key of KEYS) {
-        if (input[key] === undefined) continue;
-        await tx
-          .insert(settingsTable)
-          .values({ key, value: next[key] })
-          .onConflictDoUpdate({
-            target: settingsTable.key,
-            set: { value: next[key], updatedAt: new Date() },
-          });
+    return this.lock.run(async () => {
+      const next: Settings = {
+        models: { ...this.current.models, ...input.models },
+        timezone: input.timezone ?? this.current.timezone,
+        concurrency: { ...this.current.concurrency, ...input.concurrency },
+      };
+      if (!isValidTimezone(next.timezone)) {
+        throw new ApiError(400, 'invalid_timezone', `"${next.timezone}" is not an IANA timezone`);
       }
+      for (const role of MODEL_ROLES) {
+        const ref = input.models?.[role];
+        if (ref) assertUsable(ref, `models.${role}`, role === 'embedding' ? 'embedding' : 'chat');
+      }
+
+      await this.db.transaction(async (tx) => {
+        for (const key of KEYS) {
+          if (input[key] === undefined) continue;
+          await tx
+            .insert(settingsTable)
+            .values({ key, value: next[key] })
+            .onConflictDoUpdate({
+              target: settingsTable.key,
+              set: { value: next[key], updatedAt: new Date() },
+            });
+        }
+      });
+      this.current = next;
+      return next;
     });
-    this.current = next;
-    return next;
   }
 }

@@ -60,9 +60,18 @@ export class ProviderGateway extends MastraModelGateway {
     return '';
   }
 
-  resolveAuth(request: GatewayAuthRequest): GatewayAuthResult | undefined {
+  /**
+   * Always a non-empty, revision-scoped placeholder, never the real key. An empty key makes Mastra fall
+   * back to its legacy path, which caches the model per gateway for the life of the process: URL and
+   * header edits are ignored and disabled or deleted providers keep working. The placeholder is never
+   * sent upstream (buildChatModel uses the registry's key) and changes with every provider edit.
+   */
+  resolveAuth(request: GatewayAuthRequest): GatewayAuthResult {
     const provider = this.registry.get(request.providerId);
-    return provider ? { apiKey: provider.apiKey ?? '', source: 'gateway' } : undefined;
+    const revision = provider
+      ? `${provider.id}:${provider.updatedAt.getTime()}`
+      : `missing:${request.providerId}`;
+    return { apiKey: `sa-gateway:${revision}`, source: 'gateway' };
   }
 
   resolveLanguageModel(args: { modelId: string; providerId: string }): GatewayLanguageModel {
@@ -75,6 +84,12 @@ export class ProviderGateway extends MastraModelGateway {
     const provider = this.registry.get(args.providerId);
     if (!provider) throw new Error(`Unknown model provider "${args.providerId}"`);
     if (!provider.enabled) throw new Error(`Model provider "${args.providerId}" is disabled`);
+    if (!provider.secretsReadable) {
+      throw new Error(
+        `The stored key for provider "${args.providerId}" can't be decrypted (did SUPERAGENT_ENCRYPTION_KEY change?). ` +
+          'Set it again with PATCH /v1/providers/:id.',
+      );
+    }
     return buildChatModel(provider, args.modelId);
   }
 }

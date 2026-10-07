@@ -139,12 +139,145 @@ describe('model providers', () => {
     const res = await send('POST', `/v1/providers/${created.id}/test`, { model: 'any' });
     const text = await res.text();
     expect(res.status).toBe(200);
-    expect((JSON.parse(text) as ProviderTestResult).ok).toBe(false);
+    const result = JSON.parse(text) as ProviderTestResult;
+    expect(result.ok).toBe(false);
+    // The real cause, not "replied with nothing", and no minutes spent on checks that can't pass.
+    expect(result.checks.map((c) => [c.name, c.error?.split(':')[0]])).toEqual([
+      ['chat', 'could not connect to 127.0.0.1'],
+      ['stream', 'skipped'],
+      ['tools', 'skipped'],
+    ]);
     expect(text).not.toContain('sk-leak-check-3');
 
     const discovery = await send('POST', `/v1/providers/${created.id}/refresh-models`);
     expect(discovery.status).toBe(502);
     expect(await discovery.text()).not.toContain('sk-leak-check-3');
+  });
+
+  describe('edge cases from review', () => {
+    it('follows URL edits and disabling for a provider without a key', async () => {
+      const other = await startFakeOpenAI(['fake-chat']);
+      try {
+        const keyless = (await (
+          await send('POST', '/v1/providers', { slug: 'keyless', name: 'Keyless', baseUrl: fake.url })
+        ).json()) as Provider;
+        const callsTo = (server: FakeOpenAI, from: number) =>
+          server.requests.slice(from).filter((r) => r.path === '/chat/completions').length;
+
+        let markA = fake.requests.length;
+        await send('POST', `/v1/providers/${keyless.id}/test`, { model: 'fake-chat' });
+        expect(callsTo(fake, markA)).toBeGreaterThan(0);
+
+        await send('PATCH', `/v1/providers/${keyless.id}`, { baseUrl: other.url });
+        markA = fake.requests.length;
+        const markB = other.requests.length;
+        await send('POST', `/v1/providers/${keyless.id}/test`, { model: 'fake-chat' });
+        expect(callsTo(fake, markA)).toBe(0);
+        expect(callsTo(other, markB)).toBeGreaterThan(0);
+
+        await send('PATCH', `/v1/providers/${keyless.id}`, { enabled: false });
+        const disabled = (await (
+          await send('POST', `/v1/providers/${keyless.id}/test`, { model: 'fake-chat' })
+        ).json()) as ProviderTestResult;
+        expect(disabled.checks[0]?.ok).toBe(false);
+      } finally {
+        await other.close();
+      }
+    });
+
+    it('rotates header-based credentials on the next call', async () => {
+      const header = (await (
+        await send('POST', '/v1/providers', {
+          slug: 'header-auth',
+          name: 'Header auth',
+          baseUrl: fake.url,
+          headers: { 'x-api-key': 'old-secret' },
+        })
+      ).json()) as Provider;
+      await send('POST', `/v1/providers/${header.id}/test`, { model: 'fake-chat' });
+      await send('PATCH', `/v1/providers/${header.id}`, { headers: { 'x-api-key': 'new-secret' } });
+      const mark = fake.requests.length;
+      await send('POST', `/v1/providers/${header.id}/test`, { model: 'fake-chat' });
+      const sent = fake.requests.slice(mark).filter((r) => r.path === '/chat/completions');
+      expect(sent.length).toBeGreaterThan(0);
+      expect(sent.every((r) => r.headers['x-api-key'] === 'new-secret')).toBe(true);
+    });
+
+    it('keeps starting when a provider secret cannot be decrypted', async () => {
+      await system.db.insert(providers).values({
+        id: '0192f1a0-1111-7000-8000-000000000001',
+        slug: 'broken',
+        name: 'Broken',
+        baseUrl: fake.url,
+        apiKeyEnc: 'v1.AAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAA.AAAA',
+      });
+      await expect(system.providers.registry.reload()).resolves.toBeUndefined();
+      const broken = (await (
+        await send('GET', '/v1/providers/0192f1a0-1111-7000-8000-000000000001')
+      ).json()) as Provider;
+      expect(broken.secretsReadable).toBe(false);
+
+      const fixed = (await (
+        await send('PATCH', '/v1/providers/0192f1a0-1111-7000-8000-000000000001', { apiKey: 'sk-new-key-4' })
+      ).json()) as Provider;
+      expect(fixed.secretsReadable).toBe(true);
+    });
+
+    it('rejects keys and header values with line breaks', async () => {
+      const key = await send('POST', '/v1/providers', {
+        slug: 'bad-key',
+        name: 'Bad key',
+        baseUrl: fake.url,
+        apiKey: 'sk-abc\nX-Injected: 1',
+      });
+      expect(key.status).toBe(400);
+      const headerValue = await send('POST', '/v1/providers', {
+        slug: 'bad-header',
+        name: 'Bad header',
+        baseUrl: fake.url,
+        headers: { 'x-token': 'a\r\nb' },
+      });
+      expect(headerValue.status).toBe(400);
+    });
+
+    it('keeps known models when /models returns a login page or an empty list', async () => {
+      const before = (await (await send('GET', `/v1/providers/${providerId}/models`)).json()) as {
+        items: ProviderModel[];
+      };
+      expect(before.items.length).toBeGreaterThan(0);
+      for (const mode of ['html', 'empty'] as const) {
+        fake.modelsMode = mode;
+        const res = await send('POST', `/v1/providers/${providerId}/refresh-models`);
+        expect(res.status, mode).toBe(502);
+      }
+      fake.modelsMode = 'list';
+      const after = (await (await send('GET', `/v1/providers/${providerId}/models`)).json()) as {
+        items: ProviderModel[];
+      };
+      expect(after.items).toEqual(before.items);
+    });
+
+    it('does not leave the test tool registered globally', () => {
+      expect(Object.keys(system.mastra.listTools() ?? {})).not.toContain('get_magic_number');
+    });
+
+    it('stays consistent under parallel writes', async () => {
+      const ids = Array.from({ length: 6 }, (_, i) => `parallel-${i}`);
+      await Promise.all(
+        ids.map((modelId) => send('POST', `/v1/providers/${providerId}/models`, { modelId })),
+      );
+      const { items } = (await (await send('GET', `/v1/providers/${providerId}/models`)).json()) as {
+        items: ProviderModel[];
+      };
+      expect(items.map((m) => m.modelId)).toEqual(expect.arrayContaining(ids));
+    });
+
+    it('checks the model kind for each role', async () => {
+      const wrongKind = await send('PATCH', '/v1/settings', {
+        models: { embedding: { provider: 'fake', model: 'fake-chat' } },
+      });
+      expect(await wrongKind.json()).toMatchObject({ status: 400, code: 'wrong_model_kind' });
+    });
   });
 
   describe('settings and the scratch agent', () => {
