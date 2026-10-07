@@ -1,0 +1,82 @@
+# M3 walkthrough: tasks, the board, live events, and the chief assigning work.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Prerequisite: the research department with a lead and a web specialist (see m2-org.http).
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+@departmentId = paste-the-research-department-id
+
+### Watch live events in a terminal while you go (Ctrl+C to stop). Add -H "Last-Event-ID: <seq>" to replay.
+# curl -N -H "Authorization: Bearer <token>" http://127.0.0.1:4111/v1/events
+
+### Give the research department a task. It goes straight to the lead (dispatch defaults to true).
+# @name task
+POST {{baseUrl}}/v1/tasks
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "departmentId": "{{departmentId}}",
+  "title": "What is Mastra?",
+  "brief": "Find out what the Mastra framework is. Two sentences, with one source URL.",
+  "priority": "normal"
+}
+
+### Follow it: phase, checklist, progress and, once reported, the result
+GET {{baseUrl}}/v1/tasks/{{task.response.body.id}}
+Authorization: Bearer {{token}}
+
+### Its history: created, dispatched, progress, reported, chief_notified...
+GET {{baseUrl}}/v1/tasks/{{task.response.body.id}}/events
+Authorization: Bearer {{token}}
+
+### Deliverables the lead attached
+GET {{baseUrl}}/v1/tasks/{{task.response.body.id}}/artifacts
+Authorization: Bearer {{token}}
+
+### The board: open tasks and this week's closed ones, by phase
+GET {{baseUrl}}/v1/board?departmentId={{departmentId}}
+Authorization: Bearer {{token}}
+
+### Ask for changes: a task in review goes back to the lead with your message
+POST {{baseUrl}}/v1/tasks/{{task.response.body.id}}/messages
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "message": "Add a second source, please.", "mode": "steer" }
+
+### Accept it once it's back in review
+PATCH {{baseUrl}}/v1/tasks/{{task.response.body.id}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "phase": "done" }
+
+### Park a task without sending it, then send it later with PATCH { "phase": "queued" }
+# @name parked
+POST {{baseUrl}}/v1/tasks
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "departmentId": "{{departmentId}}", "title": "Compare agent frameworks", "brief": "Mastra versus two others.", "dispatch": false }
+
+### Cancel it (stops the lead if it is working on it)
+POST {{baseUrl}}/v1/tasks/{{parked.response.body.id}}/cancel
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "reason": "Not needed after all" }
+
+### Or let the chief of staff assign the work. The conversation lives on the chief:main thread.
+POST {{baseUrl}}/api/agents/chief/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "messages": [{ "role": "user", "content": "Have research find out who maintains Mastra, with a source." }],
+  "memory": { "thread": "chief:main", "resource": "owner" }
+}
+
+### The chief's thread, including the notifications it received when leads reported
+GET {{baseUrl}}/api/memory/threads/chief:main/messages?agentId=chief
+Authorization: Bearer {{token}}

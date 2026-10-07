@@ -25,16 +25,17 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 ## Rules
 - **Routes.** Mastra built-ins live under `/api`; our routes go under `/v1`, registered on the v1 router so `requireAuth` covers them. Native Hono routes are public otherwise. An integration test lists every `/v1` route and asserts 401 without a token.
 - **No EE code.** Never import `@mastra/*/ee` (paid license). `pnpm check:ee` enforces this.
-- **Experimental APIs.** Mastra's signals, notifications and `subscribeToThread` are called only from dedicated modules (the dispatch module from M3 on).
+- **Experimental APIs.** Mastra's signals, notifications and `subscribeToThread` are called only from dedicated modules (`DispatchService` for signals and notifications).
 - **Agent definitions are ours.** They live in our tables and compile into Mastra `Agent`s. Swap with `removeAgent` + `addAgent`; `addAgent` silently ignores duplicate ids.
 - **Models.** Agents reference models as `sa/<provider-slug>/<model-id>`, resolved by our gateway from the providers table, or through a settings role (`settings.modelRouterId(role)`). Set every internal model explicitly; observational memory defaults to a Google model.
 - **Secrets.** Provider keys and headers are sealed with `SecretBox` (AES-256-GCM, context-bound) using `SUPERAGENT_ENCRYPTION_KEY`. Never return or log them.
 - **Organization.** Departments and versioned agent definitions live in our tables (`OrgDirectory` keeps an in-memory view, `AgentRuntime` compiles them into Mastra agents). A lead's team is its department's specialists; specialists see only the delegation prompt.
 - **Tools.** Agents get tools from the code-defined `ToolCatalog`. Anything that fetches a URL for an agent must go through `await assertPublicUrl(url)` (no internal or private addresses; names are resolved and every address checked). A tool that fetches directly must also follow redirects manually and check each hop.
+- **Tasks.** Every task change goes through `TaskService`: one locked read-modify-write that appends its event, published after commit. Only `DispatchService` sends work to agents: new work starts a fresh run on the task's thread (`agent.stream`), and signals only reach a lead mid-run.
 - **Config writes.** Settings updates, provider deletion and every organization write (departments and agents) run under `settings.lock`.
 - **Errors.** `/v1` errors are problem+json: throw `ApiError`, or return `problem()`.
 - **Schemas.** zod 4 everywhere. Request and response schemas go in `packages/shared`.
-- **Tests.** Agent flows use the scripted mock model (`apps/api/test/support/mock-model.ts`). Database tests use `startTestSystem()` from `apps/api/test/int/helpers.ts` (Testcontainers, one database per file).
+- **Tests.** Single-agent checks use the scripted mock model (`apps/api/test/support/mock-model.ts`). Multi-agent flows run against the fake OpenAI server (`apps/api/test/support/fake-openai.ts`), steered by directives in the user message (`[assign]`, `[artifact]`, `[no-report]`, `[slow]`, `[linger]`). Database tests use `startTestSystem()` from `apps/api/test/int/helpers.ts` (Testcontainers, one database per file).
 
 ## Public repository
 - Never commit `.env`, keys, or the owner's provider endpoints. `.env.example` keeps placeholders.
