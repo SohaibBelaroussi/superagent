@@ -157,16 +157,16 @@ superagent/
 
 ### Dispatch: chief and departments
 - **`create_task`** (a chief tool, also `POST /v1/tasks`):
-  1. Insert the task, using the tool call id as idempotency key.
+  1. Insert the task, keyed by the run and tool call ids for idempotency.
   2. Create thread `task:<id>` under `dept:<slug>`, with metadata.
-  3. Call `lead.sendMessage(brief, { resourceId, threadId, ifIdle: { behavior: 'wake' }, ifActive: { behavior: 'persist' } })`.
+  3. Start the lead on that thread: a fresh run (`agent.stream`), or after its current turn ends. A supervisor watches the thread until the lead reports (D27).
   4. Return the task number right away.
 - **Ledger tools** work out the current task from the thread id, so they also work for runs started by a schedule.
 - **`report_to_chief`** (a lead tool):
   1. Write a ledger event and move the phase.
   2. Call `chief.sendNotificationSignal({ source: 'dept:<slug>', kind, summary, priority, payload: { taskId } }, { resourceId: 'owner', threadId: 'chief:main' })`.
 
-  Urgent reports wake the chief. Others wait until it's idle.
+  Any report wakes an idle chief. A busy one first gets a summary (Mastra's default delivery policy).
 - **Isolation.** Every signal call goes through `modules/dispatch`, because those APIs are `@experimental` in 1.74.
 
 ### Ledger and live updates

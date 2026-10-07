@@ -13,7 +13,7 @@ import type { System } from '../../src/bootstrap';
 import { taskEvents } from '../../src/db/schema';
 import { type FakeOpenAI, type RecordedRequest, startFakeOpenAI } from '../support/fake-openai';
 import { type FakeWeb, startFakeWeb } from '../support/fake-web';
-import { authHeader, jsonHeaders, startTestSystem } from './helpers';
+import { authHeader, jsonHeaders, startTestSystem, TEST_ADMIN_TOKEN } from './helpers';
 
 const WEB_TOKEN = 'crawl-token-for-tests-0123456789';
 
@@ -537,6 +537,10 @@ describe('tasks, board and dispatch', () => {
   it('streams task events live and replays what a client missed', async () => {
     const unauthenticated = await system.app.request('/v1/events');
     expect(unauthenticated.status).toBe(401);
+    // Browsers' EventSource can't set headers, so the token may come as ?apiKey=.
+    const viaQuery = await system.app.request(`/v1/events?apiKey=${TEST_ADMIN_TOKEN}`);
+    expect(viaQuery.status).toBe(200);
+    await viaQuery.body?.cancel();
 
     const history = await eventsOf(first.id);
     const from = history[2]?.seq ?? 0;
