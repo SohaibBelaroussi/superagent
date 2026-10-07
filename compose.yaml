@@ -71,6 +71,43 @@ services:
     networks: [storage]
     restart: unless-stopped
 
+  # The only Docker client (decision D10): one locked-down sandbox container per task. Docker's
+  # socket makes it root-equivalent, so it runs as a non-root user with no capabilities on a read-only
+  # root, on a network only the API joins.
+  runner:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: apps/runner/Dockerfile
+    image: superagent-runner:local
+    environment:
+      # Refuses to start without one (set RUNNER_TOKEN in .env); other services start regardless.
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+      RUNNER_WORKSPACES_VOLUME: superagent-workspaces
+      RUNNER_IMAGES: '{"dev":"superagent-sandbox-dev:1"}'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Docker Desktop's socket is root:root 0660; on a Linux host, set the docker group's id.
+    group_add: ["${DOCKER_SOCKET_GID:-0}"]
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [runner]
+    init: true
+    restart: unless-stopped
+
+  # The "dev" sandbox image (node, python, git). Built with the stack, never started here: the runner
+  # creates each task's sandbox from it.
+  sandbox-dev:
+    profiles: [app]
+    build:
+      context: infra/sandbox
+      dockerfile: dev.Dockerfile
+    image: superagent-sandbox-dev:1
+    scale: 0
+
   api:
     profiles: [app]
     build:
@@ -86,6 +123,7 @@ services:
       SEARXNG_URL: http://searxng:8080
       CRAWL4AI_URL: http://crawl4ai:11235
       S3_ENDPOINT: http://seaweedfs:8333
+      RUNNER_URL: http://runner:8080
     ports:
       - "127.0.0.1:${API_PORT:-4112}:4111"
     depends_on:
@@ -93,7 +131,9 @@ services:
         condition: service_healthy
       seaweedfs:
         condition: service_healthy
-    networks: [core, web, storage]
+      runner:
+        condition: service_healthy
+    networks: [core, web, storage, runner]
     init: true
     stop_grace_period: 20s
     restart: unless-stopped
@@ -106,6 +146,9 @@ networks:
   web: {}
   # Object storage and the API only.
   storage: {}
+  # The runner and the API only; no way out.
+  runner:
+    internal: true
 
 volumes:
   pgdata:

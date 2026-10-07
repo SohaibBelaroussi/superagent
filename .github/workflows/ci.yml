@@ -44,14 +44,20 @@ jobs:
             echo "STUDIO_TOKEN=sa_$(openssl rand -hex 32)"
             echo "S3_ACCESS_KEY=$(openssl rand -hex 12)"
             echo "S3_SECRET_KEY=$(openssl rand -hex 24)"
+            echo "RUNNER_TOKEN=$(openssl rand -hex 32)"
+            echo "DOCKER_SOCKET_GID=$(stat -c %g /var/run/docker.sock)"
             echo "LOG_LEVEL=info"
             echo "MASTRA_TELEMETRY_DISABLED=true"
             echo "API_PORT=4112"
           } > .env
 
-      - name: Build and start the packaged stack
-        # The API with its database and document storage: the web-tool services are exercised with fakes in tests.
-        run: docker compose --profile app up -d --build --wait --wait-timeout 180 postgres seaweedfs api
+      - name: Build the images
+        # The API, the runner and the sandbox image the runner starts sandboxes from.
+        run: docker compose --profile app build
+
+      - name: Start the packaged stack
+        # The API with its database, document storage and runner: the web-tool services are exercised with fakes in tests.
+        run: docker compose --profile app up -d --wait --wait-timeout 180 postgres seaweedfs runner api
 
       - name: End-to-end tests against the container
         run: pnpm test:e2e

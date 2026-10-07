@@ -16,6 +16,7 @@ import type { ProviderService } from '../modules/providers/service';
 import type { ScheduleService } from '../modules/schedules/service';
 import type { SettingsService } from '../modules/settings/service';
 import type { ToolCatalog } from '../modules/tools/catalog';
+import type { WorkspaceService } from '../modules/workspace/service';
 
 /** Hono environment shared by Mastra's adapter and our routes (requestContext, mastra, ...). */
 export type AppEnv = { Bindings: HonoBindings; Variables: HonoVariables };
@@ -39,4 +40,5 @@ export interface AppDeps {
   schedules: ScheduleService;
   attention: AttentionService;
   decisions: DecisionService;
+  workspaces: WorkspaceService;
 }

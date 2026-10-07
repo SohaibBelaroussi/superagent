@@ -39,6 +39,8 @@ import { ScheduleService } from './modules/schedules/service';
 import { createScheduleTools } from './modules/schedules/tools';
 import { SettingsService } from './modules/settings/service';
 import { ToolCatalog } from './modules/tools/catalog';
+import { RunnerClient } from './modules/workspace/runner-client';
+import { WorkspaceService } from './modules/workspace/service';
 
 export interface System {
   config: Config;
@@ -55,6 +57,7 @@ export interface System {
   memory: MemoryService;
   schedules: ScheduleService;
   attention: AttentionService;
+  workspaces: WorkspaceService;
   mastra: Mastra;
   app: Hono<AppEnv>;
   /** Drains Mastra and closes the database pool. Does not touch the HTTP server. */
@@ -140,6 +143,17 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     const memoryTools = createMemoryTools(memoryService, directory);
     const bus = new EventBus();
     const tasks = new TaskService(db, directory, bus);
+    // Sandboxes for agents granted files or shell (decision D33), when a runner is configured.
+    const workspaces = new WorkspaceService({
+      client:
+        config.RUNNER_URL && config.RUNNER_TOKEN
+          ? new RunnerClient(config.RUNNER_URL, config.RUNNER_TOKEN)
+          : undefined,
+      profile: config.SANDBOX_PROFILE,
+      tasks,
+      logger,
+    });
+    if (!workspaces.enabled) logger.warn('Sandboxes are off: set RUNNER_URL and RUNNER_TOKEN to enable them');
     const decisionLog = new DecisionLog(db);
     const dispatch = new DispatchService({
       mastra,
@@ -183,6 +197,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         ownerProfile: new OwnerProfileProcessor(memoryService, false),
         memoryService,
         leadTools: { ...createLeadTools(ledgerTools), ...memoryTools.lead, ...scheduleTools.lead },
+        workspaces,
       },
       logger,
     );
@@ -205,6 +220,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       settings,
       providers,
       storageEnabled: knowledge.enabled,
+      workspaces,
     });
     const decisions = new DecisionService(decisionLog, attention, dispatch, logger);
 
@@ -226,6 +242,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       schedules,
       attention,
       decisions,
+      workspaces,
     });
     return {
       config,
@@ -242,6 +259,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       memory: memoryService,
       schedules,
       attention,
+      workspaces,
       mastra,
       app,
       async close(drainTimeoutMs = 5_000) {

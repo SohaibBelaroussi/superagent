@@ -10,6 +10,7 @@ import type { MemoryService } from '../memory/service';
 import { routerId } from '../providers/model-ref';
 import type { SettingsService } from '../settings/service';
 import type { ToolCatalog } from '../tools/catalog';
+import { shareTaskOnDelegation, type WorkspaceService } from '../workspace/service';
 import type { AgentEntry, OrgDirectory } from './directory';
 import { leadInstructions, specialistInstructions } from './instructions';
 
@@ -28,11 +29,14 @@ export interface CompileDeps {
   memoryService: MemoryService;
   /** Ledger tools every lead gets (update_task, report_to_chief, ...). */
   leadTools: ToolsInput;
+  /** Task workspaces for agents granted files or shell. */
+  workspaces: WorkspaceService;
 }
 
 /** Turns one definition (its active version) into a Mastra agent. */
 export function compileAgent(entry: AgentEntry, deps: CompileDeps): Agent {
-  const { directory, settings, catalog, mastra, memory, leadTools, ownerProfile, memoryService } = deps;
+  const { directory, settings, catalog, mastra, memory, leadTools, ownerProfile, memoryService, workspaces } =
+    deps;
   const model = entry.current.model;
   return new Agent({
     id: entry.key,
@@ -52,6 +56,8 @@ export function compileAgent(entry: AgentEntry, deps: CompileDeps): Agent {
         ? { ...catalog.build(entry.current.tools), ...leadTools }
         : catalog.build(entry.current.tools),
     memory: entry.role === 'lead' ? memory.lead : memory.specialist,
+    // Inside a task only: the task's folder and sandbox (decision D33).
+    workspace: workspaces.workspaceFor(entry.key, entry.current.tools),
     inputProcessors:
       entry.role === 'lead'
         ? [ownerProfile, new DepartmentNotesProcessor(memoryService, entry.departmentId)]
@@ -71,8 +77,12 @@ export function compileAgent(entry: AgentEntry, deps: CompileDeps): Agent {
         : undefined,
     defaultOptions: {
       maxSteps: MAX_STEPS[entry.role],
-      // Specialists get only the lead's delegation prompt, not the lead's system prompt and history.
-      delegation: { messageFilter: () => [] },
+      // Specialists get only the lead's delegation prompt, not the lead's system prompt and history,
+      // and the lead's task, so they work in its sandbox.
+      delegation: {
+        messageFilter: () => [],
+        ...(entry.role === 'lead' ? { onDelegationStart: shareTaskOnDelegation } : {}),
+      },
     },
   });
 }

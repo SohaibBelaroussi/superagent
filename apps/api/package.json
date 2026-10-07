@@ -39,6 +39,7 @@
   },
   "devDependencies": {
     "@mastra/libsql": "1.25.0",
+    "@superagent/runner": "workspace:*",
     "@superagent/shared": "workspace:*",
     "@testcontainers/postgresql": "12.2.0",
     "@types/node": "24.19.1",

@@ -32,7 +32,8 @@ type ToolDef = { function: { name: string } };
  * without reporting, "[slow]" delays every answer in the conversation, "[linger]" only the final (text)
  * answers and "[slow-report]" only the answer that calls report_to_chief. "[fixed-ids]" reuses one tool-call id.
  * "[remember]" makes the chief update the owner profile and a lead save a department note; "[schedule]"
- * makes the chief set up a weekday schedule.
+ * makes the chief set up a weekday schedule. "[code]" makes a lead pass the directive on when it
+ * delegates, and a coder write hello.js in its workspace and run it.
  * Observational memory's observer and reflector get valid observations back.
  */
 const PRIORITY: Array<(tool: string) => boolean> = [
@@ -41,6 +42,8 @@ const PRIORITY: Array<(tool: string) => boolean> = [
   (t) => t === 'create_task',
   (t) => t === 'update_task',
   (t) => t.startsWith('agent-'),
+  (t) => t === CODE.write,
+  (t) => t === CODE.run,
   (t) => t === 'web_search',
   (t) => t === 'knowledge_search',
   (t) => t === 'add_artifact',
@@ -60,6 +63,15 @@ const NEVER_AUTOMATIC = new Set([
 ]);
 const SLOW_MS = 800;
 
+/** What a "[code]" coder does in its workspace. */
+export const CODE = {
+  write: 'mastra_workspace_write_file',
+  run: 'mastra_workspace_execute_command',
+  path: 'hello.js',
+  content: 'console.log(6 * 7)\n',
+  command: 'node hello.js',
+};
+
 function pickTool(tools: string[], messages: ChatMessage[]): string | undefined {
   const turnStart = messages.findLastIndex((m) => m.role === 'user');
   const called = new Set(
@@ -77,6 +89,10 @@ function pickTool(tools: string[], messages: ChatMessage[]): string | undefined 
     !(t === 'add_artifact' && !directives.includes('[artifact]')) &&
     !((t === 'update_owner_profile' || t === 'save_department_note') && !directives.includes('[remember]')) &&
     !(t === 'create_schedule' && !directives.includes('[schedule]')) &&
+    !(
+      t.startsWith('mastra_workspace_') &&
+      !(directives.includes('[code]') && (t === CODE.write || t === CODE.run))
+    ) &&
     !(t === 'report_to_chief' && directives.includes('[no-report]'));
   for (const matches of PRIORITY) {
     const tool = tools.find((t) => matches(t) && allowed(t));
@@ -91,9 +107,17 @@ export const REMEMBERED = {
   note: 'Always cite two sources.',
 };
 
-function argsFor(tool: string): Record<string, unknown> {
-  if (tool.startsWith('agent-')) return { prompt: 'Find out what Mastra is and return two sources.' };
+function argsFor(tool: string, directives: string): Record<string, unknown> {
+  if (tool.startsWith('agent-')) {
+    return directives.includes('[code]')
+      ? { prompt: 'Write hello.js that prints 6 * 7, run it, and tell me the output. [code]' }
+      : { prompt: 'Find out what Mastra is and return two sources.' };
+  }
   switch (tool) {
+    case CODE.write:
+      return { path: CODE.path, content: CODE.content };
+    case CODE.run:
+      return { command: CODE.command };
     case 'update_owner_profile':
       return { preferences: [REMEMBERED.preference] };
     case 'create_schedule':
@@ -206,7 +230,8 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
         await new Promise((r) => setTimeout(r, SLOW_MS * 2));
       }
       if (tool) {
-        const args = argsFor(tool);
+        const turn = messages.findLastIndex((m) => m.role === 'user');
+        const args = argsFor(tool, JSON.stringify(messages[turn]?.content ?? ''));
         delta = {
           role: 'assistant',
           content: null,

@@ -539,17 +539,37 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - A specialist's gated tool suspends the lead's run too; `lead.listSuspendedRuns` lists it with the specialist's tool name and arguments, and approving the lead's run carries both on. [spike]
 - Approving or declining needs the agent registered (the snapshot names it). We refuse to archive a lead with calls waiting (409 `approvals_pending`). [spike]
 - A thrown tool error goes back to the model as the tool's result; the run carries on. [spike]
-- **Declining resumes the turn**, so after a restart (or the 30-minute sweep) a declined call's lead keeps working. Pass `abortSignal` to `declineToolCall` and abort it as soon as the call returns: the decline is kept and no model call follows. [spike]
+- **Declining resumes the turn**, so after a restart (or the 30-minute sweep) a declined call's lead keeps working. Pass `declineToolCall` an `abortSignal` that is already aborted: the decline is still recorded in the thread (`output-denied`) and the run's snapshot dropped, and no model call follows. Aborting right after the call returns usually works too, but under load one model call slips through. [spike]
 - A tool called directly (`tool.execute(input, context)`) returns `{ error: true, message }` for input that fails its schema instead of throwing; the model gets the same. [spike]
 - Mastra's own `/api/agents/:id/approve-tool-call` and `decline-tool-call` routes (and Studio) bypass our decisions log; a task resumed that way still reports through the ledger. [src]
 
-## 18. From earlier research, needed in later milestones
+## 18. Learned while building M6 (2026-10-07)
 
-- **DockerSandbox 0.9.2:**
-  - One long-lived container per sandbox, reused by label.
-  - `stop()` doesn't delete it, so we need a reaper.
-  - No `user`, `runtime` or `shmSize` options.
-  - Volume `subpath` mounts need Engine 26+; this PC has 28.5.
+**Workspaces** (`@mastra/core/workspace`):
+- `new Workspace({ filesystem, sandbox, sandboxCacheKey, instructions: { dynamicSandbox: 'resolve' }, tools })`: `filesystem` and `sandbox` may be functions of `{ requestContext }`, resolved per request. Mastra never starts or stops a resolver's sandbox; the caller owns its lifecycle. `setToolsConfig()` changes approvals in place. [spike]
+- An agent's `workspace` option may be a function of `{ requestContext }` returning a Workspace or `undefined`: no workspace, no tools. Never set `new Mastra({ workspace })`: every agent without its own would inherit it. [spike]
+- Tool names: `mastra_workspace_read_file`, `write_file`, `edit_file`, `list_files`, `delete`, `file_stat`, `mkdir`, `grep` (filesystem), and `execute_command`, `get_process_output`, `kill_process` (sandbox). `execute_command` passes the whole shell line to `sandbox.executeCommand(command, [], { timeout, cwd, abortSignal, onStdout, onStderr })`; with `background: true` it calls `sandbox.processes.spawn`. Errors reach the model as text. [spike]
+- Approvals: `tools: { [WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND]: { requireApproval: true } }` suspends the run like any gated tool (D32 covers it). [src]
+- **Delegation:** a lead's `defaultOptions.delegation.onDelegationStart(ctx)` sees the lead's thread (`task:<id>`) and the specialist's new RequestContext, which copies the lead's keys except memory and thread ids. Setting a key there reaches the specialist's workspace resolvers. The specialist's own thread is `task:<id>-<uuid>`, and the subagent tool lets the model pass `threadId`, so never derive the task from it. [spike]
+- **`LocalFilesystem` is not safe over a folder a sandbox can write:** writes and `mkdir` through a planted directory symlink land outside its root (`assertPathContained` skips the realpath check for paths that don't exist yet), and a symlink-flip race leaked outside files. We run every file operation inside the task's container instead. [spike]
+- `MastraSandbox`: override `start()` (method syntax) returning `{ outcome: 'created' | 'connected' }`; `ensureRunning()` caches `running`, so commands must cope with a sandbox the runner reaped (our runner restarts it on any command). Give it `processes` (a `SandboxProcessManager`); its `get(pid)` may look beyond its own map, which is how background processes survive an API restart. `ProcessHandle`'s constructor wraps `wait()`: implement `wait()`, `kill()`, `sendStdin()` and feed output with `emitStdout`/`emitStderr`. [src]
+- Node's `fetch` gives up on response headers after 300 s, so a foreground command over HTTP stays under it; longer work goes to the background. [src]
+
+**Docker, as the runner uses it** (Engine 28.5, API 1.51; dockerode 5.0.1) [spike]:
+- A volume `Subpath` mount shows only that folder (`..` and `find /` see nothing else). The subpath must exist, must not be a symlink, and needs `NoCopy: true`, or Docker copies the image's folder in and hands it to root.
+- `NetworkMode: 'none'` leaves only loopback: no DNS, no host, no Postgres. Sandboxes on a shared `internal` network would still reach each other unless inter-container traffic is off.
+- Exec with stdin: write, then `end()` half-closes it; the stream can end before the process, so poll `exec.inspect()` until `Running` is false for the exit code.
+- `setsid --wait sh -c …` makes the command a process-group leader without detaching it; `kill -TERM -<pgid>` (dash rejects `kill -- -<pgid>`) stops it with its children.
+- A command started with `setsid … &` outlives the exec that started it (`Init: true` reaps it), so background output goes to files in the container.
+- Inside a container on Docker Desktop the socket is `root:root 0660`: a non-root runner needs `group_add: ["0"]`; on a Linux host, the docker group's id.
+- A process-group kill is itself a `docker exec`: once a sandbox's processes take every pid slot, no kill (or any exec) gets in. Escalate to `container.kill()`, and give every exec a deadline. [spike]
+- Reading a FIFO blocks forever (`head` waits for a writer): file operations accept regular files only and run under `timeout -s KILL`. [spike]
+- `HostConfig.Ulimits: [{ Name: 'fsize', ... }]` caps the size of any file a sandbox writes (bytes). Docker's local volumes have no size limit, so free space is checked before work; on a server, give the workspaces volume its own disk. [spike]
+- A container whose `start()` fails (say, a volume subpath that doesn't exist) stays behind as `Created`: remove it in the failure path. [spike]
+- `@mastra/docker` (0.9.3, Apache-2.0) is a reference, not a dependency: it would make the API a Docker client and pulls any image. Its setsid/pgid kill and label-based reattach are copied.
+
+## 19. From earlier research, needed in later milestones
+
 - **Browser:**
   - `cdpUrl` forces shared scope. A per-task browser needs a custom thread manager; FirecrawlBrowser's source is the template.
   - **The screencast WebSocket `/browser/:agentId/stream` appears to be registered before auth** in deployer 1.74. Check this under our adapter in M7 and gate it ourselves.

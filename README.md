@@ -10,7 +10,7 @@ A self-hosted personal assistant organized like a company, built on [Mastra](htt
 
 Everything runs behind one HTTP API and ships as Docker images. Web and mobile clients come later.
 
-> **Status:** early development. M0 (foundation), M1 (model providers), M2 (departments and agents), M3 (tasks, board and dispatch), M4 (memory and knowledge) and M5 (schedules and attention) are done. See the [plan](docs/api-plan.md) for M6–M9.
+> **Status:** early development. M0 (foundation), M1 (model providers), M2 (departments and agents), M3 (tasks, board and dispatch), M4 (memory and knowledge), M5 (schedules and attention) and M6 (sandboxes) are done. See the [plan](docs/api-plan.md) for M7–M9.
 
 ## Design
 
@@ -51,6 +51,8 @@ To run the packaged image instead, use `pnpm stack:up`. The container listens on
 
 The web tools (search and page reading) use two self-hosted services from `compose.yaml`: SearXNG and Crawl4AI. Start them with `docker compose up -d searxng crawl4ai` after setting `CRAWL4AI_API_TOKEN` in `.env`. Document uploads are stored in SeaweedFS: `docker compose up -d seaweedfs`.
 
+Agents granted `files` or `shell` work in a sandbox container per task, run by the runner (the only service that talks to Docker). In dev, build the sandbox image once with `docker compose --profile app build sandbox-dev`, set `RUNNER_TOKEN` and `RUNNER_URL` in `.env`, and start the runner next to the API with `pnpm dev:runner`. The packaged stack runs it for you.
+
 For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS Code (REST Client) or a JetBrains IDE.
 
 ## API layout
@@ -59,7 +61,7 @@ For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS 
 |---|---|
 | `/health`, `/ready` | Liveness and readiness. Public |
 | `/api/*` | Mastra's built-in routes: agents, threads, memory, schedules. Token required |
-| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your profile, department notes and knowledge documents. Token required |
+| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your profile, department notes, knowledge documents, schedules, the attention inbox, task files and sandboxes. Token required |
 
 ## Development
 

@@ -15,6 +15,7 @@ import { registerScheduleRoutes } from './schedules';
 import { registerSettingsRoutes } from './settings';
 import { registerTaskRoutes } from './tasks';
 import { registerTokenRoutes } from './tokens';
+import { registerWorkspaceRoutes } from './workspace';
 
 export const V1_PREFIX = '/v1';
 
@@ -45,6 +46,7 @@ export function createV1Router(deps: AppDeps): OpenAPIHono<AppEnv> {
   registerMemoryRoutes(v1, deps);
   registerScheduleRoutes(v1, deps);
   registerAttentionRoutes(v1, deps);
+  registerWorkspaceRoutes(v1, deps);
 
   v1.openAPIRegistry.registerComponent('securitySchemes', 'bearer', { type: 'http', scheme: 'bearer' });
   v1.doc31('/openapi.json', {

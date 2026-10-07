@@ -17,9 +17,10 @@ export interface ToolContext {
 
 interface CatalogEntry {
   key: string;
-  pack: 'core' | 'web' | 'knowledge';
+  pack: 'core' | 'web' | 'knowledge' | 'workspace';
   description: string;
-  create(ctx: ToolContext, options: { requireApproval: boolean }): ToolsInput[string];
+  /** Absent for workspace grants: they give the agent Mastra's workspace tools instead (decision D33). */
+  create?(ctx: ToolContext, options: { requireApproval: boolean }): ToolsInput[string];
 }
 
 /** Every tool an agent definition can be granted. New tools ship in code; definitions reference keys. */
@@ -122,6 +123,18 @@ const ENTRIES: CatalogEntry[] = [
         },
       }),
   },
+  {
+    key: 'files',
+    pack: 'workspace',
+    description:
+      "Read, write, edit and list files in the task's sandbox folder. Approval, if required, applies to changes.",
+  },
+  {
+    key: 'shell',
+    pack: 'workspace',
+    description:
+      "Run commands (Node.js, Python 3, git) in the task's sandbox: a container with no network that sees only the task's folder.",
+  },
 ];
 
 export class ToolCatalog {
@@ -142,7 +155,8 @@ export class ToolCatalog {
     const tools: ToolsInput = {};
     for (const grant of grants) {
       const entry = this.byKey.get(grant.key);
-      if (entry) tools[grant.key] = entry.create(this.ctx, { requireApproval: grant.requireApproval });
+      if (entry?.create)
+        tools[grant.key] = entry.create(this.ctx, { requireApproval: grant.requireApproval });
     }
     return tools;
   }

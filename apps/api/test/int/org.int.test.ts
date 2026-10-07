@@ -61,6 +61,8 @@ describe('departments and agents', () => {
       'web/web_search',
       'web/fetch_page',
       'knowledge/knowledge_search',
+      'workspace/files',
+      'workspace/shell',
     ]);
   });
 

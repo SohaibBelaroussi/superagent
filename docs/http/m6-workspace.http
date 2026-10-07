@@ -1,0 +1,66 @@
+# M6 walkthrough: a coder with a sandbox, and the task's files.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Prerequisites: a default model (m1-providers.http), and the runner: `pnpm stack:up`, or in dev
+# `docker compose --profile app build sandbox-dev` once, then `pnpm dev:runner` next to `pnpm dev`.
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+@departmentId = paste-a-department-id
+@taskId = paste-a-task-id
+
+### A department of engineers: a lead...
+POST {{baseUrl}}/v1/agents
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "key": "eng-lead",
+  "name": "Engineering lead",
+  "role": "lead",
+  "departmentId": "{{departmentId}}",
+  "description": "Plans engineering work and reports results.",
+  "instructions": "Delegate coding to the coder, then report what it found."
+}
+
+### ...and a coder with a workspace: files to read and write, a shell to run commands.
+### Add "requireApproval": true to a grant to approve each change or command (GET /v1/attention).
+POST {{baseUrl}}/v1/agents
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "key": "coder",
+  "name": "Coder",
+  "role": "specialist",
+  "departmentId": "{{departmentId}}",
+  "description": "Writes programs in its workspace and runs them.",
+  "instructions": "Write the code to a file, run it, and return the exact output.",
+  "tools": [{ "key": "files" }, { "key": "shell" }]
+}
+
+### Some work: the coder gets the task's sandbox (no network; Node, Python and git inside)
+POST {{baseUrl}}/v1/tasks
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "departmentId": "{{departmentId}}",
+  "title": "First primes",
+  "brief": "Write primes.py that prints the first 10 prime numbers, run it, and report the output."
+}
+
+### What it wrote
+GET {{baseUrl}}/v1/tasks/{{taskId}}/files?depth=3
+Authorization: Bearer {{token}}
+
+### Download a file (slashes plain or encoded: src/main.py or src%2Fmain.py)
+GET {{baseUrl}}/v1/tasks/{{taskId}}/files/primes.py
+Authorization: Bearer {{token}}
+
+### Sandboxes: idle ones stop after 15 minutes, stopped ones go after 7 days; files stay
+GET {{baseUrl}}/v1/sandboxes
+Authorization: Bearer {{token}}
+
+### Remove one now (its next command starts a fresh one, with the same files)
+DELETE {{baseUrl}}/v1/sandboxes/{{taskId}}
+Authorization: Bearer {{token}}
