@@ -8,6 +8,9 @@ import { type ApiTokenRow, apiTokens } from '../db/schema';
 /** The single user of this server. Every valid token authenticates as the owner. */
 export const OWNER_ID = 'owner';
 
+/** tokenId reported for the bootstrap token from SUPERAGENT_ADMIN_TOKEN. Only it can manage tokens. */
+export const ADMIN_TOKEN_ID = 'admin';
+
 export interface AuthUser {
   id: typeof OWNER_ID;
   name: string;
@@ -32,8 +35,12 @@ export function tokenPrefix(token: string): string {
 
 interface CacheEntry {
   user: AuthUser | null;
+  verifiedAt: number;
   expiresAt: number;
 }
+
+/** During a database outage, tokens verified within this window keep working. */
+const STALE_GRACE_MS = 10 * 60_000;
 
 export interface TokenServiceOptions {
   logger?: IMastraLogger;
@@ -49,6 +56,8 @@ export class TokenService {
   private readonly lastTouched = new Map<string, number>();
   private readonly cacheTtlMs: number;
   private readonly negativeCacheTtlMs: number;
+  /** Bumped on every revocation so in-flight lookups know their result may be stale. */
+  private revocations = 0;
 
   constructor(
     private readonly db: Db,
@@ -65,7 +74,7 @@ export class TokenService {
     if (!token || token.length > 512) return null;
     const hash = hashToken(token);
     if (timingSafeEqual(Buffer.from(hash, 'hex'), this.adminHash)) {
-      return { id: OWNER_ID, name: 'Owner', tokenId: 'admin', tokenName: 'admin (env)' };
+      return { id: OWNER_ID, name: 'Owner', tokenId: ADMIN_TOKEN_ID, tokenName: 'admin (env)' };
     }
 
     const now = Date.now();
@@ -75,14 +84,34 @@ export class TokenService {
       return cached.user;
     }
 
-    const [row] = await this.db.select().from(apiTokens).where(eq(apiTokens.tokenHash, hash)).limit(1);
-    const user: AuthUser | null =
-      row && !row.revokedAt ? { id: OWNER_ID, name: 'Owner', tokenId: row.id, tokenName: row.name } : null;
+    let user: AuthUser | null;
+    try {
+      const generation = this.revocations;
+      user = await this.lookup(hash);
+      // A revocation that committed while this lookup ran may be missing from its result: look again
+      // instead of caching a token that was just revoked.
+      if (generation !== this.revocations) user = await this.lookup(hash);
+    } catch (error) {
+      // Database unavailable: keep recently verified tokens working instead of failing every request.
+      if (cached?.user && now - cached.verifiedAt < STALE_GRACE_MS) return cached.user;
+      throw error;
+    }
 
     if (this.cache.size > 1_000) this.cache.clear();
-    this.cache.set(hash, { user, expiresAt: now + (user ? this.cacheTtlMs : this.negativeCacheTtlMs) });
+    this.cache.set(hash, {
+      user,
+      verifiedAt: now,
+      expiresAt: now + (user ? this.cacheTtlMs : this.negativeCacheTtlMs),
+    });
     if (user) this.touch(user.tokenId, now);
     return user;
+  }
+
+  private async lookup(hash: string): Promise<AuthUser | null> {
+    const [row] = await this.db.select().from(apiTokens).where(eq(apiTokens.tokenHash, hash)).limit(1);
+    return row && !row.revokedAt
+      ? { id: OWNER_ID, name: 'Owner', tokenId: row.id, tokenName: row.name }
+      : null;
   }
 
   async create(name: string): Promise<{ token: string; record: ApiTokenRow }> {
@@ -107,6 +136,7 @@ export class TokenService {
       .where(and(eq(apiTokens.id, id), isNull(apiTokens.revokedAt)))
       .returning({ id: apiTokens.id });
     if (revoked.length > 0) {
+      this.revocations++;
       this.cache.clear();
       return true;
     }

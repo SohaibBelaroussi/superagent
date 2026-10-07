@@ -36,6 +36,9 @@ export interface BootstrapOptions {
 export async function bootstrap(config: Config, options: BootstrapOptions = {}): Promise<System> {
   const logger = options.logger ?? createLogger(config);
   const pool = createPool(config);
+  // pg emits 'error' when an idle client dies (e.g. Postgres restarts). Without a listener Node
+  // treats it as an uncaught exception and the whole API exits; the pool reconnects on its own.
+  pool.on('error', (error) => logger.error('Postgres connection error (idle client)', { error }));
   try {
     const db = createDb(pool);
     await runMigrations(db);

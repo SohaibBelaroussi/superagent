@@ -144,6 +144,60 @@ describe('foundation', () => {
       const res = await request('/v1/tokens/not-a-uuid', { method: 'DELETE', headers: authHeader() });
       expect(res.status).toBe(400);
     });
+
+    it('lets only the admin token manage tokens; a device token may revoke itself', async () => {
+      const create = async (name: string) => {
+        const res = await request('/v1/tokens', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ name }),
+        });
+        return (await res.json()) as CreatedToken;
+      };
+      const laptop = await create('laptop');
+      const phone = await create('phone');
+
+      const listAsDevice = await request('/v1/tokens', { headers: authHeader(laptop.token) });
+      expect(listAsDevice.status).toBe(403);
+      expect(await listAsDevice.json()).toMatchObject({ code: 'admin_token_required' });
+
+      const mintAsDevice = await request('/v1/tokens', {
+        method: 'POST',
+        headers: jsonHeaders(laptop.token),
+        body: JSON.stringify({ name: 'sneaky' }),
+      });
+      expect(mintAsDevice.status).toBe(403);
+
+      const revokeOther = await request(`/v1/tokens/${phone.record.id}`, {
+        method: 'DELETE',
+        headers: authHeader(laptop.token),
+      });
+      expect(revokeOther.status).toBe(403);
+      expect((await request('/v1/me', { headers: authHeader(phone.token) })).status).toBe(200);
+
+      const signOut = await request(`/v1/tokens/${laptop.record.id}`, {
+        method: 'DELETE',
+        headers: authHeader(laptop.token),
+      });
+      expect(signOut.status).toBe(204);
+      expect((await request('/v1/me', { headers: authHeader(laptop.token) })).status).toBe(401);
+    });
+  });
+
+  describe('limits and resilience', () => {
+    it('rejects oversized bodies with 413 before auth runs', async () => {
+      const body = 'x'.repeat(5 * 1024 * 1024);
+      const headers = { 'content-type': 'application/json', 'content-length': String(body.length) };
+      const unauthenticated = await request('/v1/tokens', { method: 'POST', headers, body });
+      expect(unauthenticated.status).toBe(413);
+      expect(unauthenticated.headers.get('content-type')).toContain('application/problem+json');
+      const toMastra = await request('/api/agents/echo/generate', { method: 'POST', headers, body });
+      expect(toMastra.status).toBe(413);
+    });
+
+    it('survives an idle Postgres client error instead of crashing', () => {
+      expect(() => system.pool.emit('error', new Error('terminating connection'))).not.toThrow();
+    });
   });
 
   describe('Mastra runtime', () => {

@@ -1,8 +1,8 @@
 import type { Mastra } from '@mastra/core/mastra';
 import { createAuthMiddleware } from '@mastra/hono';
 import type { MiddlewareHandler } from 'hono';
-import type { AuthUser } from '../auth/tokens';
-import { problem } from './problem';
+import { ADMIN_TOKEN_ID, type AuthUser } from '../auth/tokens';
+import { ApiError, problem } from './problem';
 import type { AppEnv } from './types';
 
 /**
@@ -29,11 +29,20 @@ export function requireAuth(
   };
 }
 
+type RequestContextCarrier = { get(key: 'requestContext'): AppEnv['Variables']['requestContext'] };
+
 /** The authenticated user, as set by the auth provider on Mastra's request context. */
-export function currentUser(c: {
-  get(key: 'requestContext'): AppEnv['Variables']['requestContext'];
-}): AuthUser {
+export function currentUser(c: RequestContextCarrier): AuthUser {
   const user = c.get('requestContext').get('mastra__user') as AuthUser | undefined;
   if (!user) throw new Error('currentUser() called on a route without requireAuth');
+  return user;
+}
+
+/** Restricts a route to the bootstrap admin token (403 otherwise). */
+export function requireAdminToken(c: RequestContextCarrier): AuthUser {
+  const user = currentUser(c);
+  if (user.tokenId !== ADMIN_TOKEN_ID) {
+    throw new ApiError(403, 'admin_token_required', 'This action requires the admin token');
+  }
   return user;
 }

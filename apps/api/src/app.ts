@@ -1,11 +1,14 @@
 import { MastraServer } from '@mastra/hono';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
-import { createErrorHandler, notFound } from './http/problem';
+import { createErrorHandler, notFound, problem } from './http/problem';
 import { requestLog } from './http/request-log';
 import type { AppDeps, AppEnv } from './http/types';
 import { createV1Router, V1_PREFIX } from './routes/v1';
+
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 /**
  * Route map:
@@ -21,6 +24,16 @@ export async function createApp(deps: AppDeps): Promise<Hono<AppEnv>> {
   if (deps.config.CORS_ORIGINS.length > 0) {
     app.use('*', cors({ origin: deps.config.CORS_ORIGINS, credentials: true, maxAge: 600 }));
   }
+
+  // Before MastraServer.init(): Mastra's context middleware parses every JSON body before auth,
+  // so without a global cap an unauthenticated client could make the server buffer huge payloads.
+  app.use(
+    '*',
+    bodyLimit({
+      maxSize: MAX_BODY_BYTES,
+      onError: (c) => problem(c, 413, { code: 'payload_too_large', detail: 'Request body exceeds 4 MiB' }),
+    }),
+  );
 
   app.get('/health', (c) => c.json({ status: 'ok' }));
   app.get('/ready', async (c) => {
@@ -38,7 +51,7 @@ export async function createApp(deps: AppDeps): Promise<Hono<AppEnv>> {
     mastra: deps.mastra,
     openapiPath: '/openapi.json',
     bodyLimitOptions: {
-      maxSize: 4 * 1024 * 1024,
+      maxSize: MAX_BODY_BYTES,
       onError: () => ({ error: 'Request body exceeds 4 MiB' }),
     },
   }).init();

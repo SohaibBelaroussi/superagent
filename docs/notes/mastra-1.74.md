@@ -374,6 +374,11 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 
 **Startup warning** `[mastra/auth] server.auth is configured without mapUserToResourceId`: expected and harmless with a single owner (decision D20).
 
+**From the M0 review:**
+- **`MastraServer.init()` registers a global context middleware that parses every JSON request body before auth** (`c.req.raw.clone().json()`). Without a global limit, an unauthenticated client can make the server buffer huge bodies. `app.ts` mounts Hono's `bodyLimit` (4 MiB) before `init()`.
+- **A `pg.Pool` passed to `PostgresStore({ pool })` gets no `'error'` listener** (Mastra only adds one to pools it creates). An idle client dying (e.g. Postgres restart) then crashes the process. `bootstrap()` attaches the listener.
+- **Mastra's `coreAuthMiddleware` turns exceptions from `authenticateToken` into 401.** `TokenService` therefore keeps recently verified tokens working through short database outages instead of returning 401 for every request.
+
 **Mastra's generate route:**
 - `POST /api/agents/:id/generate` accepts `{ messages: [{ role: 'user', content }] }` and returns JSON with `text`.
 - Thread ids containing colons (`task:<id>`, `dept:<slug>`) work.

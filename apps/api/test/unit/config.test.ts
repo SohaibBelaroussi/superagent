@@ -31,6 +31,12 @@ describe('loadConfig', () => {
     expect(run).toThrow(/DATABASE_URL[\s\S]*SUPERAGENT_ADMIN_TOKEN/);
   });
 
+  it('rejects connection strings that are not valid URLs', () => {
+    expect(() =>
+      loadConfig({ ...base, DATABASE_URL: 'postgres://superagent:ab/cd@postgres:5432/db' }),
+    ).toThrow(/percent-encode/);
+  });
+
   it('rejects unknown timezones', () => {
     expect(() => loadConfig({ ...base, DEFAULT_TIMEZONE: 'Mars/Olympus' })).toThrow(/IANA timezone/);
   });

@@ -1,11 +1,10 @@
+// Must stay the first import: loads .env before any library module evaluates.
+import './load-env';
 import type { Server } from 'node:http';
 import { serve } from '@hono/node-server';
-import { bootstrap } from './bootstrap';
+import { bootstrap, type System } from './bootstrap';
 import { ConfigError, loadConfig } from './config';
-import { loadDotEnv } from './env';
 import { APP_VERSION } from './version';
-
-loadDotEnv();
 
 let config: ReturnType<typeof loadConfig>;
 try {
@@ -18,10 +17,18 @@ try {
   throw error;
 }
 
-const system = await bootstrap(config);
+let system: System | undefined;
+let server: Server | undefined;
+let shuttingDown = false;
+
+// Registered before boot so a signal during startup (migrations, storage init) still exits cleanly.
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));
+
+system = await bootstrap(config);
 const { logger, mastra } = system;
 
-const server = serve({ fetch: system.app.fetch, hostname: config.HOST, port: config.PORT }, (info) => {
+server = serve({ fetch: system.app.fetch, hostname: config.HOST, port: config.PORT }, (info) => {
   logger.info(`superagent ${APP_VERSION} listening on http://${info.address}:${info.port}`);
 }) as Server;
 
@@ -29,28 +36,40 @@ const server = serve({ fetch: system.app.fetch, hostname: config.HOST, port: con
 await mastra.startWorkers();
 await mastra.restartAllActiveWorkflowRuns();
 
-let shuttingDown = false;
+/**
+ * Graceful shutdown, bounded by SHUTDOWN_TIMEOUT_MS (keep it below compose's stop_grace_period):
+ * 1. stop accepting connections and let in-flight requests finish (half the budget),
+ * 2. cut whatever is still open (SSE streams),
+ * 3. drain Mastra (runs, background tasks, workers) and close the database pool.
+ */
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  logger.info('Shutting down', { signal });
+  system?.logger.info('Shutting down', { signal });
   const forceExit = setTimeout(() => {
-    logger.error('Shutdown timed out, exiting');
+    system?.logger.error('Shutdown timed out, exiting');
     process.exit(1);
   }, config.SHUTDOWN_TIMEOUT_MS);
   forceExit.unref();
 
-  // Stop accepting connections; long-lived streams (SSE) are cut after a short grace period.
-  server.close();
-  setTimeout(() => server.closeAllConnections(), 2_000).unref();
   try {
-    await system.close(Math.min(5_000, config.SHUTDOWN_TIMEOUT_MS / 2));
+    if (server) await closeServer(server, Math.floor(config.SHUTDOWN_TIMEOUT_MS / 2));
+    if (system) await system.close(Math.floor(config.SHUTDOWN_TIMEOUT_MS / 4));
   } catch (error) {
-    logger.error('Error during shutdown', { error });
+    system?.logger.error('Error during shutdown', { error });
   }
   clearTimeout(forceExit);
   process.exit(0);
 }
 
-process.once('SIGTERM', () => void shutdown('SIGTERM'));
-process.once('SIGINT', () => void shutdown('SIGINT'));
+/** Resolves once every connection has closed; connections still open after `graceMs` are cut. */
+function closeServer(httpServer: Server, graceMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const cut = setTimeout(() => httpServer.closeAllConnections(), graceMs);
+    cut.unref();
+    httpServer.close(() => {
+      clearTimeout(cut);
+      resolve();
+    });
+  });
+}

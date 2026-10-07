@@ -17,7 +17,11 @@ const configSchema = z.object({
   HOST: z.string().min(1).default('127.0.0.1'),
   PORT: z.coerce.number().int().min(1).max(65535).default(4111),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
-  DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, 'must be a postgres:// connection string'),
+  DATABASE_URL: z.string().refine((url) => /^postgres(ql)?:\/\//.test(url) && URL.canParse(url), {
+    message:
+      'must be a valid postgres:// URL; percent-encode special characters in the password, ' +
+      'or use a password made of letters, digits, - and _',
+  }),
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
   SUPERAGENT_ADMIN_TOKEN: z.string().min(32, 'must be at least 32 characters'),
   STUDIO_TOKEN: z.string().min(16, 'must be at least 16 characters').optional(),
