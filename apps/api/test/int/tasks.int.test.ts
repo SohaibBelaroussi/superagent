@@ -10,6 +10,7 @@ import type {
 } from '@superagent/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { System } from '../../src/bootstrap';
+import { taskEvents } from '../../src/db/schema';
 import { type FakeOpenAI, type RecordedRequest, startFakeOpenAI } from '../support/fake-openai';
 import { type FakeWeb, startFakeWeb } from '../support/fake-web';
 import { authHeader, jsonHeaders, startTestSystem } from './helpers';
@@ -91,7 +92,10 @@ describe('tasks, board and dispatch', () => {
   /** Opens the SSE stream and reads it frame by frame. */
   async function openEvents(query = '', lastEventId?: number) {
     const res = await system.app.request(`/v1/events${query}`, {
-      headers: { ...authHeader(), ...(lastEventId ? { 'Last-Event-ID': String(lastEventId) } : {}) },
+      headers: {
+        ...authHeader(),
+        ...(lastEventId !== undefined ? { 'Last-Event-ID': String(lastEventId) } : {}),
+      },
     });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/event-stream');
@@ -398,6 +402,71 @@ describe('tasks, board and dispatch', () => {
       expect(await fresh.untilReady()).toEqual([]);
     } finally {
       await fresh.close();
+    }
+  });
+
+  it('streams concurrent changes in commit order, and replays from the very start', async () => {
+    const batch = await Promise.all(
+      [1, 2, 3, 4, 5].map((i) =>
+        createTask({ title: `Parallel ${i}`, brief: 'In parallel.', dispatch: false }),
+      ),
+    );
+    const ids = new Set(batch.map((t) => t.id));
+    const live = await openEvents(`?departmentId=${research.id}`);
+    try {
+      await live.untilReady();
+      await Promise.all(
+        batch.flatMap((t) =>
+          [1, 2, 3, 4].map((n) => send('PATCH', `/v1/tasks/${t.id}`, { title: `${t.title} v${n}` })),
+        ),
+      );
+      const seen: number[] = [];
+      while (seen.length < 20) {
+        const frame = await live.next();
+        const event = JSON.parse(frame.data ?? '{}') as TaskEvent;
+        if (frame.event === 'task' && ids.has(event.taskId)) seen.push(event.seq);
+      }
+      // Arrived in seq order, and nothing the log has was skipped.
+      expect(seen).toEqual([...seen].sort((a, b) => a - b));
+      const logged = (await Promise.all(batch.map((t) => eventsOf(t.id))))
+        .flat()
+        .filter((e) => e.type === 'updated')
+        .map((e) => e.seq)
+        .sort((a, b) => a - b);
+      expect(seen).toEqual(logged);
+    } finally {
+      await live.close();
+    }
+
+    // Seqs start at 1, so cursor 0 replays a task's whole history.
+    const target = batch[0]?.id ?? '';
+    const fromStart = await openEvents(`?taskId=${target}`, 0);
+    try {
+      const replayed = await fromStart.untilReady();
+      expect(replayed.map((f) => Number(f.id))).toEqual((await eventsOf(target)).map((e) => e.seq));
+    } finally {
+      await fromStart.close();
+    }
+  });
+
+  it('asks a client that missed too much to reload instead of replaying it all', async () => {
+    const task = await createTask({ title: 'Chatty', brief: 'Lots of events.', dispatch: false });
+    await system.db.insert(taskEvents).values(
+      Array.from({ length: 5100 }, (_, i) => ({
+        taskId: task.id,
+        type: 'note',
+        actor: 'test',
+        phase: 'inbox',
+        data: { i },
+      })),
+    );
+    const stream = await openEvents(`?taskId=${task.id}`, 0);
+    try {
+      const frames = await stream.untilReady();
+      expect(frames.filter((f) => f.event === 'task')).toHaveLength(5000);
+      expect(frames.at(-1)?.event).toBe('reset');
+    } finally {
+      await stream.close();
     }
   });
 

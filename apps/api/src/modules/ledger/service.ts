@@ -1,5 +1,5 @@
 import type { ChecklistItem, TaskEvent, TaskPhase, TaskPriority } from '@superagent/shared';
-import { and, asc, desc, eq, gt, gte, inArray, lt, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { Db } from '../../db/client';
 import {
@@ -30,6 +30,19 @@ type PendingEvent = { type: string; data: Record<string, unknown> };
 type Change = { patch: Partial<typeof tasks.$inferInsert>; events: PendingEvent[] } | null;
 
 const CLOSED_TASKS_ON_BOARD_MS = 7 * 24 * 60 * 60 * 1000;
+
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/**
+ * Event seqs come from a sequence at insert time, so two transactions could commit out of seq order and
+ * a live stream would skip the lower one for good. Holding this lock from the insert to the commit keeps
+ * commit order equal to seq order (task writes are short, so serializing their last step is cheap).
+ */
+async function insertEvents(tx: Tx, rows: Array<typeof taskEvents.$inferInsert>): Promise<TaskEventRow[]> {
+  if (rows.length === 0) return [];
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext('superagent.task_events'))`);
+  return tx.insert(taskEvents).values(rows).returning();
+}
 
 function toEvent(row: TaskEventRow, task: Pick<TaskRow, 'number' | 'departmentId'>): TaskEvent {
   return {
@@ -88,16 +101,15 @@ export class TaskService {
         })
         .returning();
       if (!task) throw new Error('Task insert returned no row');
-      const events = await tx
-        .insert(taskEvents)
-        .values({
+      const events = await insertEvents(tx, [
+        {
           taskId: id,
           type: 'created',
           actor,
           phase: task.phase,
           data: { title: task.title, source: task.source, priority: task.priority },
-        })
-        .returning();
+        },
+      ]);
       return { task, events };
     });
     for (const event of events) this.bus.publish(toEvent(event, task));
@@ -383,7 +395,7 @@ export class TaskService {
     change: (task: TaskRow) => Change,
     options: {
       bump?: boolean;
-      inTx?: (tx: Parameters<Parameters<Db['transaction']>[0]>[0]) => Promise<void>;
+      inTx?: (tx: Tx) => Promise<void>;
     } = {},
   ): Promise<TaskRow> {
     const { task, events } = await this.db.transaction(async (tx) => {
@@ -410,20 +422,16 @@ export class TaskService {
         task = updated;
       }
       await options.inTx?.(tx);
-      const events = result.events.length
-        ? await tx
-            .insert(taskEvents)
-            .values(
-              result.events.map((e) => ({
-                taskId: id,
-                type: e.type,
-                actor: actorLabel,
-                phase: task.phase,
-                data: e.data,
-              })),
-            )
-            .returning()
-        : [];
+      const events = await insertEvents(
+        tx,
+        result.events.map((e) => ({
+          taskId: id,
+          type: e.type,
+          actor: actorLabel,
+          phase: task.phase,
+          data: e.data,
+        })),
+      );
       return { task, events };
     });
     for (const event of events) this.bus.publish(toEvent(event, task));

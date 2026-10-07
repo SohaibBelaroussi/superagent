@@ -189,7 +189,10 @@ const getBoard = createRoute({
 });
 
 const HEARTBEAT_MS = 25_000;
-const REPLAY_LIMIT = 1000;
+const REPLAY_PAGE = 500;
+/** Past this many missed events a client is better off reloading the board (it gets a `reset` event). */
+const REPLAY_MAX = 5000;
+const SENT_MEMORY = 10_000;
 
 export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void {
   const { tasks, dispatch } = deps;
@@ -270,17 +273,21 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
   // Live task events (SSE). Reconnecting clients send Last-Event-ID (EventSource does this itself)
   // and get the gap replayed from the event log before live events resume.
   v1.get('/events', (c) => {
-    const lastEventId = Number(c.req.header('last-event-id') ?? c.req.query('lastEventId') ?? 0) || 0;
+    const cursor = (c.req.header('last-event-id') ?? c.req.query('lastEventId'))?.trim();
+    const lastEventId = cursor && /^\d+$/.test(cursor) ? Number(cursor) : undefined;
     const filter = { departmentId: c.req.query('departmentId'), taskId: c.req.query('taskId') };
     return streamSSE(c, async (stream) => {
-      let lastSent = lastEventId;
+      let lastSent = lastEventId ?? 0; // highest seq sent: where the replay continues from
+      const sent = new Set<number>(); // replayed and live events overlap; send each once
       let replaying = true;
       const buffered: TaskEvent[] = [];
       let queue = Promise.resolve();
       const send = (event: TaskEvent) => {
         queue = queue.then(async () => {
-          if (event.seq <= lastSent) return;
-          lastSent = event.seq;
+          if (sent.has(event.seq) || (lastEventId !== undefined && event.seq <= lastEventId)) return;
+          sent.add(event.seq);
+          if (sent.size > SENT_MEMORY) sent.delete(sent.values().next().value as number);
+          lastSent = Math.max(lastSent, event.seq);
           await stream.writeSSE({ id: String(event.seq), event: 'task', data: JSON.stringify(event) });
         });
         return queue;
@@ -299,11 +306,28 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
           resolve();
         }),
       );
-      if (lastEventId > 0) {
-        for (const event of await tasks.eventsSince(lastEventId, filter, REPLAY_LIMIT)) await send(event);
+      if (lastEventId !== undefined) {
+        let replayed = 0;
+        for (;;) {
+          const page = await tasks.eventsSince(lastSent, filter, REPLAY_PAGE);
+          for (const event of page) await send(event);
+          await queue;
+          replayed += page.length;
+          if (page.length < REPLAY_PAGE) break;
+          if (replayed >= REPLAY_MAX) {
+            await stream.writeSSE({
+              event: 'reset',
+              data: JSON.stringify({ reason: 'Too many missed events' }),
+            });
+            break;
+          }
+        }
+      }
+      // Flush what arrived during the replay before going live, so live events can't overtake it.
+      while (buffered.length > 0) {
+        for (const event of buffered.splice(0)) await send(event);
       }
       replaying = false;
-      for (const event of buffered) await send(event);
       await stream.writeSSE({ event: 'ready', data: JSON.stringify({ lastEventId: lastSent }) });
       await closed;
     });
@@ -316,7 +340,8 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
     summary: 'Live task events (Server-Sent Events)',
     description:
       'Streams `task` events (data: TaskEvent, id: seq) and a `ready` event once caught up. Send Last-Event-ID ' +
-      '(or ?lastEventId=) to replay what you missed. Filters: ?departmentId=, ?taskId=. Heartbeat comments every 25 s.',
+      '(or ?lastEventId=) to replay what you missed; after more than 5000 missed events you get a `reset` event ' +
+      'instead, so reload the board. Filters: ?departmentId=, ?taskId=. Heartbeat comments every 25 s.',
     responses: { 200: { description: 'text/event-stream' } },
   });
 }
