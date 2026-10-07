@@ -44,9 +44,9 @@ services:
     networks: [web]
     restart: unless-stopped
 
-  # The only way out for agents' browsers (decision D34): a forward proxy that reaches public addresses
-  # only (each name resolved here, the address checked is the one dialled). Browsers sit on the
-  # internal browsers network with nothing else; this joins it and a normal network for its way out.
+  # The only way out for agents' browsers and plugins' MCP servers (decisions D34, D36): a forward proxy
+  # that reaches public addresses only (each name resolved here, the address checked is the one dialled).
+  # They sit on internal networks with nothing else; this joins them and a normal network for its way out.
   egress:
     build:
       context: .
@@ -58,7 +58,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    networks: [browsers, egress]
+    networks: [browsers, mcp, egress]
     init: true
     restart: unless-stopped
 
@@ -106,6 +106,9 @@ services:
       RUNNER_BROWSER_IMAGE: superagent-browser:1
       RUNNER_BROWSER_NETWORK: superagent-browsers
       RUNNER_BROWSER_PROXY: http://egress:3128
+      RUNNER_MCP_IMAGE: superagent-mcp:1
+      RUNNER_MCP_NETWORK: superagent-mcp
+      RUNNER_MCP_PROXY: http://egress:3128
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -127,6 +130,15 @@ services:
       context: infra/sandbox
       dockerfile: dev.Dockerfile
     image: superagent-sandbox-dev:1
+    scale: 0
+
+  # The image stdio MCP servers run in (Node, Python, uv). Built with the stack, never started here: the
+  # runner creates one container per plugin from it, on the MCP network.
+  mcp:
+    profiles: [app, mcp]
+    build:
+      context: infra/mcp
+    image: superagent-mcp:1
     scale: 0
 
   # The browser image (Chromium). Built with the stack, never started here: the runner creates each
@@ -183,6 +195,11 @@ networks:
   # Named, because the runner attaches the browsers it creates to it.
   browsers:
     name: superagent-browsers
+    internal: true
+  # Plugins' stdio MCP servers and the egress proxy (decision D36): internal, like browsers, but apart
+  # from them. Named, because the runner attaches the containers it creates to it.
+  mcp:
+    name: superagent-mcp
     internal: true
   # The egress proxy's own way out.
   egress: {}

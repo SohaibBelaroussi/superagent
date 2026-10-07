@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "notes": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server/notes.mjs", "--home=${HOME}"],
+      "env": { "NOTES_GREETING": "Hello" }
+    },
+    "legacy": { "type": "sse", "url": "https://example.com/sse" },
+    "boxed": { "type": "stdio", "command": "docker", "args": ["run", "--rm", "example/mcp"] }
+  }
+}

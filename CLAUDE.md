@@ -11,16 +11,18 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 ## Layout
 - `apps/api`: the server. Hono app with Mastra mounted on `/api`, our control plane on `/v1`.
 - `apps/runner`: the only Docker client. Keeps one sandbox container per task for agents with workspace grants, and one browser container per task for agents granted the browser.
-- `apps/egress`: the forward proxy that is browsers' only way out (public addresses only).
+- `apps/egress`: the forward proxy that is browsers' and MCP servers' only way out (public addresses only).
 - `packages/shared`: zod schemas for `/v1` requests and responses (future clients reuse them), and the runner's internal API (`@superagent/shared/runner`).
 - `infra/sandbox`: the sandbox images the runner may start (`dev`: Node, Python, git).
 - `infra/browser`: the browser image (Chromium) and the seccomp profile it runs under.
+- `infra/mcp`: the image plugins' stdio MCP servers run in (Node, Python, uv).
 - `compose.yaml`: Postgres (pgvector), SeaweedFS (S3 storage), SearXNG and Crawl4AI (web tools), the egress proxy (it creates the internal `superagent-browsers` network), and, under the `app` profile, the packaged API, the runner, and the sandbox and browser images.
 
 ## Commands (from the repo root)
 - `pnpm db:up`, then `pnpm dev`: the API on http://127.0.0.1:4111 with reload. Docs UI at `/v1/docs`.
 - `pnpm dev:runner`: the runner on http://127.0.0.1:4120, for agents' sandboxes and browsers in dev. Build the sandbox image first: `docker compose --profile app build sandbox-dev`.
 - `pnpm browsers:up`: builds the browser image and starts the egress proxy (browsers need both).
+- `pnpm mcp:up`: builds the MCP image and starts the egress proxy (plugins' stdio servers need both).
 - `pnpm check`: EE-import guard, lint, typecheck, unit and integration tests. Integration needs Docker running.
 - `pnpm test` / `pnpm test:int` / `pnpm test:e2e`. e2e needs `pnpm stack:up` (packaged API on :4112).
 - `pnpm test:live`: checks against the owner's real provider (`LIVE_LLM_*` in `.env`). Not part of CI.
@@ -44,10 +46,11 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 - **Approvals.** Decide a gated tool call only through `DecisionService` (the owner) or `DispatchService.cancel` (a closed task's calls). Both write the decision to `DecisionLog` under its lock before Mastra hears of it; new work for a task checks for waiting calls under the same lock. Never call `approveToolCall`/`declineToolCall` elsewhere. Attention items are computed, not stored.
 - **Sandboxes.** Only the runner talks to Docker. Sandboxes keep their hardening (non-root, no capabilities, read-only root, no network, memory/CPU/pid/file-size limits, one task folder mounted with `NoCopy`) and run allowlisted images only, never pulled. Every exec has a deadline, and file operations run under `timeout` on regular files only. Agents touch task files only through `RunnerFilesystem` (operations run inside the container), never through `LocalFilesystem` over the volume. A task reaches a specialist's workspace through `TASK_CONTEXT_KEY`, set by its lead's delegation hook; never derive it from the specialist's thread.
 - **Browsers.** Only the runner starts browsers, from the browser image, on the internal `superagent-browsers` network whose only exit is the egress proxy; keep their hardening (non-root, no capabilities, read-only root, the seccomp profile, limits, `StopSignal: SIGINT` so cookies are saved). DevTools is reached only through the runner's relay, with a single-use ticket. `BrowserService` gives each browser its own AgentBrowser and routes tool calls by `taskOf(requestContext)`, never by the thread; agents' URLs go through `assertPublicUrl` before the browser sees them. An identity is used by one browser at a time: its lock is the `browser_identities` lease, taken and released only by `BrowserService` (stop the container before releasing). Live views are WebSockets on the v1 router (behind `requireAuth`); never mount Mastra's `setupBrowserStream`.
-- **Config writes.** Settings updates, provider deletion, identity deletion and every organization write (departments and agents) run under `settings.lock`.
+- **Capabilities.** Secrets only through `SecretService` (sealed, names only out). MCP tools reach agents only as `McpService` wrappers built from grants (allowlist, approvals); every request to a remote server goes through its guarded fetch (public addresses unless the owner marked it private-network, redirects by hand, same origin). stdio servers run only in the runner's per-plugin containers, their stdio relayed; never spawn an MCP server in the API process. Skills reach Mastra only through `SkillStore.source`, never from a filesystem the sandbox can write. Plugins are fetched pinned (a commit, or a sha256), unpacked in `archive.worker` (never on the main thread, nothing on disk), and uninstalls go through `PluginService` (detach, containers, rows).
+- **Config writes.** Settings updates, provider deletion, identity and MCP server deletion, and every organization write (departments and agents) run under `settings.lock`.
 - **Errors.** `/v1` errors are problem+json: throw `ApiError`, or return `problem()`.
 - **Schemas.** zod 4 everywhere. Request and response schemas go in `packages/shared`.
-- **Tests.** Single-agent checks use the scripted mock model (`apps/api/test/support/mock-model.ts`). Multi-agent flows run against the fake OpenAI server (`apps/api/test/support/fake-openai.ts`), steered by directives in the user message (`[assign]`, `[artifact]`, `[no-report]`, `[slow]`, `[linger]`, `[code]`, `[browse:<url>]`, `[visit:<url>]`). Browser tests need the browser image (`pnpm browsers:up`). Database tests use `startTestSystem()` from `apps/api/test/int/helpers.ts` (Testcontainers, one database per file).
+- **Tests.** Single-agent checks use the scripted mock model (`apps/api/test/support/mock-model.ts`). Multi-agent flows run against the fake OpenAI server (`apps/api/test/support/fake-openai.ts`), steered by directives in the user message (`[assign]`, `[artifact]`, `[no-report]`, `[slow]`, `[linger]`, `[code]`, `[browse:<url>]`, `[visit:<url>]`, `[skill:<name>]`, `[mcp:<tool> {args}]`). Browser tests need the browser image (`pnpm browsers:up`), capability tests the MCP image (`pnpm mcp:up`). Database tests use `startTestSystem()` from `apps/api/test/int/helpers.ts` (Testcontainers, one database per file).
 
 ## Public repository
 - Never commit `.env`, keys, or the owner's provider endpoints. `.env.example` keeps placeholders.

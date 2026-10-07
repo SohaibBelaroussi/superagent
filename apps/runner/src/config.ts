@@ -63,6 +63,28 @@ export const RunnerConfigSchema = z.object({
     .string()
     .regex(/^[a-z][a-z0-9-]{0,30}$/)
     .default('superagent-identity'),
+  /** The image stdio MCP servers run in (decision D36): Node, Python and uv. */
+  RUNNER_MCP_IMAGE: z.string().regex(IMAGE_REF).default('superagent-mcp:1'),
+  /** The internal network MCP containers join: its only way out is the egress proxy. */
+  RUNNER_MCP_NETWORK: z
+    .string()
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/)
+    .default('superagent-mcp'),
+  /** The egress proxy MCP servers and package installs go out through. Empty: none (tests). */
+  RUNNER_MCP_PROXY: z.string().default('http://egress:3128'),
+  /** A package's files and installs are in <this>-<id>, its servers' writable data in <this>-data-<id>. */
+  RUNNER_MCP_VOLUME_PREFIX: z
+    .string()
+    .regex(/^[a-z][a-z0-9-]{0,30}$/)
+    .default('superagent-mcp'),
+  RUNNER_MCP_MEMORY_MB: z.coerce.number().int().min(64).default(512),
+  RUNNER_MCP_PIDS_LIMIT: z.coerce.number().int().min(32).default(256),
+  /** Packages running at once; at the limit, the least recently used idle one is stopped first. */
+  RUNNER_MAX_MCP: z.coerce.number().int().min(1).default(8),
+  /** A package nobody has called for this long is stopped (its servers start again on the next call). */
+  RUNNER_MCP_IDLE_STOP_MS: duration(10 * 60_000, 100),
+  /** How long installing one server's package may take. */
+  RUNNER_MCP_INSTALL_TIMEOUT_MS: duration(10 * 60_000, 1_000),
   /** Labels this runner's containers, so two runners (say, tests) never touch each other's. */
   RUNNER_NAME_PREFIX: z
     .string()

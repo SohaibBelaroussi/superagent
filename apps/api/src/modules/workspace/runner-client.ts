@@ -5,6 +5,9 @@ import type {
   ExecResult,
   FsRequest,
   FsResult,
+  McpInstallInput,
+  McpInstallResult,
+  McpLaunch,
   ProcessInfo,
   ProcessStatus,
   RunnerBrowser,
@@ -141,6 +144,26 @@ export class RunnerClient {
     }
   }
 
+  /** Writes a plugin's files into its MCP package (decision D36): a tar of its folder. */
+  async mcpFiles(packageId: string, tar: Buffer): Promise<void> {
+    await this.request('PUT', `/mcp/packages/${packageId}/files`, tar);
+  }
+
+  /** Installs MCP servers' npm or PyPI packages into the plugin's volume. */
+  mcpInstall(packageId: string, input: McpInstallInput): Promise<McpInstallResult> {
+    return this.request('POST', `/mcp/packages/${packageId}/install`, input);
+  }
+
+  /** Tells the runner how a stdio MCP server starts (kept in its memory only). */
+  async launchMcp(serverId: string, spec: McpLaunch): Promise<void> {
+    await this.request('PUT', `/mcp/servers/${serverId}/launch`, spec);
+  }
+
+  /** Removes a plugin's MCP container, and its volumes when asked. */
+  async removeMcp(packageId: string, volumes: boolean): Promise<void> {
+    await this.request('DELETE', `/mcp/packages/${packageId}${volumes ? '?volumes=1' : ''}`);
+  }
+
   /** Whether the runner can run sandboxes (Docker reachable, images built); undefined if it's down. */
   async ready(): Promise<RunnerReady | undefined> {
     try {
@@ -166,9 +189,16 @@ export class RunnerClient {
         method,
         headers: {
           authorization: `Bearer ${this.token}`,
-          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+          ...(body === undefined
+            ? {}
+            : { 'content-type': Buffer.isBuffer(body) ? 'application/x-tar' : 'application/json' }),
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body:
+          body === undefined
+            ? undefined
+            : Buffer.isBuffer(body)
+              ? new Uint8Array(body)
+              : JSON.stringify(body),
         signal,
       });
     } catch (error) {

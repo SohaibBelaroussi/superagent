@@ -39,6 +39,8 @@ function toVersion(v: AgentVersionEntry | AgentVersionRow): AgentVersion {
     instructions: v.instructions,
     model: v.model,
     tools: v.tools,
+    skills: v.skills,
+    mcp: v.mcp.map((grant) => ({ ...grant, requireApproval: grant.requireApproval ?? false })),
     createdAt: v.createdAt.toISOString(),
   };
 }
@@ -68,6 +70,8 @@ function toDepartment(d: DepartmentEntry, directory: OrgDirectory): Department {
     autoClose: d.autoClose,
     lead: lead ? toSummary(lead) : null,
     members: directory.membersOf(d.id).map(toSummary),
+    skills: d.skills,
+    mcp: d.mcp,
     createdAt: d.createdAt.toISOString(),
     updatedAt: d.updatedAt.toISOString(),
     archivedAt: iso(d.archivedAt),

@@ -3,7 +3,7 @@ import type { Agent } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
 import { PostgresStore } from '@mastra/pg';
-import type { ToolGrant } from '@superagent/shared';
+import type { McpGrant, ToolGrant } from '@superagent/shared';
 import type { Hono } from 'hono';
 import type pg from 'pg';
 import { createApp } from './app';
@@ -23,6 +23,11 @@ import { DecisionService } from './modules/attention/decisions';
 import { AttentionService } from './modules/attention/service';
 import { IdentityService } from './modules/browser/identities';
 import { BrowserService } from './modules/browser/service';
+import { McpService } from './modules/capabilities/mcp/service';
+import { PluginFetcher } from './modules/capabilities/plugins/fetch';
+import { PluginService } from './modules/capabilities/plugins/service';
+import { SecretService } from './modules/capabilities/secrets';
+import { SkillStore } from './modules/capabilities/skills';
 import { DecisionLog } from './modules/dispatch/decisions';
 import { DispatchService } from './modules/dispatch/service';
 import { type BlobStore, S3BlobStore } from './modules/knowledge/blobs';
@@ -66,6 +71,10 @@ export interface System {
   workspaces: WorkspaceService;
   browsers: BrowserService;
   identities: IdentityService;
+  secrets: SecretService;
+  mcp: McpService;
+  skills: SkillStore;
+  plugins: PluginService;
   mastra: Mastra;
   app: Hono<AppEnv>;
   /** Serves live views (WebSockets) on the server that serves `app`. */
@@ -143,6 +152,22 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       identityWaitMs: config.BROWSER_IDENTITY_WAIT_MS,
       resolveHost: options.resolveHost,
     });
+    // Capabilities (decisions D35-D38): the secrets vault, MCP servers, skills, and the plugins that bring them.
+    const secrets = new SecretService(db, box);
+    const skills = new SkillStore(db);
+    await skills.load();
+    const mcp = new McpService({
+      db,
+      secrets,
+      logger,
+      runner:
+        runner && config.RUNNER_URL && config.RUNNER_TOKEN
+          ? { client: runner, url: config.RUNNER_URL.replace(/\/+$/, ''), token: config.RUNNER_TOKEN }
+          : undefined,
+      grantedTo: (slug) => directory.grantingMcp(slug),
+      resolveHost: options.resolveHost,
+    });
+    await mcp.load();
     const catalog = new ToolCatalog({
       settings,
       web: {
@@ -233,14 +258,36 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         memoryService,
         leadTools: { ...createLeadTools(ledgerTools), ...memoryTools.lead, ...scheduleTools.lead },
         workspaces,
+        mcp,
+        skills,
       },
       logger,
     );
     runtime.loadAll();
+    // A server's tools changed (listed again, enabled, removed): the agents granting it are rebuilt.
+    mcp.onToolsChanged((slugs) => runtime.recompileGranting(slugs));
     const org = new OrgService(db, directory, runtime, providers, catalog, logger, settings.lock, {
       archiveBlocker: (agent) => dispatch.archiveBlocker(agent),
       departmentArchived: (departmentId) => schedules.pauseDepartment(departmentId),
-      checkGrants: (grants) => checkIdentities(grants, identities),
+      checkGrants: (grants) => checkCapabilities(grants, { identities, skills, mcp }),
+      departmentChanged: (departmentId) => runtime.recompileDepartment(departmentId),
+    });
+    const plugins = new PluginService({
+      db,
+      fetcher: new PluginFetcher({
+        resolveHost: options.resolveHost,
+        githubToken: async () => {
+          if ((await secrets.missing(['GITHUB_TOKEN'])).length > 0) return undefined;
+          return (await secrets.resolve({ token: { secret: 'GITHUB_TOKEN' } })).token;
+        },
+      }),
+      secrets,
+      skills,
+      mcp,
+      runner,
+      detach: (plugin, slugs) => org.detachCapabilities(plugin, slugs),
+      pendingApprovals: async () => (await dispatch.listApprovals()).map((approval) => approval.tool),
+      logger,
     });
 
     await dispatch.ensureChiefThread();
@@ -259,6 +306,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       storageEnabled: knowledge.enabled,
       workspaces,
       browsers,
+      mcp,
     });
     const decisions = new DecisionService(decisionLog, attention, dispatch, logger);
 
@@ -283,6 +331,10 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       workspaces,
       browsers,
       identities,
+      secrets,
+      mcp,
+      skills,
+      plugins,
     });
     return {
       config,
@@ -302,6 +354,10 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       workspaces,
       browsers,
       identities,
+      secrets,
+      mcp,
+      skills,
+      plugins,
       mastra,
       app: http.app,
       injectWebSocket: http.injectWebSocket,
@@ -311,6 +367,8 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         await dispatch.close(drainTimeoutMs);
         // Saves identities' cookies and frees their locks.
         await browsers.stop();
+        await plugins.settled();
+        await mcp.close();
         await mastra.shutdown({ drainTimeout: drainTimeoutMs });
         // Observational memory may still be writing in the background.
         await Promise.all([memory.chief.settled(), memory.lead.settled(), memory.specialist.settled()]);
@@ -321,6 +379,34 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
   } catch (error) {
     await pool.end().catch(() => {});
     throw error;
+  }
+}
+
+/**
+ * What grants refer to must exist: a browser grant's identity, skills, MCP servers and the tools a
+ * grant lists (once the server's tools are known).
+ */
+async function checkCapabilities(
+  grants: { tools?: ToolGrant[]; skills?: string[]; mcp?: McpGrant[] },
+  deps: { identities: IdentityService; skills: SkillStore; mcp: McpService },
+): Promise<void> {
+  await checkIdentities(grants.tools ?? [], deps.identities);
+  if (grants.skills) deps.skills.assertRefs(grants.skills);
+  const seen = new Set<string>();
+  for (const grant of grants.mcp ?? []) {
+    if (seen.has(grant.server)) {
+      throw new ApiError(400, 'duplicate_mcp_grant', `MCP server "${grant.server}" is listed twice`);
+    }
+    seen.add(grant.server);
+    const server = deps.mcp.bySlug(grant.server);
+    if (!server) {
+      throw new ApiError(400, 'unknown_mcp_server', `No MCP server "${grant.server}" (GET /v1/mcp-servers)`);
+    }
+    const known = new Set(server.tools.map((tool) => tool.name));
+    const unknown = server.status === 'ready' ? (grant.tools ?? []).filter((tool) => !known.has(tool)) : [];
+    if (unknown.length > 0) {
+      throw new ApiError(400, 'unknown_mcp_tool', `"${grant.server}" has no tool ${unknown.join(', ')}`);
+    }
   }
 }
 

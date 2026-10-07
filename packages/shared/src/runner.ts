@@ -94,6 +94,8 @@ export const RunnerReadySchema = z.object({
   images: z.record(z.string(), z.boolean()),
   /** The browser image is built and the browsers network exists. */
   browser: z.boolean(),
+  /** The MCP image is built and the MCP network exists. */
+  mcp: z.boolean(),
 });
 export type RunnerReady = z.infer<typeof RunnerReadySchema>;
 
@@ -204,6 +206,74 @@ export const EnsureBrowserResultSchema = RunnerBrowserSchema.extend({
 });
 export type EnsureBrowserResult = z.infer<typeof EnsureBrowserResultSchema>;
 
+/** How a stdio MCP server starts in its package's container (decision D36). Kept in the runner's memory. */
+export const McpLaunchSchema = z.object({
+  packageId: z.uuid(),
+  /** Arguments may be empty strings; the program may not. */
+  command: z
+    .array(z.string().max(4096))
+    .min(1)
+    .max(100)
+    .refine((command) => (command[0] ?? '').length > 0, 'a program to run'),
+  cwd: z.string().min(1).max(4096).nullable(),
+  env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/), z.string().max(65_536)),
+  /** The package's network: through the egress proxy, or none. */
+  network: z.enum(['egress', 'none']),
+});
+export type McpLaunch = z.infer<typeof McpLaunchSchema>;
+
+/** npm package names (scoped or not) and PyPI project names. */
+export const McpPackageNameSchema = z
+  .string()
+  .regex(/^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._~-]{0,213}$/, 'a package name');
+export const McpPackageVersionSchema = z
+  .string()
+  .regex(/^(?:latest|[0-9A-Za-z][0-9A-Za-z.+_-]{0,63})$/, 'an exact version, or latest');
+
+export const McpInstallInputSchema = z.object({
+  servers: z
+    .array(
+      z.object({
+        key: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/),
+        runtime: z.enum(['npm', 'uv']),
+        package: McpPackageNameSchema,
+        version: McpPackageVersionSchema,
+        /** The executable to run from the package (npm: one of its bins; uv: a console script). */
+        bin: z
+          .string()
+          .regex(/^[A-Za-z0-9._-]{1,128}$/)
+          .optional(),
+      }),
+    )
+    .max(20),
+});
+export type McpInstallInput = z.infer<typeof McpInstallInputSchema>;
+
+export const McpInstallResultSchema = z.object({
+  servers: z.array(
+    z.object({
+      key: z.string(),
+      ok: z.boolean(),
+      /** The executable to run, inside the container; null when the install failed. */
+      executable: z.string().nullable(),
+      /** The version installed (latest resolved). */
+      version: z.string().nullable(),
+      lockfile: z.string().nullable(),
+      log: z.string(),
+    }),
+  ),
+});
+export type McpInstallResult = z.infer<typeof McpInstallResultSchema>;
+
+export const RunnerMcpPackageSchema = z.object({
+  packageId: z.uuid(),
+  container: z.string().nullable(),
+  state: z.enum(['running', 'stopped', 'absent']),
+  servers: z.array(z.string()).describe('Servers whose launch the runner knows'),
+  lastUsedAt: z.iso.datetime().nullable(),
+});
+export type RunnerMcpPackage = z.infer<typeof RunnerMcpPackageSchema>;
+
 /** Errors are `{ code, message }` with these codes. */
 export const RunnerErrorSchema = z.object({ code: z.string(), message: z.string() });
 export type RunnerErrorCode =
@@ -228,4 +298,7 @@ export type RunnerErrorCode =
   | 'identity_in_use'
   | 'browsers_busy'
   | 'browser_unavailable'
+  | 'launch_unknown'
+  | 'mcp_busy'
+  | 'mcp_unavailable'
   | 'docker_error';

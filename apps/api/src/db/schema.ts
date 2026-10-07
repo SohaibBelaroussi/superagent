@@ -17,6 +17,11 @@ import {
 
 export const app = pgSchema('app');
 
+/** An MCP grant as stored on departments and agent versions. */
+export type McpGrantRow = { server: string; tools?: string[]; requireApproval: boolean };
+
+const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
+
 const createdAt = () => timestamp('created_at', { withTimezone: true }).defaultNow().notNull();
 const updatedAt = () => timestamp('updated_at', { withTimezone: true }).defaultNow().notNull();
 
@@ -80,6 +85,9 @@ export const departments = app.table('departments', {
   name: text('name').notNull(),
   description: text('description').notNull().default(''),
   autoClose: boolean('auto_close').notNull().default(false),
+  /** Skills and MCP grants every agent of the department gets (decision D37). */
+  skills: jsonb('skills').$type<string[]>().notNull().default([]),
+  mcp: jsonb('mcp').$type<McpGrantRow[]>().notNull().default([]),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
   archivedAt: timestamp('archived_at', { withTimezone: true }),
@@ -126,7 +134,11 @@ export const agentVersions = app.table(
     description: text('description').notNull(),
     instructions: text('instructions').notNull(),
     model: jsonb('model').$type<{ provider: string; model: string } | null>(),
-    tools: jsonb('tools').$type<Array<{ key: string; requireApproval: boolean }>>().notNull(),
+    tools: jsonb('tools')
+      .$type<Array<{ key: string; requireApproval: boolean; identity?: string }>>()
+      .notNull(),
+    skills: jsonb('skills').$type<string[]>().notNull().default([]),
+    mcp: jsonb('mcp').$type<McpGrantRow[]>().notNull().default([]),
     createdAt: createdAt(),
   },
   (table) => [primaryKey({ columns: [table.agentId, table.version] })],
@@ -330,3 +342,125 @@ export const browserIdentities = app.table('browser_identities', {
 });
 
 export type BrowserIdentityRow = typeof browserIdentities.$inferSelect;
+
+/** The secrets vault (decision D35): values sealed with SecretBox, bound to the secret's id. */
+export const secrets = app.table('secrets', {
+  id: uuid('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  description: text('description').notNull().default(''),
+  valueEnc: text('value_enc').notNull(),
+  /** Created by a plugin's install inputs: removed with the plugin. */
+  pluginId: uuid('plugin_id').references(() => plugins.id, { onDelete: 'cascade' }),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export type SecretRow = typeof secrets.$inferSelect;
+
+/** Installed plugins (decision D38): pinned packages of skills and MCP servers. */
+export const plugins = app.table('plugins', {
+  id: uuid('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  title: text('title').notNull(),
+  version: text('version'),
+  description: text('description').notNull().default(''),
+  format: text('format', { enum: ['agent-plugins', 'codex', 'claude', 'skills'] }).notNull(),
+  source: jsonb('source').$type<Record<string, unknown>>().notNull(),
+  sha: text('sha'),
+  license: text('license'),
+  status: text('status', { enum: ['installing', 'installed', 'failed'] }).notNull(),
+  statusDetail: text('status_detail'),
+  /** Its stdio MCP servers' network: through the egress proxy, or none. */
+  network: text('network', { enum: ['egress', 'none'] }).notNull(),
+  warnings: jsonb('warnings').$type<string[]>().notNull().default([]),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export type PluginRow = typeof plugins.$inferSelect;
+
+/** A plugin's pinned files (its manifests, skills and bundled servers), kept in the database. */
+export const pluginFiles = app.table(
+  'plugin_files',
+  {
+    pluginId: uuid('plugin_id')
+      .notNull()
+      .references(() => plugins.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    mode: integer('mode').notNull(),
+    size: integer('size').notNull(),
+    sha256: text('sha256').notNull(),
+    content: bytea('content').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.pluginId, t.path] })],
+);
+
+/** Skills (decision D37), each a folder of a plugin's files. */
+export const skills = app.table(
+  'skills',
+  {
+    id: uuid('id').primaryKey(),
+    pluginId: uuid('plugin_id')
+      .notNull()
+      .references(() => plugins.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    /** Its folder among the plugin's files. */
+    dir: text('dir').notNull(),
+    license: text('license'),
+    compatibility: text('compatibility'),
+    fileCount: integer('file_count').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('skills_plugin_name').on(t.pluginId, t.name)],
+);
+
+export type SkillRow = typeof skills.$inferSelect;
+
+/** MCP servers (decision D36): added by hand (HTTP) or with a plugin (HTTP or stdio). */
+export const mcpServers = app.table('mcp_servers', {
+  id: uuid('id').primaryKey(),
+  slug: text('slug').notNull().unique(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  pluginId: uuid('plugin_id').references(() => plugins.id, { onDelete: 'cascade' }),
+  /** Its name in the plugin's MCP configuration. */
+  key: text('key'),
+  transport: text('transport', { enum: ['http', 'stdio'] }).notNull(),
+  url: text('url'),
+  headers: jsonb('headers')
+    .$type<Record<string, { value: string } | { secret: string }>>()
+    .notNull()
+    .default({}),
+  allowPrivateNetwork: boolean('allow_private_network').notNull().default(false),
+  /** stdio: bundled (the plugin's own files), npm or uv (a package installed at install time). */
+  runtime: text('runtime', { enum: ['bundled', 'npm', 'uv'] }),
+  package: text('package'),
+  command: jsonb('command').$type<string[]>(),
+  cwd: text('cwd'),
+  env: jsonb('env').$type<Record<string, { value: string } | { secret: string }>>().notNull().default({}),
+  timeoutMs: integer('timeout_ms').notNull().default(60_000),
+  enabled: boolean('enabled').notNull().default(true),
+  status: text('status', { enum: ['pending', 'ready', 'failed'] }).notNull(),
+  statusDetail: text('status_detail'),
+  /** Its tools as discovered (name, description, schemas, annotations), without the server's instructions. */
+  tools: jsonb('tools').$type<McpToolDefinition[]>().notNull().default([]),
+  toolsRefreshedAt: timestamp('tools_refreshed_at', { withTimezone: true }),
+  /** Bumped by every change its client must see (URL, headers, secrets, tools). */
+  revision: integer('revision').notNull().default(1),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export type McpServerRow = typeof mcpServers.$inferSelect;
+
+/** A tool as an MCP server describes it (the JSON @mastra/mcp's listToolDefinitions returns). */
+export type McpToolDefinition = {
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
+};
