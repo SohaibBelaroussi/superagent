@@ -127,6 +127,7 @@ export class DispatchService {
   async dispatch(task: TaskRow, actor: PhaseActor, actorLabel: string, note?: string): Promise<TaskRow> {
     const lead = this.requireLead(task.departmentId);
     await this.ensureTaskThread(task);
+    this.announceWork(task.id);
     const queued = await this.deps.tasks.transition(task.id, 'queued', actor, actorLabel, {
       patch: { leadAgentId: lead.id },
       data: { lead: lead.key },
@@ -164,6 +165,7 @@ export class DispatchService {
       },
       actorLabel,
     };
+    this.announceWork(task.id);
     let current = task;
     if (current.leadAgentId !== lead.id) {
       // The department has a new lead: stop the old one and hand the task over.
@@ -313,6 +315,15 @@ export class DispatchService {
       supervision.problem = `The lead's run could not start: ${errorMessage(error)}`;
       this.deps.logger.warn('A lead run could not start', { taskId: task.id, error });
     }
+  }
+
+  /**
+   * New work is coming for this task. Called before its phase changes, so a stall decision already in
+   * flight for older work sees the change under the row lock and is dropped.
+   */
+  private announceWork(taskId: string): void {
+    const supervision = this.supervisions.get(taskId);
+    if (supervision) supervision.generation += 1;
   }
 
   private supervision(taskId: string): Supervision {
