@@ -48,7 +48,8 @@ jobs:
           } > .env
 
       - name: Build and start the packaged stack
-        run: docker compose --profile app up -d --build --wait --wait-timeout 180
+        # Only the API and its database: the web-tool services are exercised with fakes in tests.
+        run: docker compose --profile app up -d --build --wait --wait-timeout 180 postgres api
 
       - name: End-to-end tests against the container
         run: pnpm test:e2e

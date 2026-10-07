@@ -18,6 +18,29 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # Metasearch for the web tool pack. Internal use only: JSON API, no rate limiter.
+  searxng:
+    image: searxng/searxng:2026.10.4-d48c4b555
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-me-searxng-secret}
+    volumes:
+      - ./infra/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    ports:
+      - "127.0.0.1:${SEARXNG_PORT:-8888}:8080"
+    restart: unless-stopped
+
+  # Fetches pages with a headless browser and returns clean markdown for the web tool pack.
+  crawl4ai:
+    image: unclecode/crawl4ai:0.9.4
+    shm_size: 1gb
+    environment:
+      # Without a token Crawl4AI binds its own loopback only and refuses outside connections.
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:-}
+    ports:
+      - "127.0.0.1:${CRAWL4AI_PORT:-11235}:11235"
+    restart: unless-stopped
+
   api:
     profiles: [app]
     build:
@@ -30,6 +53,8 @@ services:
       HOST: 0.0.0.0
       PORT: "4111"
       DATABASE_URL: postgres://superagent:${POSTGRES_PASSWORD}@postgres:5432/superagent
+      SEARXNG_URL: http://searxng:8080
+      CRAWL4AI_URL: http://crawl4ai:11235
     ports:
       - "127.0.0.1:${API_PORT:-4112}:4111"
     depends_on:

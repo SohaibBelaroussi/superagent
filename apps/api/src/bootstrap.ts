@@ -14,12 +14,17 @@ import { runMigrations } from './db/migrate';
 import type { AppEnv } from './http/types';
 import { createLogger } from './logger';
 import { createMastra } from './mastra';
+import { createChiefAgent } from './mastra/agents/chief';
 import { createScratchAgent } from './mastra/agents/scratch';
+import { OrgDirectory } from './modules/org/directory';
+import { AgentRuntime } from './modules/org/runtime';
+import { OrgService } from './modules/org/service';
 import { ProviderGateway } from './modules/providers/gateway';
 import { GATEWAY_ID } from './modules/providers/model-ref';
 import { ProviderRegistry } from './modules/providers/registry';
 import { ProviderService } from './modules/providers/service';
 import { SettingsService } from './modules/settings/service';
+import { ToolCatalog } from './modules/tools/catalog';
 
 export interface System {
   config: Config;
@@ -29,6 +34,7 @@ export interface System {
   tokens: TokenService;
   providers: ProviderService;
   settings: SettingsService;
+  org: OrgService;
   mastra: Mastra;
   app: Hono<AppEnv>;
   /** Drains Mastra and closes the database pool. Does not touch the HTTP server. */
@@ -59,6 +65,16 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     const providers = new ProviderService(db, box, registry, logger);
     const settings = new SettingsService(db, SettingsService.defaultsFor(config.DEFAULT_TIMEZONE));
     await settings.load();
+    const directory = new OrgDirectory(db);
+    await directory.reload();
+    const catalog = new ToolCatalog({
+      settings,
+      web: {
+        searxngUrl: config.SEARXNG_URL,
+        crawl4aiUrl: config.CRAWL4AI_URL,
+        crawl4aiToken: config.CRAWL4AI_API_TOKEN,
+      },
+    });
 
     const storage = new PostgresStore({ id: 'superagent-mastra', pool, schemaName: 'mastra' });
     const mastra = createMastra({
@@ -67,11 +83,20 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       auth: new ApiTokenAuth(tokens),
       studioToken: config.STUDIO_TOKEN,
       gateways: { [GATEWAY_ID]: new ProviderGateway(registry) },
-      agents: { scratch: createScratchAgent(settings), ...options.agents },
+      agents: {
+        chief: createChiefAgent({ directory, settings, catalog }),
+        scratch: createScratchAgent(settings),
+        ...options.agents,
+      },
     });
     await storage.init();
 
-    const app = await createApp({ config, logger, mastra, db, tokens, providers, settings });
+    // Agent definitions from our tables become live Mastra agents (decision D14).
+    const runtime = new AgentRuntime({ mastra, directory, settings, catalog }, logger);
+    runtime.loadAll();
+    const org = new OrgService(db, directory, runtime, providers, catalog, logger);
+
+    const app = await createApp({ config, logger, mastra, db, tokens, providers, settings, org, catalog });
     return {
       config,
       logger,
@@ -80,6 +105,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       tokens,
       providers,
       settings,
+      org,
       mastra,
       app,
       async close(drainTimeoutMs = 5_000) {

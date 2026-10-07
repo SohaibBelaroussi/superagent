@@ -190,15 +190,15 @@ export function registerProviderRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): 
 
   v1.openapi(deleteProvider, async (c) => {
     const { id } = c.req.valid('param');
-    // Under the settings lock, so no role can be pointed at this provider while it's being deleted.
+    // Under the settings lock, so nothing can start using this provider while it's being deleted.
     await deps.settings.lock.run(async () => {
-      const roles = deps.settings.rolesUsingProvider(deps.providers.get(id).slug);
-      if (roles.length > 0) {
-        throw new ApiError(
-          409,
-          'provider_in_use',
-          `Used by model roles: ${roles.join(', ')}. Change them first.`,
-        );
+      const slug = deps.providers.get(id).slug;
+      const users = [
+        ...deps.settings.rolesUsingProvider(slug).map((role) => `model role "${role}"`),
+        ...deps.org.directory.agentsUsingProvider(slug).map((agent) => `agent "${agent.key}"`),
+      ];
+      if (users.length > 0) {
+        throw new ApiError(409, 'provider_in_use', `Used by ${users.join(', ')}. Change them first.`);
       }
       await deps.providers.remove(id);
     });

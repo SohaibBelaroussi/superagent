@@ -1,0 +1,18 @@
+# SearXNG for the research tools (web_search). Private instance on the internal network:
+# JSON output on, rate limiter off (the API is its only client). SEARXNG_SECRET overrides secret_key.
+use_default_settings: true
+
+general:
+  instance_name: superagent-search
+
+server:
+  secret_key: "set-SEARXNG_SECRET-in-env"
+  limiter: false
+  image_proxy: false
+  public_instance: false
+
+search:
+  safe_search: 0
+  formats:
+    - html
+    - json

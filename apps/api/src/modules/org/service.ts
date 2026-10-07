@@ -1,0 +1,261 @@
+import type { IMastraLogger } from '@mastra/core/logger';
+import type {
+  CreateAgentInput,
+  CreateDepartmentInput,
+  ModelRef,
+  ToolGrant,
+  UpdateAgentInput,
+  UpdateDepartmentInput,
+} from '@superagent/shared';
+import { and, desc, eq } from 'drizzle-orm';
+import { v7 as uuidv7 } from 'uuid';
+import type { Db } from '../../db/client';
+import { type AgentVersionRow, agentDefinitions, agentVersions, departments } from '../../db/schema';
+import { ApiError } from '../../http/problem';
+import type { ProviderService } from '../providers/service';
+import type { ToolCatalog } from '../tools/catalog';
+import type { AgentEntry, DepartmentEntry, OrgDirectory } from './directory';
+import type { AgentRuntime } from './runtime';
+
+/** Keys of agents defined in code. Definitions can't take them. */
+export const RESERVED_AGENT_KEYS = new Set(['chief', 'scratch', 'provider-test', 'provider-test-tools']);
+
+function isUniqueViolation(error: unknown): boolean {
+  const e = error as { code?: string; cause?: { code?: string } };
+  return e?.code === '23505' || e?.cause?.code === '23505';
+}
+
+/** Departments and agent definitions: validation, versioning, and keeping the live agents in sync. */
+export class OrgService {
+  constructor(
+    private readonly db: Db,
+    readonly directory: OrgDirectory,
+    private readonly runtime: AgentRuntime,
+    private readonly providers: ProviderService,
+    private readonly catalog: ToolCatalog,
+    private readonly logger: IMastraLogger,
+  ) {}
+
+  // --- departments ---
+
+  getDepartment(id: string): DepartmentEntry {
+    const department = this.directory.department(id);
+    if (!department) throw new ApiError(404, 'department_not_found', `No department with id ${id}`);
+    return department;
+  }
+
+  async createDepartment(input: CreateDepartmentInput): Promise<DepartmentEntry> {
+    const id = uuidv7();
+    try {
+      await this.db.insert(departments).values({ id, ...input });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new ApiError(
+          409,
+          'department_slug_taken',
+          `A department with slug "${input.slug}" already exists`,
+        );
+      }
+      throw error;
+    }
+    await this.directory.reload();
+    this.logger.info('Department created', { departmentId: id, slug: input.slug });
+    return this.getDepartment(id);
+  }
+
+  async updateDepartment(id: string, input: UpdateDepartmentInput): Promise<DepartmentEntry> {
+    this.activeDepartment(id);
+    await this.db
+      .update(departments)
+      .set({ ...input, updatedAt: new Date() })
+      .where(eq(departments.id, id));
+    await this.directory.reload();
+    return this.getDepartment(id);
+  }
+
+  async archiveDepartment(id: string): Promise<void> {
+    this.activeDepartment(id);
+    const active = this.directory.agents({ departmentId: id });
+    if (active.length > 0) {
+      throw new ApiError(
+        409,
+        'department_has_agents',
+        `Archive its agents first: ${active.map((a) => a.key).join(', ')}`,
+      );
+    }
+    await this.db
+      .update(departments)
+      .set({ archivedAt: new Date(), updatedAt: new Date() })
+      .where(eq(departments.id, id));
+    await this.directory.reload();
+    this.logger.info('Department archived', { departmentId: id });
+  }
+
+  // --- agents ---
+
+  getAgent(id: string): AgentEntry {
+    const agent = this.directory.agent(id);
+    if (!agent) throw new ApiError(404, 'agent_not_found', `No agent with id ${id}`);
+    return agent;
+  }
+
+  async versions(id: string): Promise<AgentVersionRow[]> {
+    this.getAgent(id);
+    return this.db
+      .select()
+      .from(agentVersions)
+      .where(eq(agentVersions.agentId, id))
+      .orderBy(desc(agentVersions.version));
+  }
+
+  async createAgent(input: CreateAgentInput): Promise<AgentEntry> {
+    if (RESERVED_AGENT_KEYS.has(input.key) || input.key.startsWith('provider-test')) {
+      throw new ApiError(400, 'reserved_agent_key', `"${input.key}" is reserved for a built-in agent`);
+    }
+    this.activeDepartment(input.departmentId);
+    if (input.role === 'lead' && this.directory.leadOf(input.departmentId)) {
+      throw new ApiError(409, 'lead_exists', 'This department already has a lead');
+    }
+    this.assertTools(input.tools);
+    this.assertModel(input.model);
+
+    const id = uuidv7();
+    try {
+      await this.db.transaction(async (tx) => {
+        await tx.insert(agentDefinitions).values({
+          id,
+          key: input.key,
+          name: input.name,
+          role: input.role,
+          departmentId: input.departmentId,
+          activeVersion: 1,
+        });
+        await tx.insert(agentVersions).values({
+          agentId: id,
+          version: 1,
+          description: input.description,
+          instructions: input.instructions,
+          model: input.model,
+          tools: input.tools,
+        });
+      });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        const leadTaken = input.role === 'lead' && this.directory.leadOf(input.departmentId);
+        throw leadTaken
+          ? new ApiError(409, 'lead_exists', 'This department already has a lead')
+          : new ApiError(409, 'agent_key_taken', `The key "${input.key}" is already used`);
+      }
+      throw error;
+    }
+    return this.refresh(id, 'Agent created');
+  }
+
+  async updateAgent(id: string, input: UpdateAgentInput): Promise<AgentEntry> {
+    const agent = this.activeAgent(id);
+    const changesVersion =
+      input.description !== undefined ||
+      input.instructions !== undefined ||
+      input.model !== undefined ||
+      input.tools !== undefined;
+    if (input.tools) this.assertTools(input.tools);
+    if (input.model !== undefined) this.assertModel(input.model);
+
+    await this.db.transaction(async (tx) => {
+      let activeVersion = agent.activeVersion;
+      if (changesVersion) {
+        const [latest] = await tx
+          .select({ version: agentVersions.version })
+          .from(agentVersions)
+          .where(eq(agentVersions.agentId, id))
+          .orderBy(desc(agentVersions.version))
+          .limit(1);
+        activeVersion = (latest?.version ?? 0) + 1;
+        await tx.insert(agentVersions).values({
+          agentId: id,
+          version: activeVersion,
+          description: input.description ?? agent.current.description,
+          instructions: input.instructions ?? agent.current.instructions,
+          model: input.model !== undefined ? input.model : agent.current.model,
+          tools: input.tools ?? agent.current.tools,
+        });
+      }
+      await tx
+        .update(agentDefinitions)
+        .set({ name: input.name ?? agent.name, activeVersion, updatedAt: new Date() })
+        .where(eq(agentDefinitions.id, id));
+    });
+    return this.refresh(id, changesVersion ? 'Agent version created' : 'Agent renamed');
+  }
+
+  /** Rollback (or roll forward) to an existing version. */
+  async activateVersion(id: string, version: number): Promise<AgentEntry> {
+    this.activeAgent(id);
+    const [row] = await this.db
+      .select()
+      .from(agentVersions)
+      .where(and(eq(agentVersions.agentId, id), eq(agentVersions.version, version)))
+      .limit(1);
+    if (!row) throw new ApiError(404, 'version_not_found', `Agent has no version ${version}`);
+    this.assertTools(row.tools);
+    this.assertModel(row.model);
+    await this.db
+      .update(agentDefinitions)
+      .set({ activeVersion: version, updatedAt: new Date() })
+      .where(eq(agentDefinitions.id, id));
+    return this.refresh(id, 'Agent version activated');
+  }
+
+  async archiveAgent(id: string): Promise<void> {
+    const agent = this.activeAgent(id);
+    await this.db
+      .update(agentDefinitions)
+      .set({ archivedAt: new Date(), updatedAt: new Date() })
+      .where(eq(agentDefinitions.id, id));
+    await this.directory.reload();
+    this.runtime.remove(agent.key);
+    this.logger.info('Agent archived', { agentId: id, key: agent.key });
+  }
+
+  // --- helpers ---
+
+  private async refresh(id: string, message: string): Promise<AgentEntry> {
+    await this.directory.reload();
+    const entry = this.getAgent(id);
+    this.runtime.upsert(entry);
+    this.logger.info(message, { agentId: id, key: entry.key, version: entry.activeVersion });
+    return entry;
+  }
+
+  private activeDepartment(id: string): DepartmentEntry {
+    const department = this.getDepartment(id);
+    if (department.archivedAt) throw new ApiError(409, 'department_archived', 'This department is archived');
+    return department;
+  }
+
+  private activeAgent(id: string): AgentEntry {
+    const agent = this.getAgent(id);
+    if (agent.archivedAt) throw new ApiError(409, 'agent_archived', 'This agent is archived');
+    return agent;
+  }
+
+  private assertTools(grants: ToolGrant[]): void {
+    const seen = new Set<string>();
+    for (const grant of grants) {
+      if (!this.catalog.has(grant.key)) {
+        throw new ApiError(
+          400,
+          'unknown_tool',
+          `No tool "${grant.key}" in the catalog (GET /v1/catalog/tools)`,
+        );
+      }
+      if (seen.has(grant.key))
+        throw new ApiError(400, 'duplicate_tool', `Tool "${grant.key}" is listed twice`);
+      seen.add(grant.key);
+    }
+  }
+
+  private assertModel(model: ModelRef | null): void {
+    if (model) this.providers.assertUsable(model, 'model');
+  }
+}

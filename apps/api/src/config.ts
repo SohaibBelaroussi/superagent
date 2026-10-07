@@ -33,6 +33,9 @@ const configSchema = z.object({
         .filter(Boolean),
     ),
   DEFAULT_TIMEZONE: timezone.default('Asia/Qatar'),
+  SEARXNG_URL: z.url().default('http://127.0.0.1:8888'),
+  CRAWL4AI_URL: z.url().default('http://127.0.0.1:11235'),
+  CRAWL4AI_API_TOKEN: z.string().min(16).optional(),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15_000),
 });
 
