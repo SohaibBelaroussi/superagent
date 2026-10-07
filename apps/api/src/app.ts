@@ -100,7 +100,8 @@ export async function createApp(deps: AppDeps): Promise<HttpApp> {
   app.get('/ready', async (c) => {
     try {
       await deps.db.execute(sql`select 1`);
-      return c.json({ status: 'ready', checks: { database: 'ok' } });
+      // A key that doesn't open the database's secrets is reported, not fatal: the owner can fix it.
+      return c.json({ status: 'ready', checks: { database: 'ok', encryptionKey: deps.keyCheck } });
     } catch (error) {
       deps.logger.warn('Readiness check failed', { error });
       return c.json({ status: 'unavailable', checks: { database: 'error' } }, 503);

@@ -1,4 +1,5 @@
 import type { AttentionItem } from '@superagent/shared';
+import type { KeyCheck } from '../../crypto/key-check';
 import type { TaskRow } from '../../db/schema';
 import type { BrowserService } from '../browser/service';
 import type { McpService } from '../capabilities/mcp/service';
@@ -22,6 +23,8 @@ export interface AttentionDeps {
   workspaces: WorkspaceService;
   browsers: BrowserService;
   mcp: McpService;
+  /** Whether SUPERAGENT_ENCRYPTION_KEY opens the database's sealed values (checked at boot). */
+  keyCheck: KeyCheck;
 }
 
 /** How long the runner's health is trusted (the inbox is read often; the runner may be down). */
@@ -266,12 +269,21 @@ export class AttentionService {
         ),
       );
     }
+    if (this.deps.keyCheck === 'mismatch') {
+      items.push(
+        item(
+          'encryption-key',
+          "The encryption key doesn't open this database's secrets",
+          "SUPERAGENT_ENCRYPTION_KEY is not the key its provider keys and secrets were sealed with (a restore with another .env?). Start with the right key, or set each provider's key and each secret again.",
+        ),
+      );
+    }
     if (await this.limitsIgnored()) {
       items.push(
         item(
           'runner-limits',
           "The runner's Docker ignores container limits",
-          'No sandbox, browser or MCP server starts until the daemon enforces memory, CPU and process limits. Rootless Docker needs cgroup delegation (docs/runbooks/server.md).',
+          'No sandbox, browser or MCP server starts, new or stopped, until the daemon enforces memory, CPU and process limits. Rootless Docker needs cgroup delegation (docs/runbooks/server.md).',
         ),
       );
     }

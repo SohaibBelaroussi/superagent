@@ -3,6 +3,7 @@ import type { Mastra } from '@mastra/core/mastra';
 import type { HonoBindings, HonoVariables } from '@mastra/hono';
 import type { TokenService } from '../auth/tokens';
 import type { Config } from '../config';
+import type { KeyCheck } from '../crypto/key-check';
 import type { Db } from '../db/client';
 import type { DecisionService } from '../modules/attention/decisions';
 import type { AttentionService } from '../modules/attention/service';
@@ -55,4 +56,6 @@ export interface AppDeps {
   skills: SkillStore;
   plugins: PluginService;
   usage: UsageService;
+  /** Whether SUPERAGENT_ENCRYPTION_KEY opens the database's sealed values (checked at boot). */
+  keyCheck: KeyCheck;
 }

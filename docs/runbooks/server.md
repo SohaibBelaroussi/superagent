@@ -40,7 +40,13 @@ Commands marked `sudo` need root. Everything else runs as that user.
    sudo systemctl daemon-reload
    ```
 
-   Log out and back in (or reboot), then check that this prints `true true true`:
+   The delegation applies once your user manager restarts. With lingering on, logging out doesn't restart it, so reboot or restart it yourself:
+
+   ```bash
+   sudo systemctl restart "user@$(id -u)"
+   ```
+
+   Then check that this prints `true true true`:
 
    ```bash
    docker info --format '{{.MemoryLimit}} {{.CpuCfsQuota}} {{.PidsLimit}}'
@@ -65,16 +71,16 @@ The server builds nothing. Build a release on your PC:
 
 ```bash
 pnpm release 0.9.0 --save
-scp release/superagent-0.9.0.tar.gz release/superagent-0.9.0.tar.gz.sha256 server:
+scp release/superagent-0.9.0.* server:
 ```
 
-This writes `release/superagent-0.9.0.tar.gz` and its sha256.
+This writes `release/superagent-0.9.0.tar.gz`, the commit it was built from (`.commit`) and their sha256. It refuses to run with uncommitted changes.
 
 On the server, check out the same commit and load the images:
 
 ```bash
 git clone https://github.com/SohaibBelaroussi/superagent.git ~/superagent
-cd ~/superagent && git checkout <the release's commit>
+cd ~/superagent && git checkout "$(cat ~/superagent-0.9.0.commit)"
 (cd ~ && sha256sum -c superagent-0.9.0.tar.gz.sha256)
 docker load -i ~/superagent-0.9.0.tar.gz
 ```

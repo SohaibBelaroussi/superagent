@@ -60,7 +60,19 @@ services:
     pull_policy: never
     volumes:
       # Rootless Docker's socket: $XDG_RUNTIME_DIR/docker.sock, usually /run/user/<uid>/docker.sock.
-      - ${DOCKER_SOCKET:?set DOCKER_SOCKET in .env}:/var/run/docker.sock
+      # A wrong path fails here instead of becoming an empty folder.
+      - type: bind
+        source: ${DOCKER_SOCKET:?set DOCKER_SOCKET in .env}
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+    logging: *logging
+    deploy:
+      resources:
+        limits: { memory: 512m, cpus: "1", pids: 256 }
+
+  # The backup script's documents mirror (profile backup).
+  rclone:
     logging: *logging
     deploy:
       resources:

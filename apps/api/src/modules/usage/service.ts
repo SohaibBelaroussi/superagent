@@ -119,13 +119,18 @@ export class UsageService {
 
   /** Totals per task (task cards). Tasks without calls are absent. */
   async forTasks(ids: string[]): Promise<Map<string, UsageTotals>> {
-    if (ids.length === 0) return new Map();
-    const rows = await this.deps.db
-      .select({ key: usageEvents.taskId, ...this.totalsColumns() })
-      .from(usageEvents)
-      .where(inArray(usageEvents.taskId, [...new Set(ids)]))
-      .groupBy(usageEvents.taskId);
-    return new Map(rows.map((row) => [row.key as string, totals(row)]));
+    const unique = [...new Set(ids)];
+    const result = new Map<string, UsageTotals>();
+    // In chunks: a query takes at most 65,535 parameters, and a board can hold more tasks.
+    for (let i = 0; i < unique.length; i += 5_000) {
+      const rows = await this.deps.db
+        .select({ key: usageEvents.taskId, ...this.totalsColumns() })
+        .from(usageEvents)
+        .where(inArray(usageEvents.taskId, unique.slice(i, i + 5_000)))
+        .groupBy(usageEvents.taskId);
+      for (const row of rows) result.set(row.key as string, totals(row));
+    }
+    return result;
   }
 
   /** Totals grouped by department, task, agent, model or day, over a period. */

@@ -24,6 +24,12 @@ if ! [[ "$version" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
   echo "Not a valid image tag: '$version'" >&2
   exit 1
 fi
+# A release is a commit: the server checks it out next to its images.
+commit=$(git rev-parse HEAD)
+if [ "$save" = yes ] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "Uncommitted changes: commit them first, so the release matches its commit" >&2
+  exit 1
+fi
 
 docker compose --profile app build
 for name in api runner egress; do
@@ -43,6 +49,8 @@ if [ "$save" = yes ]; then
   mkdir -p release
   file="superagent-$version.tar.gz"
   docker save "${images[@]}" | gzip -6 >"release/$file"
-  (cd release && sha256sum "$file" >"$file.sha256")
-  echo "Saved release/$file ($(du -h "release/$file" | cut -f1)) and its sha256"
+  echo "$commit" >"release/superagent-$version.commit"
+  (cd release && sha256sum "$file" "superagent-$version.commit" >"$file.sha256")
+  echo "Saved release/$file ($(du -h "release/$file" | cut -f1)), its commit and their sha256"
+  echo "On the server: git checkout $commit"
 fi

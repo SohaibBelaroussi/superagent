@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   Board,
   Department,
@@ -176,6 +177,9 @@ describe('usage and cost', () => {
     expect(byModel.items.map((item) => item.key)).toContain('fake/fake-chat');
     const byDay = await report('group=day');
     expect(byDay.items.at(-1)?.key).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // A board bigger than a query's 65,535 parameters is asked for in chunks.
+    const many = [...Array.from({ length: 70_000 }, () => randomUUID()), first.id];
+    expect([...(await system.usage.forTasks(many)).keys()]).toEqual([first.id]);
     const future = await report(`group=department&from=${encodeURIComponent('2999-01-01T00:00:00Z')}`);
     expect(future).toMatchObject({ items: [], total: { calls: 0, costUsd: 0 } });
     expect((await send('GET', '/v1/usage?group=nope')).status).toBe(400);

@@ -52,7 +52,10 @@ export class DaemonLimits {
   }
 }
 
-/** The Docker client our services use: no container is created where its limits would be ignored. */
+/**
+ * The Docker client our services use: no container is created, or started again, where its limits
+ * would be ignored.
+ */
 export function limitedDocker(docker: Docker, limits: DaemonLimits): Docker {
   return new Proxy(docker, {
     get(target, prop) {
@@ -60,6 +63,25 @@ export function limitedDocker(docker: Docker, limits: DaemonLimits): Docker {
         return async (options: Docker.ContainerCreateOptions) => {
           await limits.require();
           return target.createContainer(options);
+        };
+      }
+      if (prop === 'getContainer') {
+        return (id: string) => limitedContainer(target.getContainer(id), limits);
+      }
+      const value = Reflect.get(target, prop);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/** A container whose start (a stopped sandbox, browser or MCP package) waits for the limits check. */
+function limitedContainer(container: Docker.Container, limits: DaemonLimits): Docker.Container {
+  return new Proxy(container, {
+    get(target, prop) {
+      if (prop === 'start') {
+        return async (...args: unknown[]) => {
+          await limits.require();
+          return (target.start as (...a: unknown[]) => Promise<unknown>)(...args);
         };
       }
       const value = Reflect.get(target, prop);

@@ -12,6 +12,7 @@ import { createApp } from './app';
 import { ApiTokenAuth } from './auth/provider';
 import { TokenService } from './auth/tokens';
 import type { Config } from './config';
+import { checkEncryptionKey } from './crypto/key-check';
 import { SecretBox } from './crypto/secret-box';
 import { createDb, createPool, type Db } from './db/client';
 import { runMigrations } from './db/migrate';
@@ -112,6 +113,12 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
 
     const tokens = new TokenService(db, config.SUPERAGENT_ADMIN_TOKEN, { logger });
     const box = new SecretBox(config.SUPERAGENT_ENCRYPTION_KEY);
+    const keyCheck = await checkEncryptionKey(db, box);
+    if (keyCheck === 'mismatch') {
+      logger.error(
+        "SUPERAGENT_ENCRYPTION_KEY doesn't open this database's provider keys and secrets: start with the key they were sealed with",
+      );
+    }
     const registry = new ProviderRegistry(db, box, logger);
     await registry.reload();
     const providers = new ProviderService(db, box, registry, logger);
@@ -345,6 +352,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       workspaces,
       browsers,
       mcp,
+      keyCheck,
     });
     const decisions = new DecisionService(decisionLog, attention, dispatch, logger);
 
@@ -374,6 +382,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       skills,
       plugins,
       usage,
+      keyCheck,
     });
     return {
       config,
@@ -417,6 +426,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         await mastra.shutdown({ drainTimeout: drainTimeoutMs });
         // Observational memory may still be writing in the background.
         await Promise.all([memory.chief.settled(), memory.lead.settled(), memory.specialist.settled()]);
+        await usage.flush();
         blobs?.close?.();
         await pool.end();
       },
