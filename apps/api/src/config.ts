@@ -1,16 +1,9 @@
 import { z } from 'zod';
+import { isValidTimezone } from './util/text';
 
-const timezone = z.string().refine(
-  (tz) => {
-    try {
-      new Intl.DateTimeFormat('en-US', { timeZone: tz });
-      return true;
-    } catch {
-      return false;
-    }
-  },
-  { message: 'must be an IANA timezone such as Asia/Qatar' },
-);
+const timezone = z
+  .string()
+  .refine(isValidTimezone, { message: 'must be an IANA timezone such as Asia/Qatar' });
 
 const configSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -24,6 +17,11 @@ const configSchema = z.object({
   }),
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
   SUPERAGENT_ADMIN_TOKEN: z.string().min(32, 'must be at least 32 characters'),
+  SUPERAGENT_ENCRYPTION_KEY: z.string().refine((key) => Buffer.from(key, 'base64').length === 32, {
+    message:
+      'must be 32 random bytes, base64-encoded: ' +
+      `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`,
+  }),
   STUDIO_TOKEN: z.string().min(16, 'must be at least 16 characters').optional(),
   CORS_ORIGINS: z
     .string()

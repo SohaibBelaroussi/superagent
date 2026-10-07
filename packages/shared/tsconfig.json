@@ -1,6 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    // Runs in Node and in browser/React Native clients: web globals (URL) only, no Node types.
+    "lib": ["ES2023", "DOM"],
     "types": []
   },
   "include": ["src"]

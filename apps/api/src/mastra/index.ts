@@ -1,4 +1,5 @@
 import type { Agent } from '@mastra/core/agent';
+import type { MastraModelGatewayInterface } from '@mastra/core/llm';
 import type { IMastraLogger } from '@mastra/core/logger';
 import { Mastra } from '@mastra/core/mastra';
 import { SimpleAuth } from '@mastra/core/server';
@@ -13,6 +14,8 @@ export interface CreateMastraOptions {
   /** Enables Mastra Studio login with this token. Studio requests use only this provider. */
   studioToken?: string;
   agents?: Record<string, Agent>;
+  /** Model gateways, keyed by id (our `sa` gateway resolves provider rows). */
+  gateways?: Record<string, MastraModelGatewayInterface>;
 }
 
 export function createMastra(options: CreateMastraOptions): Mastra {
@@ -20,6 +23,7 @@ export function createMastra(options: CreateMastraOptions): Mastra {
     storage: options.storage,
     logger: options.logger,
     agents: options.agents ?? {},
+    gateways: options.gateways ?? {},
     server: { auth: options.auth },
     ...(options.studioToken
       ? {

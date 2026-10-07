@@ -22,6 +22,17 @@ export default defineConfig({
         },
       },
       {
+        // Real provider from LIVE_LLM_* in the root .env. Needs network and your key; not in CI.
+        extends: true,
+        test: {
+          name: 'live',
+          include: ['test/live/**/*.live.test.ts'],
+          globalSetup: ['test/int/global-setup.ts'],
+          testTimeout: 180_000,
+          hookTimeout: 180_000,
+        },
+      },
+      {
         // Runs against a live stack: `pnpm stack:up` first. Reads the admin token from the root .env.
         extends: true,
         test: { name: 'e2e', include: ['test/e2e/**/*.e2e.test.ts'], testTimeout: 30_000 },

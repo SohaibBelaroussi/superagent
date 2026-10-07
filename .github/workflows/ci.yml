@@ -40,6 +40,7 @@ jobs:
           {
             echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
             echo "SUPERAGENT_ADMIN_TOKEN=sa_$(openssl rand -hex 32)"
+            echo "SUPERAGENT_ENCRYPTION_KEY=$(openssl rand -base64 32)"
             echo "STUDIO_TOKEN=sa_$(openssl rand -hex 32)"
             echo "LOG_LEVEL=info"
             echo "MASTRA_TELEMETRY_DISABLED=true"

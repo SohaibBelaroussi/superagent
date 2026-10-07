@@ -10,7 +10,7 @@ A self-hosted personal assistant organized like a company, built on [Mastra](htt
 
 Everything runs behind one HTTP API and ships as Docker images. Web and mobile clients come later.
 
-> **Status:** early development. Milestone M0 (foundation) is done: the server, auth, Postgres, Docker packaging and tests. See the [plan](docs/api-plan.md) for M1–M9.
+> **Status:** early development. M0 (foundation) and M1 (model providers) are done. See the [plan](docs/api-plan.md) for M2–M9.
 
 ## Design
 
@@ -49,7 +49,7 @@ You need Node 22.22+ (24 LTS recommended), pnpm 10 and Docker.
 
 To run the packaged image instead, use `pnpm stack:up`. The container listens on http://127.0.0.1:4112.
 
-For a request-by-request tour, open [docs/http/m0-foundation.http](docs/http/m0-foundation.http) in VS Code (REST Client) or a JetBrains IDE.
+For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS Code (REST Client) or a JetBrains IDE.
 
 ## API layout
 
@@ -57,7 +57,7 @@ For a request-by-request tour, open [docs/http/m0-foundation.http](docs/http/m0-
 |---|---|
 | `/health`, `/ready` | Liveness and readiness. Public |
 | `/api/*` | Mastra's built-in routes: agents, threads, memory, schedules. Token required |
-| `/v1/*` | The superagent control plane: tokens today; providers, departments and tasks next. Token required |
+| `/v1/*` | The superagent control plane: tokens, model providers and settings today; departments and tasks next. Token required |
 
 ## Development
 
@@ -69,6 +69,7 @@ This runs the EE-import guard, lint, typecheck, unit tests and integration tests
 
 Other commands:
 - `pnpm test:e2e` runs against a running stack (`pnpm stack:up` first).
+- `pnpm test:live` runs connectivity checks against your real model provider, using the `LIVE_LLM_*` keys in `.env`.
 - `pnpm studio` opens Mastra Studio against the dev server. Log in with `STUDIO_TOKEN`.
 
 CI runs the same checks on every pull request. It also builds the Docker image and runs the e2e suite against it.

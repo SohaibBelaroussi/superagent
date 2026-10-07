@@ -15,9 +15,11 @@
     "test": "vitest run --project unit",
     "test:int": "vitest run --project int",
     "test:e2e": "vitest run --project e2e",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "test:live": "vitest run --project live"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "2.0.81",
     "@hono/node-server": "1.19.17",
     "@hono/zod-openapi": "1.6.3",
     "@mastra/core": "1.74.0",

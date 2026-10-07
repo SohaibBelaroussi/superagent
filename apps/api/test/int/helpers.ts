@@ -8,6 +8,8 @@ import { loadConfig } from '../../src/config';
 import { createLogger } from '../../src/logger';
 
 export const TEST_ADMIN_TOKEN = `sa_test_${'t'.repeat(40)}`;
+/** Fixed test-only key (32 bytes, base64). */
+export const TEST_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
 
 export function authHeader(token = TEST_ADMIN_TOKEN): Record<string, string> {
   return { Authorization: `Bearer ${token}` };
@@ -41,6 +43,7 @@ export async function startTestSystem(
     NODE_ENV: 'test',
     DATABASE_URL: await createTestDatabase(),
     SUPERAGENT_ADMIN_TOKEN: TEST_ADMIN_TOKEN,
+    SUPERAGENT_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     DATABASE_POOL_MAX: '5',
     ...options.env,
   });
