@@ -37,7 +37,8 @@ jobs:
 
       # The integration tests start real browsers from it.
       - name: Build the browser image
-        run: docker compose --profile browser build browser
+        # Plain docker build: compose needs the .env that is only written further down.
+        run: docker build -t superagent-browser:1 infra/browser
 
       # EE-import guard, lint, typecheck, unit tests, integration tests (Testcontainers Postgres).
       - name: pnpm check
