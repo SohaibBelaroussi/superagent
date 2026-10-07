@@ -1,0 +1,182 @@
+import { z } from 'zod';
+
+/**
+ * The runner's internal API (decision D10): the only service that talks to Docker. The API calls it to
+ * keep one sandbox container per task, run commands in it and read and write its files. Not part of
+ * /v1: clients never see it.
+ */
+
+/** Task ids are UUIDs: they name containers and workspace folders, so nothing else is accepted. */
+export const RunnerTaskIdSchema = z.uuid();
+
+/** Sandbox profiles name an allowlisted image (`dev`: node, python, git). */
+export const SandboxProfileSchema = z
+  .string()
+  .regex(/^[a-z][a-z0-9-]{0,31}$/)
+  .default('dev');
+
+export const RunnerSandboxSchema = z.object({
+  taskId: z.uuid(),
+  container: z.string(),
+  profile: z.string(),
+  image: z.string(),
+  state: z.enum(['running', 'stopped']),
+  createdAt: z.iso.datetime(),
+  /** The last command or file operation, when the runner saw one since it started. */
+  lastUsedAt: z.iso.datetime().nullable(),
+});
+export type RunnerSandbox = z.infer<typeof RunnerSandboxSchema>;
+
+export const RunnerSandboxListSchema = z.object({ items: z.array(RunnerSandboxSchema) });
+
+export const EnsureSandboxInputSchema = z.object({ profile: SandboxProfileSchema });
+export const EnsureSandboxResultSchema = RunnerSandboxSchema.extend({
+  /** created: a fresh container; connected: the task's existing one (started again if it was stopped). */
+  outcome: z.enum(['created', 'connected']),
+});
+export type EnsureSandboxResult = z.infer<typeof EnsureSandboxResultSchema>;
+
+export const ExecInputSchema = z.object({
+  profile: SandboxProfileSchema,
+  command: z.string().min(1).max(100_000),
+  /** Relative to /workspace, or absolute inside the container. */
+  cwd: z.string().max(4096).optional(),
+  env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(32_768)).optional(),
+  timeoutMs: z
+    .number()
+    .int()
+    .min(100)
+    .max(30 * 60_000)
+    .optional(),
+  /** Start it and return at once; read its output later through the processes routes. */
+  background: z.boolean().optional(),
+});
+export type ExecInput = z.input<typeof ExecInputSchema>;
+
+export const ExecResultSchema = z.object({
+  execId: z.string(),
+  /** null for a background command that is still running. */
+  exitCode: z.number().int().nullable(),
+  stdout: z.string(),
+  stderr: z.string(),
+  stdoutTruncated: z.boolean(),
+  stderrTruncated: z.boolean(),
+  timedOut: z.boolean(),
+  killed: z.boolean(),
+  durationMs: z.number(),
+});
+export type ExecResult = z.infer<typeof ExecResultSchema>;
+
+export const ProcessStatusSchema = z.object({
+  execId: z.string(),
+  command: z.string(),
+  running: z.boolean(),
+  exitCode: z.number().int().nullable(),
+  stdout: z.string(),
+  stderr: z.string(),
+  stdoutTruncated: z.boolean(),
+  stderrTruncated: z.boolean(),
+});
+export type ProcessStatus = z.infer<typeof ProcessStatusSchema>;
+export const ProcessListSchema = z.object({
+  items: z.array(
+    ProcessStatusSchema.omit({ stdout: true, stderr: true, stdoutTruncated: true, stderrTruncated: true }),
+  ),
+});
+
+const path = z.string().min(1).max(4096);
+export const FsRequestSchema = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('read'),
+    path,
+    maxBytes: z
+      .number()
+      .int()
+      .min(1)
+      .max(50 * 1024 * 1024)
+      .optional(),
+  }),
+  z.object({
+    op: z.literal('write'),
+    path,
+    contentBase64: z.string(),
+    mode: z.enum(['overwrite', 'create', 'append']).default('overwrite'),
+    /** Refuse (stale) when the file changed since this modification time (ms since the epoch). */
+    expectedMtimeMs: z.number().optional(),
+  }),
+  z.object({
+    op: z.literal('list'),
+    path,
+    maxDepth: z.number().int().min(1).max(20).default(1),
+    limit: z.number().int().min(1).max(10_000).default(2_000),
+  }),
+  z.object({ op: z.literal('stat'), path }),
+  z.object({ op: z.literal('mkdir'), path, recursive: z.boolean().default(true) }),
+  z.object({
+    op: z.literal('remove'),
+    path,
+    kind: z.enum(['file', 'directory', 'any']).default('any'),
+    recursive: z.boolean().default(false),
+    force: z.boolean().default(false),
+  }),
+  z.object({
+    op: z.enum(['copy', 'move']),
+    path,
+    dest: path,
+    overwrite: z.boolean().default(true),
+  }),
+]);
+export type FsRequest = z.input<typeof FsRequestSchema>;
+/** A file operation with its defaults applied. */
+export type FsOperation = z.output<typeof FsRequestSchema>;
+
+export const FsEntrySchema = z.object({
+  /** Relative to the listed folder. */
+  path: z.string(),
+  type: z.enum(['file', 'directory', 'symlink', 'other']),
+  size: z.number(),
+  modifiedAt: z.iso.datetime(),
+  /** For a symlink: where it points. */
+  target: z.string().optional(),
+});
+export type FsEntry = z.infer<typeof FsEntrySchema>;
+
+export const FsStatSchema = z.object({
+  path: z.string(),
+  type: z.enum(['file', 'directory', 'other']),
+  size: z.number(),
+  modifiedAt: z.iso.datetime(),
+  /** Modification time in ms since the epoch, for expectedMtimeMs. */
+  mtimeMs: z.number(),
+});
+export type FsStat = z.infer<typeof FsStatSchema>;
+
+export const FsResultSchema = z.object({
+  /** read */
+  contentBase64: z.string().optional(),
+  size: z.number().optional(),
+  truncated: z.boolean().optional(),
+  /** list */
+  entries: z.array(FsEntrySchema).optional(),
+  /** stat */
+  stat: FsStatSchema.optional(),
+});
+export type FsResult = z.infer<typeof FsResultSchema>;
+
+/** Errors are `{ code, message }` with these codes. */
+export const RunnerErrorSchema = z.object({ code: z.string(), message: z.string() });
+export type RunnerErrorCode =
+  | 'unauthorized'
+  | 'invalid_request'
+  | 'unknown_profile'
+  | 'image_missing'
+  | 'sandbox_not_found'
+  | 'not_found'
+  | 'is_directory'
+  | 'not_directory'
+  | 'exists'
+  | 'not_empty'
+  | 'stale'
+  | 'too_large'
+  | 'fs_error'
+  | 'docker_error';

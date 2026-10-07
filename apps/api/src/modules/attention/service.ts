@@ -6,6 +6,7 @@ import type { OrgDirectory } from '../org/directory';
 import type { ProviderService } from '../providers/service';
 import type { ScheduleService } from '../schedules/service';
 import type { SettingsService } from '../settings/service';
+import { WORKSPACE_GRANTS, type WorkspaceService } from '../workspace/service';
 
 export interface AttentionDeps {
   dispatch: DispatchService;
@@ -16,7 +17,11 @@ export interface AttentionDeps {
   providers: ProviderService;
   /** Whether document storage is configured. */
   storageEnabled: boolean;
+  workspaces: WorkspaceService;
 }
+
+/** How long the runner's health is trusted (the inbox is read often; the runner may be down). */
+const RUNNER_CHECK_MS = 30_000;
 
 type Approval = PendingApproval & { agentName: string; departmentId: string };
 
@@ -25,6 +30,8 @@ type Approval = PendingApproval & { agentName: string; departmentId: string };
  * approval, leads' questions, tasks that stalled, results to review, and setup problems.
  */
 export class AttentionService {
+  private runnerCheck: { at: number; healthy: Promise<boolean> } | undefined;
+
   constructor(private readonly deps: AttentionDeps) {}
 
   async list(): Promise<AttentionItem[]> {
@@ -124,6 +131,14 @@ export class AttentionService {
     return undefined;
   }
 
+  private runnerHealthy(): Promise<boolean> {
+    const now = Date.now();
+    if (!this.runnerCheck || now - this.runnerCheck.at > RUNNER_CHECK_MS) {
+      this.runnerCheck = { at: now, healthy: this.deps.workspaces.healthy() };
+    }
+    return this.runnerCheck.healthy;
+  }
+
   /** Setup problems that stop work. */
   private async health(): Promise<AttentionItem[]> {
     const now = new Date().toISOString();
@@ -176,6 +191,31 @@ export class AttentionService {
           'Set S3_ACCESS_KEY and S3_SECRET_KEY to store documents.',
         ),
       );
+    }
+    const sandboxed = this.deps.directory
+      .agents()
+      .filter((agent) =>
+        agent.current.tools.some((grant) => (WORKSPACE_GRANTS as readonly string[]).includes(grant.key)),
+      );
+    if (sandboxed.length > 0) {
+      const names = sandboxed.map((agent) => agent.name).join(', ');
+      if (!this.deps.workspaces.enabled) {
+        items.push(
+          item(
+            'sandboxes',
+            'Sandboxes are off',
+            `Set RUNNER_URL and RUNNER_TOKEN: ${names} can't use files or commands.`,
+          ),
+        );
+      } else if (!(await this.runnerHealthy())) {
+        items.push(
+          item(
+            'sandboxes',
+            "The sandbox runner can't be reached",
+            `${names} can't use files or commands until it is back.`,
+          ),
+        );
+      }
     }
     const active = (await this.deps.schedules.list()).filter((s) => s.status === 'active');
     for (const departmentId of new Set(active.map((s) => s.departmentId))) {

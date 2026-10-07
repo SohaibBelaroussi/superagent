@@ -72,6 +72,9 @@ importers:
       '@mastra/libsql':
         specifier: 1.25.0
         version: 1.25.0(@mastra/core@1.74.0(@grpc/grpc-js@1.14.5)(ai@7.0.130(zod@4.6.5))(zod@4.6.5))
+      '@superagent/runner':
+        specifier: workspace:*
+        version: link:../runner
       '@superagent/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -90,6 +93,43 @@ importers:
       drizzle-kit:
         specifier: 0.31.11
         version: 0.31.11
+      tsdown:
+        specifier: 0.23.0
+        version: 0.23.0(tsx@4.23.15)(typescript@7.0.2)
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.3
+        version: 5.0.3(@types/node@24.19.1)(vite@8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
+
+  apps/runner:
+    dependencies:
+      '@hono/node-server':
+        specifier: 1.19.17
+        version: 1.19.17(hono@4.13.13)
+      dockerode:
+        specifier: 5.0.1
+        version: 5.0.1
+      hono:
+        specifier: 4.13.13
+        version: 4.13.13
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@superagent/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@types/dockerode':
+        specifier: 4.0.1
+        version: 4.0.1
+      '@types/node':
+        specifier: 24.19.1
+        version: 24.19.1
       tsdown:
         specifier: 0.23.0
         version: 0.23.0(tsx@4.23.15)(typescript@7.0.2)

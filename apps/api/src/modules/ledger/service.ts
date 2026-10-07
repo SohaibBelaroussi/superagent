@@ -150,6 +150,14 @@ export class TaskService {
     return task;
   }
 
+  /** These tasks, by id (missing ones left out). */
+  async byIds(ids: string[]): Promise<Map<string, TaskRow>> {
+    const unique = [...new Set(ids)].filter((id) => /^[0-9a-f-]{36}$/.test(id));
+    if (unique.length === 0) return new Map();
+    const rows = await this.db.select().from(tasks).where(inArray(tasks.id, unique));
+    return new Map(rows.map((row) => [row.id, row]));
+  }
+
   /** The tasks on these threads, by thread id. */
   async byThreads(threadIds: string[]): Promise<Map<string, TaskRow>> {
     if (threadIds.length === 0) return new Map();

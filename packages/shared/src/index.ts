@@ -606,3 +606,35 @@ export const DecisionSchema = z.object({
   createdAt: z.iso.datetime(),
 });
 export type Decision = z.infer<typeof DecisionSchema>;
+
+// --- Workspaces and sandboxes (M6) ---
+
+export const WorkspaceEntrySchema = z.object({
+  path: z.string().describe("Relative to the task's workspace folder"),
+  type: z.enum(['file', 'directory', 'symlink']),
+  size: z.number().nullable(),
+  modifiedAt: z.iso.datetime(),
+});
+export type WorkspaceEntry = z.infer<typeof WorkspaceEntrySchema>;
+
+export const WorkspaceListingSchema = z.object({
+  items: z.array(WorkspaceEntrySchema),
+  /** More entries exist than were listed. */
+  truncated: z.boolean(),
+});
+export type WorkspaceListing = z.infer<typeof WorkspaceListingSchema>;
+
+export const SandboxSchema = z.object({
+  id: z.uuid().describe("The task's id: one sandbox per task"),
+  taskId: z.uuid(),
+  taskNumber: z.number().int().nullable(),
+  taskTitle: z.string().nullable(),
+  profile: z.string(),
+  state: z.enum(['running', 'stopped']),
+  createdAt: z.iso.datetime(),
+  lastUsedAt: z.iso.datetime().nullable().describe('Last command or file operation the runner saw'),
+});
+export type Sandbox = z.infer<typeof SandboxSchema>;
+
+export const SandboxListSchema = z.object({ items: z.array(SandboxSchema) });
+export type SandboxList = z.infer<typeof SandboxListSchema>;

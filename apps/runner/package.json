@@ -1,0 +1,34 @@
+{
+  "name": "@superagent/runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsdown",
+    "start": "node --enable-source-maps dist/main.mjs",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.19.17",
+    "dockerode": "5.0.1",
+    "hono": "4.13.13",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@superagent/shared": "workspace:*",
+    "@types/dockerode": "4.0.1",
+    "@types/node": "24.19.1",
+    "tsdown": "0.23.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}

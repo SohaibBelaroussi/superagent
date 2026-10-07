@@ -48,6 +48,13 @@ const configSchema = z.object({
   MEMORY_OBSERVE_AHEAD: z.stringbool().default(true),
   // How often due schedules are looked for (decision D31).
   SCHEDULER_TICK_MS: z.coerce.number().int().min(100).default(15_000),
+  // The runner (decision D10) keeps a sandbox per task. Without it, workspace grants give no tools.
+  RUNNER_URL: z.url().optional(),
+  RUNNER_TOKEN: z.string().min(32, 'must be at least 32 characters').optional(),
+  SANDBOX_PROFILE: z
+    .string()
+    .regex(/^[a-z][a-z0-9-]{0,31}$/)
+    .default('dev'),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15_000),
 });
 
@@ -64,6 +71,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (!result.success) {
     const lines = result.error.issues.map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`);
     throw new ConfigError(`Invalid configuration:\n${lines.join('\n')}`);
+  }
+  if (result.data.RUNNER_URL && !result.data.RUNNER_TOKEN) {
+    throw new ConfigError('Invalid configuration:\n  - RUNNER_TOKEN: required with RUNNER_URL');
   }
   return result.data;
 }

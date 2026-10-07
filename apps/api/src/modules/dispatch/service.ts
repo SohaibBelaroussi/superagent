@@ -576,14 +576,16 @@ export class DispatchService {
         reason: CANCELLED_REASON,
         taskId: task.id,
       });
+      // Aborted before it starts: the decline is still recorded (and the run's snapshot dropped), but the
+      // turn it would resume never reaches the model.
       const stop = new AbortController();
+      stop.abort();
       const output = await this.agent(approval.agentKey).declineToolCall({
         runId: approval.runId,
         toolCallId: approval.toolCallId,
         reason: CANCELLED_REASON,
         abortSignal: stop.signal,
       });
-      stop.abort();
       this.holding.add(approval.runId);
       const release = () => this.holding.delete(approval.runId);
       Promise.resolve(output.finishReason).then(release, release);
