@@ -1,12 +1,12 @@
 import type { Agent } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
-import type { Memory } from '@mastra/memory';
 import type { TaskRow } from '../../db/schema';
 import { ApiError } from '../../http/problem';
 import { truncate } from '../../util/text';
 import { type PhaseActor, TERMINAL_PHASES } from '../ledger/phases';
 import type { TaskService } from '../ledger/service';
+import type { MemoryProfiles } from '../memory/profiles';
 import type { AgentEntry, OrgDirectory } from '../org/directory';
 
 /** The owner's conversation with the chief of staff. */
@@ -22,7 +22,7 @@ export interface DispatchDeps {
   mastra: Mastra;
   tasks: TaskService;
   directory: OrgDirectory;
-  memory: Memory;
+  memory: MemoryProfiles;
   logger: IMastraLogger;
 }
 
@@ -97,7 +97,7 @@ export class DispatchService {
   }
 
   async ensureChiefThread(): Promise<void> {
-    const { memory } = this.deps;
+    const memory = this.deps.memory.chief;
     if (!(await memory.getThreadById({ threadId: CHIEF_THREAD }))) {
       await memory.createThread({
         threadId: CHIEF_THREAD,
@@ -488,7 +488,7 @@ export class DispatchService {
   }
 
   private async ensureTaskThread(task: TaskRow): Promise<void> {
-    const { memory } = this.deps;
+    const memory = this.deps.memory.lead;
     if (!(await memory.getThreadById({ threadId: task.threadId }))) {
       await memory.createThread({
         threadId: task.threadId,

@@ -1,7 +1,6 @@
 import type { Agent } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
-import { Memory } from '@mastra/memory';
 import { PostgresStore } from '@mastra/pg';
 import type { Hono } from 'hono';
 import type pg from 'pg';
@@ -18,9 +17,14 @@ import { createMastra } from './mastra';
 import { createChiefAgent } from './mastra/agents/chief';
 import { createScratchAgent } from './mastra/agents/scratch';
 import { DispatchService } from './modules/dispatch/service';
+import { type BlobStore, S3BlobStore } from './modules/knowledge/blobs';
+import { KnowledgeService } from './modules/knowledge/service';
 import { EventBus } from './modules/ledger/events';
 import { TaskService } from './modules/ledger/service';
 import { createChiefTools, createLeadTools } from './modules/ledger/tools';
+import { createMemoryProfiles, OwnerProfileProcessor } from './modules/memory/profiles';
+import { MemoryService } from './modules/memory/service';
+import { createMemoryTools } from './modules/memory/tools';
 import { OrgDirectory } from './modules/org/directory';
 import { AgentRuntime } from './modules/org/runtime';
 import { OrgService } from './modules/org/service';
@@ -42,6 +46,8 @@ export interface System {
   org: OrgService;
   tasks: TaskService;
   dispatch: DispatchService;
+  knowledge: KnowledgeService;
+  memory: MemoryService;
   mastra: Mastra;
   app: Hono<AppEnv>;
   /** Drains Mastra and closes the database pool. Does not touch the HTTP server. */
@@ -52,6 +58,8 @@ export interface BootstrapOptions {
   logger?: IMastraLogger;
   /** Extra agents to register (tests use scripted mock agents). */
   agents?: Record<string, Agent>;
+  /** Replaces S3 object storage (tests use an in-memory store). */
+  blobs?: BlobStore;
 }
 
 /** Builds the whole server without listening: migrations, providers, Mastra storage, auth, routes. */
@@ -74,6 +82,19 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     await settings.load();
     const directory = new OrgDirectory(db);
     await directory.reload();
+    const blobs =
+      options.blobs ??
+      (config.S3_ACCESS_KEY && config.S3_SECRET_KEY
+        ? new S3BlobStore({
+            endpoint: config.S3_ENDPOINT,
+            bucket: config.S3_BUCKET,
+            region: config.S3_REGION,
+            accessKey: config.S3_ACCESS_KEY,
+            secretKey: config.S3_SECRET_KEY,
+          })
+        : undefined);
+    if (!blobs) logger.warn('Document storage is off: set S3_ACCESS_KEY and S3_SECRET_KEY to enable uploads');
+    const knowledge = new KnowledgeService(db, directory, blobs, logger);
     const catalog = new ToolCatalog({
       settings,
       web: {
@@ -81,6 +102,8 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         crawl4aiUrl: config.CRAWL4AI_URL,
         crawl4aiToken: config.CRAWL4AI_API_TOKEN,
       },
+      knowledge,
+      directory,
     });
 
     const storage = new PostgresStore({ id: 'superagent-mastra', pool, schemaName: 'mastra' });
@@ -94,20 +117,48 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     });
     await storage.init();
 
-    // One message history for every agent: a thread per task, the owner's thread with the chief.
-    const memory = new Memory({ storage, options: { lastMessages: 40 } });
+    // A thread per task (resource dept:<slug>) and the owner's thread with the chief (resource owner).
+    // Long threads are compressed with the fast model, or the default one while the fast one can't be
+    // used (unset, its provider disabled, its key unreadable): a failing observer stops every turn.
+    const observerModel = () => {
+      const fast = settings.get().models.fast;
+      return settings.modelRouterId(fast && providers.isUsable(fast, 'chat') ? 'fast' : 'default');
+    };
+    const memory = createMemoryProfiles(storage, observerModel, {
+      observeTokens: config.MEMORY_OBSERVE_TOKENS,
+      reflectTokens: config.MEMORY_REFLECT_TOKENS,
+      observeAhead: config.MEMORY_OBSERVE_AHEAD,
+    });
+    const memoryService = new MemoryService(db, directory, logger);
+    const memoryTools = createMemoryTools(memoryService, directory);
     const bus = new EventBus();
     const tasks = new TaskService(db, directory, bus);
     const dispatch = new DispatchService({ mastra, tasks, directory, memory, logger });
     const ledgerTools = { tasks, dispatch, directory };
     mastra.addAgent(
-      createChiefAgent({ directory, settings, catalog, memory, chiefTools: createChiefTools(ledgerTools) }),
+      createChiefAgent({
+        directory,
+        settings,
+        catalog,
+        memory: memory.chief,
+        chiefTools: { ...createChiefTools(ledgerTools), ...memoryTools.chief },
+        ownerProfile: new OwnerProfileProcessor(memoryService, true),
+      }),
       'chief',
     );
 
     // Agent definitions from our tables become live Mastra agents (decision D14).
     const runtime = new AgentRuntime(
-      { mastra, directory, settings, catalog, memory, leadTools: createLeadTools(ledgerTools) },
+      {
+        mastra,
+        directory,
+        settings,
+        catalog,
+        memory,
+        ownerProfile: new OwnerProfileProcessor(memoryService, false),
+        memoryService,
+        leadTools: { ...createLeadTools(ledgerTools), ...memoryTools.lead },
+      },
       logger,
     );
     runtime.loadAll();
@@ -130,6 +181,8 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       tasks,
       dispatch,
       bus,
+      knowledge,
+      memory: memoryService,
     });
     return {
       config,
@@ -142,11 +195,16 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       org,
       tasks,
       dispatch,
+      knowledge,
+      memory: memoryService,
       mastra,
       app,
       async close(drainTimeoutMs = 5_000) {
         await dispatch.close(drainTimeoutMs);
         await mastra.shutdown({ drainTimeout: drainTimeoutMs });
+        // Observational memory may still be writing in the background.
+        await Promise.all([memory.chief.settled(), memory.lead.settled(), memory.specialist.settled()]);
+        blobs?.close?.();
         await pool.end();
       },
     };

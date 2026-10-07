@@ -1,5 +1,6 @@
 import { Agent, type ToolsInput } from '@mastra/core/agent';
 import type { Memory } from '@mastra/memory';
+import type { OwnerProfileProcessor } from '../../modules/memory/profiles';
 import type { OrgDirectory } from '../../modules/org/directory';
 import { chiefInstructions } from '../../modules/org/instructions';
 import type { SettingsService } from '../../modules/settings/service';
@@ -15,6 +16,7 @@ export function createChiefAgent(deps: {
   catalog: ToolCatalog;
   memory: Memory;
   chiefTools: ToolsInput;
+  ownerProfile: OwnerProfileProcessor;
 }): Agent {
   return new Agent({
     id: 'chief',
@@ -24,6 +26,7 @@ export function createChiefAgent(deps: {
     model: () => deps.settings.modelRouterId('default'),
     tools: { ...deps.catalog.build([{ key: 'current_time', requireApproval: false }]), ...deps.chiefTools },
     memory: deps.memory,
+    inputProcessors: [deps.ownerProfile],
     defaultOptions: { maxSteps: 8 },
   });
 }

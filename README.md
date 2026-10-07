@@ -10,7 +10,7 @@ A self-hosted personal assistant organized like a company, built on [Mastra](htt
 
 Everything runs behind one HTTP API and ships as Docker images. Web and mobile clients come later.
 
-> **Status:** early development. M0 (foundation), M1 (model providers), M2 (departments and agents) and M3 (tasks, board and dispatch) are done. See the [plan](docs/api-plan.md) for M4–M9.
+> **Status:** early development. M0 (foundation), M1 (model providers), M2 (departments and agents), M3 (tasks, board and dispatch) and M4 (memory and knowledge) are done. See the [plan](docs/api-plan.md) for M5–M9.
 
 ## Design
 
@@ -30,7 +30,7 @@ You need Node 22.22+ (24 LTS recommended), pnpm 10 and Docker.
    cp .env.example .env
    ```
 
-2. Fill in `.env`: `POSTGRES_PASSWORD` (and the matching `DATABASE_URL`), `SUPERAGENT_ADMIN_TOKEN` (at least 32 characters) and `STUDIO_TOKEN`. `.env.example` shows a one-line command that generates a token.
+2. Fill in `.env`: `POSTGRES_PASSWORD` (and the matching `DATABASE_URL`), `SUPERAGENT_ADMIN_TOKEN` (at least 32 characters), `SUPERAGENT_ENCRYPTION_KEY` (32 random bytes, base64), `STUDIO_TOKEN`, and `S3_ACCESS_KEY` and `S3_SECRET_KEY` for document storage. `.env.example` shows one-line commands that generate them.
 
 3. Start Postgres and the API:
 
@@ -49,7 +49,7 @@ You need Node 22.22+ (24 LTS recommended), pnpm 10 and Docker.
 
 To run the packaged image instead, use `pnpm stack:up`. The container listens on http://127.0.0.1:4112.
 
-The web tools (search and page reading) use two self-hosted services from `compose.yaml`: SearXNG and Crawl4AI. Start them with `docker compose up -d searxng crawl4ai` after setting `CRAWL4AI_API_TOKEN` in `.env`.
+The web tools (search and page reading) use two self-hosted services from `compose.yaml`: SearXNG and Crawl4AI. Start them with `docker compose up -d searxng crawl4ai` after setting `CRAWL4AI_API_TOKEN` in `.env`. Document uploads are stored in SeaweedFS: `docker compose up -d seaweedfs`.
 
 For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS Code (REST Client) or a JetBrains IDE.
 
@@ -59,7 +59,7 @@ For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS 
 |---|---|
 | `/health`, `/ready` | Liveness and readiness. Public |
 | `/api/*` | Mastra's built-in routes: agents, threads, memory, schedules. Token required |
-| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, and live task events (`/v1/events`, SSE). Token required |
+| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your profile, department notes and knowledge documents. Token required |
 
 ## Development
 

@@ -6,6 +6,7 @@ import { inject } from 'vitest';
 import { bootstrap, type System } from '../../src/bootstrap';
 import { loadConfig } from '../../src/config';
 import { createLogger } from '../../src/logger';
+import { type BlobStore, MemoryBlobStore } from '../../src/modules/knowledge/blobs';
 
 export const TEST_ADMIN_TOKEN = `sa_test_${'t'.repeat(40)}`;
 /** Fixed test-only key (32 bytes, base64). */
@@ -37,7 +38,7 @@ export async function createTestDatabase(): Promise<string> {
 
 /** Boots the full server (migrations, Mastra storage, routes) on its own database. Set TEST_LOG=1 to see logs. */
 export async function startTestSystem(
-  options: { agents?: Record<string, Agent>; env?: Record<string, string> } = {},
+  options: { agents?: Record<string, Agent>; env?: Record<string, string>; blobs?: BlobStore } = {},
 ): Promise<System> {
   const config = loadConfig({
     NODE_ENV: 'test',
@@ -50,5 +51,5 @@ export async function startTestSystem(
   const logger = process.env.TEST_LOG
     ? createLogger({ LOG_LEVEL: 'debug', NODE_ENV: 'development' })
     : noopLogger;
-  return bootstrap(config, { logger, agents: options.agents });
+  return bootstrap(config, { logger, agents: options.agents, blobs: options.blobs ?? new MemoryBlobStore() });
 }

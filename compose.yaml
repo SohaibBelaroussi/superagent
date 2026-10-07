@@ -44,6 +44,33 @@ services:
     networks: [web]
     restart: unless-stopped
 
+  # S3-compatible storage for uploaded documents (decision D09). One process, telemetry off; only the
+  # S3 port is published, on loopback. Its other ports (filer, master, admin) have no auth, so it sits
+  # on its own network that only the API joins. It refuses to start without S3 keys (anonymous S3
+  # would be open); other services start without them.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        test -n "$$AWS_ACCESS_KEY_ID" && test -n "$$AWS_SECRET_ACCESS_KEY"
+        || { echo "Set S3_ACCESS_KEY and S3_SECRET_KEY in .env" >&2; exit 1; };
+        exec /entrypoint.sh mini -dir=/data -ip=seaweedfs -bucket=knowledge -master.telemetry=false -admin.ui=false
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-}
+    volumes:
+      - s3data:/data
+    ports:
+      - "127.0.0.1:${S3_PORT:-8333}:8333"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8333/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [storage]
+    restart: unless-stopped
+
   api:
     profiles: [app]
     build:
@@ -58,12 +85,15 @@ services:
       DATABASE_URL: postgres://superagent:${POSTGRES_PASSWORD}@postgres:5432/superagent
       SEARXNG_URL: http://searxng:8080
       CRAWL4AI_URL: http://crawl4ai:11235
+      S3_ENDPOINT: http://seaweedfs:8333
     ports:
       - "127.0.0.1:${API_PORT:-4112}:4111"
     depends_on:
       postgres:
         condition: service_healthy
-    networks: [core, web]
+      seaweedfs:
+        condition: service_healthy
+    networks: [core, web, storage]
     init: true
     stop_grace_period: 20s
     restart: unless-stopped
@@ -74,6 +104,9 @@ networks:
   # The services that handle untrusted web content (Crawl4AI runs a browser on any page). The API
   # joins both networks; the fetchers can reach the internet but never Postgres.
   web: {}
+  # Object storage and the API only.
+  storage: {}
 
 volumes:
   pgdata:
+  s3data:

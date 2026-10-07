@@ -31,12 +31,16 @@ type ToolDef = { function: { name: string } };
  * chief create a task, "[artifact]" makes a lead attach a deliverable, "[no-report]" makes a lead stop
  * without reporting, "[slow]" delays every answer in the conversation, "[linger]" only the final (text)
  * answers and "[slow-report]" only the answer that calls report_to_chief. "[fixed-ids]" reuses one tool-call id.
+ * "[remember]" makes the chief update the owner profile and a lead save a department note.
+ * Observational memory's observer and reflector get valid observations back.
  */
 const PRIORITY: Array<(tool: string) => boolean> = [
+  (t) => t === 'update_owner_profile' || t === 'save_department_note',
   (t) => t === 'create_task',
   (t) => t === 'update_task',
   (t) => t.startsWith('agent-'),
   (t) => t === 'web_search',
+  (t) => t === 'knowledge_search',
   (t) => t === 'add_artifact',
   (t) => t === 'report_to_chief',
 ];
@@ -65,6 +69,7 @@ function pickTool(tools: string[], messages: ChatMessage[]): string | undefined 
     !NEVER_AUTOMATIC.has(t) &&
     !(t === 'create_task' && !directives.includes('[assign]')) &&
     !(t === 'add_artifact' && !directives.includes('[artifact]')) &&
+    !((t === 'update_owner_profile' || t === 'save_department_note') && !directives.includes('[remember]')) &&
     !(t === 'report_to_chief' && directives.includes('[no-report]'));
   for (const matches of PRIORITY) {
     const tool = tools.find((t) => matches(t) && allowed(t));
@@ -73,9 +78,19 @@ function pickTool(tools: string[], messages: ChatMessage[]): string | undefined 
   return tools.find(allowed);
 }
 
+/** What a "[remember]" saves: a profile preference (the chief) or a department note (a lead). */
+export const REMEMBERED = {
+  preference: 'Prefers answers in French',
+  note: 'Always cite two sources.',
+};
+
 function argsFor(tool: string): Record<string, unknown> {
   if (tool.startsWith('agent-')) return { prompt: 'Find out what Mastra is and return two sources.' };
   switch (tool) {
+    case 'update_owner_profile':
+      return { preferences: [REMEMBERED.preference] };
+    case 'save_department_note':
+      return { note: REMEMBERED.note };
     case 'create_task':
       return {
         department: 'research',
@@ -93,6 +108,8 @@ function argsFor(tool: string): Record<string, unknown> {
       };
     case 'web_search':
       return { query: 'mastra agent framework' };
+    case 'knowledge_search':
+      return { query: 'how long are customer records kept' };
     case 'add_artifact':
       return { title: 'Summary', kind: 'text', content: '# Mastra\n\nA TypeScript agent framework.' };
     case 'report_to_chief':
@@ -105,6 +122,12 @@ function argsFor(tool: string): Record<string, unknown> {
       return {};
   }
 }
+
+/** Observational memory's observer and reflector expect this shape. */
+export const OBSERVATIONS =
+  '<observations>\nDate: Oct 7, 2026\n* 🔴 (09:00) The owner asked about Mastra; the lead is researching it\n</observations>\n' +
+  '<current-task>\nPrimary: answer the latest request\n</current-task>';
+const OBSERVATIONS_REFLECTED = '<observations>\n* 🔴 The owner researches Mastra\n</observations>';
 
 export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Promise<FakeOpenAI> {
   const requests: RecordedRequest[] = [];
@@ -186,9 +209,15 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
         finish = 'tool_calls';
       } else {
         if (JSON.stringify(messages).includes('[linger]')) await new Promise((r) => setTimeout(r, SLOW_MS));
-        const text = toolResult
-          ? `The tool said ${String(toolResult.content)}. The magic number is 42.`
-          : `pong (${body.model}) ${typeof lastUser?.content === 'string' ? lastUser.content.slice(0, 20) : ''}`.trim();
+        const system = messages.find((m) => m.role === 'system')?.content;
+        const observing = typeof system === 'string' && system.includes('memory consciousness');
+        const text = observing
+          ? system.includes('observation reflector')
+            ? OBSERVATIONS_REFLECTED
+            : OBSERVATIONS
+          : toolResult
+            ? `The tool said ${String(toolResult.content)}. The magic number is 42.`
+            : `pong (${body.model}) ${typeof lastUser?.content === 'string' ? lastUser.content.slice(0, 20) : ''}`.trim();
         delta = { role: 'assistant', content: text };
         finish = 'stop';
       }

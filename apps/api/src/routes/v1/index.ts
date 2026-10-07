@@ -5,7 +5,9 @@ import { requireAuth } from '../../http/auth';
 import { problem, validationHook } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 import { APP_VERSION } from '../../version';
+import { isUpload, MAX_UPLOAD_BYTES, registerKnowledgeRoutes } from './knowledge';
 import { registerMeRoutes } from './me';
+import { registerMemoryRoutes } from './memory';
 import { registerOrgRoutes } from './org';
 import { registerProviderRoutes } from './providers';
 import { registerSettingsRoutes } from './settings';
@@ -21,13 +23,15 @@ export function createV1Router(deps: AppDeps): OpenAPIHono<AppEnv> {
   const publicPaths = new Set(docsArePublic ? [`${V1_PREFIX}/openapi.json`, `${V1_PREFIX}/docs`] : []);
 
   v1.use('*', requireAuth(deps.mastra, publicPaths));
-  v1.use(
-    '*',
-    bodyLimit({
-      maxSize: 1024 * 1024,
-      onError: (c) => problem(c, 413, { code: 'payload_too_large', detail: 'Request body exceeds 1 MiB' }),
-    }),
-  );
+  const defaultLimit = bodyLimit({
+    maxSize: 1024 * 1024,
+    onError: (c) => problem(c, 413, { code: 'payload_too_large', detail: 'Request body exceeds 1 MiB' }),
+  });
+  const uploadLimit = bodyLimit({
+    maxSize: MAX_UPLOAD_BYTES,
+    onError: (c) => problem(c, 413, { code: 'payload_too_large', detail: 'Uploads are limited to 20 MiB' }),
+  });
+  v1.use('*', (c, next) => (isUpload(c) ? uploadLimit(c, next) : defaultLimit(c, next)));
 
   registerMeRoutes(v1);
   registerTokenRoutes(v1, deps);
@@ -35,6 +39,8 @@ export function createV1Router(deps: AppDeps): OpenAPIHono<AppEnv> {
   registerSettingsRoutes(v1, deps);
   registerOrgRoutes(v1, deps);
   registerTaskRoutes(v1, deps);
+  registerKnowledgeRoutes(v1, deps);
+  registerMemoryRoutes(v1, deps);
 
   v1.openAPIRegistry.registerComponent('securitySchemes', 'bearer', { type: 'http', scheme: 'bearer' });
   v1.doc31('/openapi.json', {

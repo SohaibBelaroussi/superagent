@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import {
   bigserial,
   boolean,
+  customType,
   index,
   integer,
   jsonb,
@@ -199,3 +200,63 @@ export const artifacts = app.table('artifacts', {
 });
 
 export type ArtifactRow = typeof artifacts.$inferSelect;
+
+// --- knowledge (M4) ---
+
+const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
+
+/** An uploaded document. The original file lives in object storage; its text is split into chunks. */
+export const knowledgeDocuments = app.table(
+  'knowledge_documents',
+  {
+    id: uuid('id').primaryKey(),
+    title: text('title').notNull(),
+    filename: text('filename').notNull(),
+    contentType: text('content_type').notNull(),
+    size: integer('size').notNull(),
+    /** Null: shared with every department. */
+    departmentId: uuid('department_id').references(() => departments.id),
+    objectKey: text('object_key').notNull(),
+    chunkCount: integer('chunk_count').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('knowledge_documents_department_idx').on(t.departmentId)],
+);
+
+export type KnowledgeDocumentRow = typeof knowledgeDocuments.$inferSelect;
+
+/** Searchable pieces of a document. `search` is a full-text index; embeddings join later (decision D29). */
+export const knowledgeChunks = app.table(
+  'knowledge_chunks',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => knowledgeDocuments.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    content: text('content').notNull(),
+    search: tsvector('search').notNull().generatedAlwaysAs(sql`to_tsvector('simple', content)`),
+  },
+  (t) => [
+    index('knowledge_chunks_search_idx').using('gin', t.search),
+    uniqueIndex('knowledge_chunks_document_seq_idx').on(t.documentId, t.seq),
+  ],
+);
+
+// --- memory (M4) ---
+
+/** What the agents know about the owner: one row, kept by the chief and the owner (decision D30). */
+export const ownerProfile = app.table('owner_profile', {
+  id: text('id').primaryKey(),
+  profile: jsonb('profile').$type<Record<string, unknown>>().notNull(),
+  updatedAt: updatedAt(),
+});
+
+/** A department's notes: rules and lessons its lead keeps across tasks (decision D30). */
+export const departmentNotes = app.table('department_notes', {
+  departmentId: uuid('department_id')
+    .primaryKey()
+    .references(() => departments.id),
+  notes: text('notes').notNull(),
+  updatedAt: updatedAt(),
+});

@@ -443,3 +443,75 @@ export const BoardSchema = z.object({
   columns: z.array(z.object({ phase: TaskPhaseSchema, tasks: z.array(TaskSchema) })),
 });
 export type Board = z.infer<typeof BoardSchema>;
+
+// --- M4: knowledge ---
+
+export const KnowledgeDocumentSchema = z.object({
+  id: z.uuid(),
+  title: z.string(),
+  filename: z.string(),
+  contentType: z.string(),
+  size: z.number().int().describe('Bytes'),
+  departmentId: z.uuid().nullable().describe('Null: shared with every department'),
+  chunkCount: z.number().int().describe('Passages indexed for search'),
+  createdAt: z.iso.datetime(),
+});
+export type KnowledgeDocument = z.infer<typeof KnowledgeDocumentSchema>;
+
+export const KnowledgeDocumentListSchema = z.object({ items: z.array(KnowledgeDocumentSchema) });
+export type KnowledgeDocumentList = z.infer<typeof KnowledgeDocumentListSchema>;
+
+export const KnowledgeHitSchema = z.object({
+  documentId: z.uuid(),
+  title: z.string(),
+  departmentId: z.uuid().nullable(),
+  passage: z.number().int().describe('Position of the passage in the document'),
+  content: z.string(),
+  score: z.number(),
+});
+export type KnowledgeHit = z.infer<typeof KnowledgeHitSchema>;
+
+export const KnowledgeSearchResultSchema = z.object({ items: z.array(KnowledgeHitSchema) });
+export type KnowledgeSearchResult = z.infer<typeof KnowledgeSearchResultSchema>;
+
+// --- M4: memory ---
+
+/**
+ * What the agents know about the owner. The chief of staff keeps it (working memory of the `owner`
+ * resource) and every department agent gets a read-only copy. Every field is optional: the chief
+ * updates it piece by piece.
+ */
+export const OwnerProfileSchema = z.object({
+  name: z.string().max(200).optional(),
+  language: z.string().max(100).optional().describe('Language to answer in'),
+  timezone: z.string().max(100).optional(),
+  communicationStyle: z.string().max(1000).optional().describe('How the owner likes answers'),
+  preferences: z.array(z.string().max(500)).max(50).optional(),
+  about: z.string().max(4000).optional().describe('Work, projects and anything else worth knowing'),
+});
+export type OwnerProfile = z.infer<typeof OwnerProfileSchema>;
+
+/** A partial update: fields given are replaced (lists included), null removes a field. */
+export const OwnerProfilePatchSchema = z.object({
+  name: z.string().max(200).nullable().optional(),
+  language: z.string().max(100).nullable().optional(),
+  timezone: z.string().max(100).nullable().optional(),
+  communicationStyle: z.string().max(1000).nullable().optional(),
+  preferences: z.array(z.string().max(500)).max(50).nullable().optional(),
+  about: z.string().max(4000).nullable().optional(),
+});
+export type OwnerProfilePatch = z.infer<typeof OwnerProfilePatchSchema>;
+
+export const DepartmentMemorySchema = z.object({
+  departmentId: z.uuid(),
+  notes: z
+    .string()
+    .nullable()
+    .describe("The department's working notes (markdown), kept by its lead across tasks; null before any"),
+});
+export type DepartmentMemory = z.infer<typeof DepartmentMemorySchema>;
+
+export const UpdateDepartmentMemoryInputSchema = z.object({
+  notes: z.string().max(20_000).describe('Replaces the notes (markdown)'),
+});
+export type UpdateDepartmentMemoryInput = z.infer<typeof UpdateDepartmentMemoryInputSchema>;

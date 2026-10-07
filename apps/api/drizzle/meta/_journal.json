@@ -36,6 +36,20 @@
       "when": 1791365300476,
       "tag": "0004_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791372908217,
+      "tag": "0005_knowledge",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791378147861,
+      "tag": "0006_memory",
+      "breakpoints": true
     }
   ]
 }

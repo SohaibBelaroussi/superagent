@@ -5,8 +5,10 @@ import type { TokenService } from '../auth/tokens';
 import type { Config } from '../config';
 import type { Db } from '../db/client';
 import type { DispatchService } from '../modules/dispatch/service';
+import type { KnowledgeService } from '../modules/knowledge/service';
 import type { EventBus } from '../modules/ledger/events';
 import type { TaskService } from '../modules/ledger/service';
+import type { MemoryService } from '../modules/memory/service';
 import type { OrgService } from '../modules/org/service';
 import type { ProviderService } from '../modules/providers/service';
 import type { SettingsService } from '../modules/settings/service';
@@ -29,4 +31,6 @@ export interface AppDeps {
   tasks: TaskService;
   dispatch: DispatchService;
   bus: EventBus;
+  knowledge: KnowledgeService;
+  memory: MemoryService;
 }
