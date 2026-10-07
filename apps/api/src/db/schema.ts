@@ -1,7 +1,9 @@
 // Tables owned by superagent live in the `app` schema. Mastra keeps its own tables in `mastra`.
 import { sql } from 'drizzle-orm';
 import {
+  bigserial,
   boolean,
+  index,
   integer,
   jsonb,
   pgSchema,
@@ -130,3 +132,70 @@ export const agentVersions = app.table(
 );
 
 export type AgentVersionRow = typeof agentVersions.$inferSelect;
+
+/** The task ledger (decision D16): one row per task, a Mastra thread per task, a short number for humans. */
+export const tasks = app.table(
+  'tasks',
+  {
+    id: uuid('id').primaryKey(),
+    number: integer('number').generatedAlwaysAsIdentity().notNull().unique(),
+    departmentId: uuid('department_id')
+      .notNull()
+      .references(() => departments.id),
+    title: text('title').notNull(),
+    brief: text('brief').notNull(),
+    phase: text('phase', {
+      enum: ['inbox', 'queued', 'working', 'waiting', 'review', 'done', 'failed', 'cancelled'],
+    }).notNull(),
+    priority: text('priority', { enum: ['low', 'normal', 'high', 'urgent'] }).notNull(),
+    source: text('source', { enum: ['owner', 'chief', 'schedule'] }).notNull(),
+    leadAgentId: uuid('lead_agent_id').references(() => agentDefinitions.id),
+    threadId: text('thread_id').notNull().unique(),
+    resourceId: text('resource_id').notNull(),
+    checklist: jsonb('checklist').$type<Array<{ text: string; done: boolean }>>().notNull().default([]),
+    progress: integer('progress'),
+    result: text('result'),
+    revision: integer('revision').notNull().default(0),
+    idempotencyKey: text('idempotency_key').unique(),
+    dueAt: timestamp('due_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+  },
+  (table) => [index('tasks_department_phase').on(table.departmentId, table.phase)],
+);
+
+export type TaskRow = typeof tasks.$inferSelect;
+
+/** Append-only history. `seq` orders everything and is the SSE event id clients resume from. */
+export const taskEvents = app.table(
+  'task_events',
+  {
+    seq: bigserial('seq', { mode: 'number' }).primaryKey(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    actor: text('actor').notNull(),
+    phase: text('phase').notNull(),
+    data: jsonb('data').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: createdAt(),
+  },
+  (table) => [index('task_events_task').on(table.taskId, table.seq)],
+);
+
+export type TaskEventRow = typeof taskEvents.$inferSelect;
+
+export const artifacts = app.table('artifacts', {
+  id: uuid('id').primaryKey(),
+  taskId: uuid('task_id')
+    .notNull()
+    .references(() => tasks.id, { onDelete: 'cascade' }),
+  kind: text('kind', { enum: ['text', 'link'] }).notNull(),
+  title: text('title').notNull(),
+  content: text('content'),
+  url: text('url'),
+  createdAt: createdAt(),
+});
+
+export type ArtifactRow = typeof artifacts.$inferSelect;

@@ -459,7 +459,37 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - **Crawl4AI 0.9.4 guards its own fetches.** It resolves each host once, pins the IP and refuses non-global addresses, for the first URL and every redirect. `assertPublicUrl` is our own first line: it resolves names too, and strips trailing dots (`postgres.` is `postgres`). [spike]
 - **Directory reloads must not skip.** Returning early from a superseded reload let a caller miss its own write. Reloads now run one after another.
 
-## 15. From earlier research, needed in later milestones
+## 15. Learned while building M3 (2026-10-07)
+
+**Thread runs and signals:**
+- **Don't wake idle threads with `sendMessage`.** A wake sent just as a run on that thread ends can be routed to the ending run and never processed (the run is reported idle, the message goes back to its id). For new work, call `agent.stream(text, { memory: { thread, resource } })`: you get the output handle and a clean run. [spike]
+- `agent.getActiveThreadRunId({ resourceId, threadId })` tells whether a run is in progress. `sendMessage` and `queueMessage` are for reaching that run: steer lands at its next step boundary, queue after its turn. [src]
+- `queueMessage` on a busy thread resolves right away with `{ action: 'deliver', runId }` for a future run, and no output handle. [src]
+- Without `ifIdle`/`ifActive`, a signal wakes an idle thread and is delivered to an active run. [src]
+- `abortThreadStream({ threadId, resourceId, clearPendingSignals: true })` stops the run and drops queued messages; it returns a boolean and doesn't throw. [src]
+- `listActiveThreadRuns()` and `abortRunStream(runId)` cover every agent (the thread runtime is shared). Use them at shutdown before closing the pool. [src]
+- Models see a message signal as a user message `<user from="…" task="…">…</user>` (attributes become XML attributes) and a notification as `<notification source="…" kind="…" priority="…">summary</notification>`. [spike]
+
+**Supervising a lead (from the M3 review):**
+- Decide "did the lead stall?" when the task's thread has been idle for a moment (`getActiveThreadRunId` polled), not when one run's output settles: steered messages and Mastra's own follow-up runs extend a turn beyond the run you started. [spike]
+- `sendMessage(msg, { ifActive: { behavior: 'deliver' }, ifIdle: { behavior: 'discard' } })` reaches a running turn and never wakes an idle thread (it returns `discard`), which keeps clear of the wake race. [src]
+- `cancelQueuedMessages({ resourceId, threadId, signalIds })` returns the ids it actually cancelled. Called once the thread is idle, it tells you which delivered messages no run picked up, and removes them so they can't surface in a later run. [src]
+- A message can reach a lead just after it reported (it is drained at the next step). Let the lead take its task back from review while such a message is outstanding. [spike]
+- Tools get `context.runId` and `context.agent.{agentId, threadId, resourceId, toolCallId}`. Some providers reuse tool-call ids across conversations (Kimi-style `functions.create_task:0`), so idempotency keys need the run id too. [src]
+
+**Notifications:** the default delivery policy delivers `urgent` at once. `high` and `medium` are delivered to an idle thread (which wakes it) and summarized for an active one. `low` is always summarized. [src]
+
+**Testing:**
+- Fake models must give each tool call its own id. Mastra merges calls that share an id, so a fake that always says `call_1` "forgets" earlier calls and loops until `maxSteps`. [spike]
+- A directive in the last user message (`[assign]`, `[no-report]`, `[slow]`) is enough to script multi-agent flows with one fake server.
+
+**Postgres and Drizzle:**
+- Sequence values are taken at insert, so concurrent transactions can commit out of seq order. Hold `pg_advisory_xact_lock` from the event insert to the commit when seq order matters (it's the SSE id). [spike]
+- Drizzle's `update().set({})` throws `No values to set`.
+
+**Live result:** the owner's model ran an owner task and a chief-assigned task through `update_task`, delegation and `report_to_chief` into `review`, and the chief announced the task number.
+
+## 16. From earlier research, needed in later milestones
 
 - **DockerSandbox 0.9.2:**
   - One long-lived container per sandbox, reused by label.

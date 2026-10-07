@@ -10,7 +10,7 @@ A self-hosted personal assistant organized like a company, built on [Mastra](htt
 
 Everything runs behind one HTTP API and ships as Docker images. Web and mobile clients come later.
 
-> **Status:** early development. M0 (foundation), M1 (model providers) and M2 (departments and agents) are done. See the [plan](docs/api-plan.md) for M3–M9.
+> **Status:** early development. M0 (foundation), M1 (model providers), M2 (departments and agents) and M3 (tasks, board and dispatch) are done. See the [plan](docs/api-plan.md) for M4–M9.
 
 ## Design
 
@@ -59,7 +59,7 @@ For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS 
 |---|---|
 | `/health`, `/ready` | Liveness and readiness. Public |
 | `/api/*` | Mastra's built-in routes: agents, threads, memory, schedules. Token required |
-| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents and the tool catalog; tasks next. Token required |
+| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, and live task events (`/v1/events`, SSE). Token required |
 
 ## Development
 
@@ -71,7 +71,7 @@ This runs the EE-import guard, lint, typecheck, unit tests and integration tests
 
 Other commands:
 - `pnpm test:e2e` runs against a running stack (`pnpm stack:up` first).
-- `pnpm test:live` runs connectivity checks against your real model provider, using the `LIVE_LLM_*` keys in `.env`.
+- `pnpm test:live` runs against your real model provider, using the `LIVE_LLM_*` keys in `.env`: connectivity checks, delegation and a task from dispatch to report.
 - `pnpm studio` opens Mastra Studio against the dev server. Log in with `STUDIO_TOKEN`.
 
 CI runs the same checks on every pull request. It also builds the Docker image and runs the e2e suite against it.

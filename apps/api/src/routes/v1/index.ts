@@ -9,6 +9,7 @@ import { registerMeRoutes } from './me';
 import { registerOrgRoutes } from './org';
 import { registerProviderRoutes } from './providers';
 import { registerSettingsRoutes } from './settings';
+import { registerTaskRoutes } from './tasks';
 import { registerTokenRoutes } from './tokens';
 
 export const V1_PREFIX = '/v1';
@@ -33,6 +34,7 @@ export function createV1Router(deps: AppDeps): OpenAPIHono<AppEnv> {
   registerProviderRoutes(v1, deps);
   registerSettingsRoutes(v1, deps);
   registerOrgRoutes(v1, deps);
+  registerTaskRoutes(v1, deps);
 
   v1.openAPIRegistry.registerComponent('securitySchemes', 'bearer', { type: 'http', scheme: 'bearer' });
   v1.doc31('/openapi.json', {

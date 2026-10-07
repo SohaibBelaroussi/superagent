@@ -4,9 +4,10 @@
 
 **Progress:**
 - M0 (foundation): merged in PR #1.
-- M1 (providers and models): PR #2. Verified live against the owner's provider (chat, streaming usage, tool calls).
-- M2 (agents, departments, tool catalog): done on branch `m2-agents`, PR #3. Verified live: a real model leading a research department delegated to a specialist that searched the web.
-- Next: M3 (ledger, board and dispatch).
+- M1 (providers and models): merged in PR #2. Verified live against the owner's provider (chat, streaming usage, tool calls).
+- M2 (agents, departments, tool catalog): merged in PR #3, with its review fixes. Verified live: a real model leading a research department delegated to a specialist that searched the web.
+- M3 (ledger, board and dispatch): done on branch `m3-ledger`, PR #4. Verified live: an owner task and a task the chief assigned both ran from dispatch to a report in `review`. The PR review found 13 issues, mostly ways a lead could stop without anyone noticing; dispatch now supervises each task's thread instead (D27). Changes from the plan: `set_checklist` is part of `update_task`; new work starts a fresh lead run instead of waking the thread with a signal (D27); the background-task bridge moves to a later milestone, since specialists run inline through delegation.
+- Next: M4 (memory and knowledge). It needs an embedding model, and the owner's provider lists none yet.
 
 **Related docs:**
 - [decisions.md](decisions.md): what is settled and why.
@@ -156,16 +157,16 @@ superagent/
 
 ### Dispatch: chief and departments
 - **`create_task`** (a chief tool, also `POST /v1/tasks`):
-  1. Insert the task, using the tool call id as idempotency key.
+  1. Insert the task, keyed by the run and tool call ids for idempotency.
   2. Create thread `task:<id>` under `dept:<slug>`, with metadata.
-  3. Call `lead.sendMessage(brief, { resourceId, threadId, ifIdle: { behavior: 'wake' }, ifActive: { behavior: 'persist' } })`.
+  3. Start the lead on that thread: a fresh run (`agent.stream`), or after its current turn ends. A supervisor watches the thread until the lead reports (D27).
   4. Return the task number right away.
 - **Ledger tools** work out the current task from the thread id, so they also work for runs started by a schedule.
 - **`report_to_chief`** (a lead tool):
   1. Write a ledger event and move the phase.
   2. Call `chief.sendNotificationSignal({ source: 'dept:<slug>', kind, summary, priority, payload: { taskId } }, { resourceId: 'owner', threadId: 'chief:main' })`.
 
-  Urgent reports wake the chief. Others wait until it's idle.
+  Any report wakes an idle chief. A busy one first gets a summary (Mastra's default delivery policy).
 - **Isolation.** Every signal call goes through `modules/dispatch`, because those APIs are `@experimental` in 1.74.
 
 ### Ledger and live updates
