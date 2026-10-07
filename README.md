@@ -10,7 +10,7 @@ A self-hosted personal assistant organized like a company, built on [Mastra](htt
 
 Everything runs behind one HTTP API and ships as Docker images. Web and mobile clients come later.
 
-> **Status:** early development. M0 (foundation), M1 (model providers), M2 (departments and agents), M3 (tasks, board and dispatch) and M4 (memory and knowledge) are done. See the [plan](docs/api-plan.md) for M5–M9.
+> **Status:** early development. M0 (foundation), M1 (model providers), M2 (departments and agents), M3 (tasks, board and dispatch), M4 (memory and knowledge) and M5 (schedules and attention) are done. See the [plan](docs/api-plan.md) for M6–M9.
 
 ## Design
 

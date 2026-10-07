@@ -1,0 +1,1 @@
+CREATE INDEX "decisions_target_idx" ON "app"."decisions" USING btree ("target");

@@ -123,11 +123,6 @@ describe('departments and agents', () => {
         'duplicate_tool',
       ],
       [{ ...base, key: 'x-agent', model: { provider: 'nope', model: 'x' } }, 400, 'unknown_provider'],
-      [
-        { ...base, key: 'x-agent', tools: [{ key: 'web_search', requireApproval: true }] },
-        400,
-        'approval_not_available',
-      ],
       [{ ...base, key: 'web-researcher' }, 409, 'agent_key_taken'],
       [{ ...base, key: 'second-lead', role: 'lead' }, 409, 'lead_exists'],
     ];

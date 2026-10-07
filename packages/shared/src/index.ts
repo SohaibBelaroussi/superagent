@@ -220,7 +220,7 @@ export const ToolGrantSchema = z.object({
   requireApproval: z
     .boolean()
     .default(false)
-    .describe('Pause for the owner before each call. Approvals arrive in M5; until then true is rejected.'),
+    .describe('Pause before each call until the owner approves it (GET /v1/attention)'),
 });
 export type ToolGrant = z.infer<typeof ToolGrantSchema>;
 
@@ -365,6 +365,7 @@ export const TaskSchema = z.object({
   phase: TaskPhaseSchema,
   priority: TaskPrioritySchema,
   source: z.enum(['owner', 'chief', 'schedule']),
+  scheduleId: z.string().nullable().describe('The schedule that created it, if any'),
   leadAgentId: z.string().nullable(),
   threadId: z.string().describe('Mastra thread where the lead works on this task'),
   checklist: z.array(ChecklistItemSchema),
@@ -515,3 +516,93 @@ export const UpdateDepartmentMemoryInputSchema = z.object({
   notes: z.string().max(20_000).describe('Replaces the notes (markdown)'),
 });
 export type UpdateDepartmentMemoryInput = z.infer<typeof UpdateDepartmentMemoryInputSchema>;
+
+// --- M5: schedules ---
+
+export const ScheduleStatusSchema = z.enum(['active', 'paused']);
+export type ScheduleStatus = z.infer<typeof ScheduleStatusSchema>;
+
+/** A recurring task: each time the cron fires, a task with this brief goes to the department's lead. */
+export const ScheduleSchema = z.object({
+  id: z.uuid(),
+  departmentId: z.uuid(),
+  department: z.object({ slug: z.string(), name: z.string() }).nullable(),
+  title: z.string(),
+  brief: z.string(),
+  priority: TaskPrioritySchema,
+  cron: z.string().describe('5 fields (minute hour day month weekday), or 6 with seconds first'),
+  timezone: z.string(),
+  status: ScheduleStatusSchema,
+  nextFireAt: z.iso.datetime().nullable().describe('Null while paused'),
+  lastFireAt: z.iso.datetime().nullable(),
+  lastTaskId: z.uuid().nullable(),
+  createdBy: z.string().describe('owner, or agent:<key>'),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type Schedule = z.infer<typeof ScheduleSchema>;
+
+export const ScheduleListSchema = z.object({ items: z.array(ScheduleSchema) });
+export type ScheduleList = z.infer<typeof ScheduleListSchema>;
+
+export const CreateScheduleInputSchema = z.object({
+  departmentId: z.uuid(),
+  title: z.string().trim().min(1).max(200),
+  brief: z.string().trim().min(1).max(20_000),
+  cron: z.string().trim().min(9).max(100),
+  timezone: z.string().optional().describe("Defaults to the owner's timezone (settings)"),
+  priority: TaskPrioritySchema.default('normal'),
+});
+export type CreateScheduleInput = z.infer<typeof CreateScheduleInputSchema>;
+
+export const UpdateScheduleInputSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  brief: z.string().trim().min(1).max(20_000).optional(),
+  cron: z.string().trim().min(9).max(100).optional(),
+  timezone: z.string().optional(),
+  priority: TaskPrioritySchema.optional(),
+  status: ScheduleStatusSchema.optional(),
+});
+export type UpdateScheduleInput = z.infer<typeof UpdateScheduleInputSchema>;
+
+// --- M5: attention ---
+
+/**
+ * Something that needs the owner: a tool call waiting for approval, a lead's question, a task that
+ * stalled, a result to review, or a problem with the setup.
+ */
+export const AttentionItemSchema = z.object({
+  id: z.string().describe('approval:<runId>:<toolCallId>, task:<id> or health:<check>'),
+  kind: z.enum(['approval', 'question', 'problem', 'review', 'health']),
+  title: z.string(),
+  detail: z.string().nullable(),
+  taskId: z.string().nullable(),
+  taskNumber: z.number().int().nullable(),
+  departmentId: z.string().nullable(),
+  agent: z.string().nullable().describe('For approvals: the agent whose run is waiting'),
+  tool: z.string().nullable(),
+  args: z.unknown().optional(),
+  since: z.iso.datetime(),
+});
+export type AttentionItem = z.infer<typeof AttentionItemSchema>;
+
+export const AttentionListSchema = z.object({ items: z.array(AttentionItemSchema) });
+export type AttentionList = z.infer<typeof AttentionListSchema>;
+
+export const DecisionInputSchema = z.object({
+  reason: z.string().max(1000).optional().describe('For a decline: what the agent is told'),
+});
+export type DecisionInput = z.infer<typeof DecisionInputSchema>;
+
+export const DecisionSchema = z.object({
+  id: z.uuid(),
+  kind: z.enum(['approve', 'decline']),
+  target: z.string().describe('The attention item decided'),
+  reason: z.string().nullable(),
+  status: z
+    .enum(['pending', 'applied'])
+    .describe('pending: the server stopped while applying it, so the call may or may not have resumed'),
+  taskId: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+});
+export type Decision = z.infer<typeof DecisionSchema>;

@@ -31,11 +31,13 @@ type ToolDef = { function: { name: string } };
  * chief create a task, "[artifact]" makes a lead attach a deliverable, "[no-report]" makes a lead stop
  * without reporting, "[slow]" delays every answer in the conversation, "[linger]" only the final (text)
  * answers and "[slow-report]" only the answer that calls report_to_chief. "[fixed-ids]" reuses one tool-call id.
- * "[remember]" makes the chief update the owner profile and a lead save a department note.
+ * "[remember]" makes the chief update the owner profile and a lead save a department note; "[schedule]"
+ * makes the chief set up a weekday schedule.
  * Observational memory's observer and reflector get valid observations back.
  */
 const PRIORITY: Array<(tool: string) => boolean> = [
   (t) => t === 'update_owner_profile' || t === 'save_department_note',
+  (t) => t === 'create_schedule',
   (t) => t === 'create_task',
   (t) => t === 'update_task',
   (t) => t.startsWith('agent-'),
@@ -51,6 +53,10 @@ const NEVER_AUTOMATIC = new Set([
   'message_task',
   'cancel_task',
   'fetch_page',
+  'list_schedules',
+  'update_schedule',
+  'delete_schedule',
+  'run_schedule',
 ]);
 const SLOW_MS = 800;
 
@@ -70,6 +76,7 @@ function pickTool(tools: string[], messages: ChatMessage[]): string | undefined 
     !(t === 'create_task' && !directives.includes('[assign]')) &&
     !(t === 'add_artifact' && !directives.includes('[artifact]')) &&
     !((t === 'update_owner_profile' || t === 'save_department_note') && !directives.includes('[remember]')) &&
+    !(t === 'create_schedule' && !directives.includes('[schedule]')) &&
     !(t === 'report_to_chief' && directives.includes('[no-report]'));
   for (const matches of PRIORITY) {
     const tool = tools.find((t) => matches(t) && allowed(t));
@@ -89,6 +96,13 @@ function argsFor(tool: string): Record<string, unknown> {
   switch (tool) {
     case 'update_owner_profile':
       return { preferences: [REMEMBERED.preference] };
+    case 'create_schedule':
+      return {
+        department: 'research',
+        title: 'Weekday digest',
+        brief: 'Summarize what changed in Mastra.',
+        cron: '0 9 * * 1-5',
+      };
     case 'save_department_note':
       return { note: REMEMBERED.note };
     case 'create_task':

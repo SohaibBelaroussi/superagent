@@ -1,0 +1,75 @@
+# M5 walkthrough: schedules, approvals and the attention inbox.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Prerequisite: a department with a lead (see m2-org.http) and a default model (m1-providers.http).
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+@departmentId = paste-a-department-id
+@scheduleId = paste-a-schedule-id
+@attentionId = paste-an-attention-item-id-url-encoded
+
+### Every weekday at 9:00 (your timezone from settings, unless you set one)
+POST {{baseUrl}}/v1/schedules
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "departmentId": "{{departmentId}}",
+  "title": "Morning digest",
+  "brief": "Summarize what changed in AI agent frameworks since yesterday.",
+  "cron": "0 9 * * 1-5"
+}
+
+### Or ask the chief: it sets up the schedule for the right department
+POST {{baseUrl}}/api/agents/chief/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "messages": [{ "role": "user", "content": "Every Monday at 8:30, have research summarize the week's AI news." }],
+  "memory": { "thread": "chief:main", "resource": "owner" }
+}
+
+### All schedules, with their department and next run
+GET {{baseUrl}}/v1/schedules
+Authorization: Bearer {{token}}
+
+### Run one now: the task goes to the department's lead
+POST {{baseUrl}}/v1/schedules/{{scheduleId}}/run
+Authorization: Bearer {{token}}
+
+### Its tasks
+GET {{baseUrl}}/v1/tasks?scheduleId={{scheduleId}}
+Authorization: Bearer {{token}}
+
+### Pause it (resume with "active"; cron and timezone can change too)
+PATCH {{baseUrl}}/v1/schedules/{{scheduleId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "status": "paused" }
+
+### Delete it (its past tasks stay)
+DELETE {{baseUrl}}/v1/schedules/{{scheduleId}}
+Authorization: Bearer {{token}}
+
+### Gate a tool: the agent pauses before each call until you approve it
+### (grant tools in an agent definition, see m2-org.http)
+# "tools": [{ "key": "web_search", "requireApproval": true }]
+
+### What needs you: approvals, questions, stopped tasks, results to review, setup problems
+GET {{baseUrl}}/v1/attention
+Authorization: Bearer {{token}}
+
+### Approve a call (ids contain colons: URL-encode them). Retrying with the same key is safe.
+POST {{baseUrl}}/v1/attention/{{attentionId}}/approve
+Authorization: Bearer {{token}}
+Idempotency-Key: approve-1
+
+### Or decline it: the agent is told why and carries on without it
+POST {{baseUrl}}/v1/attention/{{attentionId}}/decline
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: decline-1
+
+{ "reason": "Not during the release freeze" }

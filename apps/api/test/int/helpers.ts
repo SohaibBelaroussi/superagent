@@ -38,11 +38,17 @@ export async function createTestDatabase(): Promise<string> {
 
 /** Boots the full server (migrations, Mastra storage, routes) on its own database. Set TEST_LOG=1 to see logs. */
 export async function startTestSystem(
-  options: { agents?: Record<string, Agent>; env?: Record<string, string>; blobs?: BlobStore } = {},
+  options: {
+    agents?: Record<string, Agent>;
+    env?: Record<string, string>;
+    blobs?: BlobStore;
+    /** Boot on an existing database (a restart) instead of a fresh one. */
+    databaseUrl?: string;
+  } = {},
 ): Promise<System> {
   const config = loadConfig({
     NODE_ENV: 'test',
-    DATABASE_URL: await createTestDatabase(),
+    DATABASE_URL: options.databaseUrl ?? (await createTestDatabase()),
     SUPERAGENT_ADMIN_TOKEN: TEST_ADMIN_TOKEN,
     SUPERAGENT_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     DATABASE_POOL_MAX: '5',

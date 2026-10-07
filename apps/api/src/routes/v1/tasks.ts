@@ -32,6 +32,7 @@ export function toTask(t: TaskRow): Task {
     phase: t.phase,
     priority: t.priority,
     source: t.source,
+    scheduleId: t.scheduleId,
     leadAgentId: t.leadAgentId,
     threadId: t.threadId,
     checklist: t.checklist,
@@ -77,6 +78,7 @@ const listTasks = createRoute({
     query: z.object({
       departmentId: z.uuid().optional(),
       phase: TaskPhaseSchema.optional(),
+      scheduleId: z.uuid().optional().describe('Tasks a schedule created'),
       limit: z.coerce.number().int().min(1).max(200).default(50),
       cursor: z.coerce.number().int().optional().describe('nextCursor from the previous page'),
     }),
@@ -197,8 +199,8 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
   const { tasks, dispatch } = deps;
 
   v1.openapi(listTasks, async (c) => {
-    const { departmentId, phase, limit, cursor } = c.req.valid('query');
-    const page = await tasks.list({ departmentId, phase, limit, before: cursor });
+    const { departmentId, phase, scheduleId, limit, cursor } = c.req.valid('query');
+    const page = await tasks.list({ departmentId, phase, scheduleId, limit, before: cursor });
     return c.json({ items: page.items.map(toTask), nextCursor: page.nextCursor }, 200);
   });
 
@@ -235,7 +237,10 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
           `Task #${current.number} can't move from ${current.phase} to ${phase}`,
         );
       }
-      if (phase === 'queued') dispatch.requireLead(current.departmentId);
+      if (phase === 'queued') {
+        dispatch.requireLead(current.departmentId);
+        if (current.phase !== 'inbox') await dispatch.refuseIfApprovalPending(current);
+      }
     }
     let task = await tasks.updateFields(
       id,

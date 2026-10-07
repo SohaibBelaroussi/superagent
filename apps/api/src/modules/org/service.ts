@@ -26,6 +26,14 @@ function isUniqueViolation(error: unknown): boolean {
   return e?.code === '23505' || e?.cause?.code === '23505';
 }
 
+/** What other modules need to know or say about organization changes. */
+export interface OrgHooks {
+  /** Why an agent can't be archived right now, if it can't (dispatch knows about its runs). */
+  archiveBlocker?: (agent: AgentEntry) => Promise<{ code: string; message: string } | undefined>;
+  /** A department was archived (its schedules pause). */
+  departmentArchived?: (departmentId: string) => Promise<void>;
+}
+
 /** Departments and agent definitions: validation, versioning, and keeping the live agents in sync. */
 export class OrgService {
   constructor(
@@ -37,6 +45,7 @@ export class OrgService {
     private readonly logger: IMastraLogger,
     /** Shared with settings updates and provider deletion: model references must not race a delete. */
     private readonly configLock: Mutex,
+    private readonly hooks: OrgHooks = {},
   ) {}
 
   // --- departments ---
@@ -103,6 +112,7 @@ export class OrgService {
       .set({ archivedAt: new Date(), updatedAt: new Date() })
       .where(eq(departments.id, id));
     await this.directory.reload();
+    await this.hooks.departmentArchived?.(id);
     this.logger.info('Department archived', { departmentId: id });
   }
 
@@ -239,6 +249,9 @@ export class OrgService {
 
   private async archiveAgentLocked(id: string): Promise<void> {
     const agent = this.activeAgent(id);
+    // Deciding a call needs its agent: once archived, a call it waits on could never be decided.
+    const blocker = await this.hooks.archiveBlocker?.(agent);
+    if (blocker) throw new ApiError(409, blocker.code, blocker.message);
     await this.db
       .update(agentDefinitions)
       .set({ archivedAt: new Date(), updatedAt: new Date() })
@@ -285,15 +298,6 @@ export class OrgService {
       if (seen.has(grant.key))
         throw new ApiError(400, 'duplicate_tool', `Tool "${grant.key}" is listed twice`);
       seen.add(grant.key);
-      // Mastra would pause the run before the call, and nothing can approve it until the attention
-      // inbox exists: the agent would just stop answering.
-      if (grant.requireApproval) {
-        throw new ApiError(
-          400,
-          'approval_not_available',
-          `Tool approvals arrive with the attention inbox (M5). Grant "${grant.key}" without requireApproval for now.`,
-        );
-      }
     }
   }
 
