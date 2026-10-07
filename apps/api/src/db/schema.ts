@@ -1,5 +1,16 @@
 // Tables owned by superagent live in the `app` schema. Mastra keeps its own tables in `mastra`.
-import { boolean, jsonb, pgSchema, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import {
+  boolean,
+  integer,
+  jsonb,
+  pgSchema,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 export const app = pgSchema('app');
 
@@ -58,3 +69,64 @@ export const settings = app.table('settings', {
   value: jsonb('value').notNull(),
   updatedAt: updatedAt(),
 });
+
+/** Departments group a lead agent and its specialists. Archived, never deleted. */
+export const departments = app.table('departments', {
+  id: uuid('id').primaryKey(),
+  slug: text('slug').notNull().unique(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  autoClose: boolean('auto_close').notNull().default(false),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+  archivedAt: timestamp('archived_at', { withTimezone: true }),
+});
+
+export type DepartmentRow = typeof departments.$inferSelect;
+
+/**
+ * Agent definitions are ours (decision D14) and compile into Mastra agents. `key` becomes the Mastra
+ * agent id and the `agent-<key>` delegation tool name, so it never changes. One active lead per department.
+ */
+export const agentDefinitions = app.table(
+  'agent_definitions',
+  {
+    id: uuid('id').primaryKey(),
+    key: text('key').notNull().unique(),
+    name: text('name').notNull(),
+    role: text('role', { enum: ['lead', 'specialist'] }).notNull(),
+    departmentId: uuid('department_id')
+      .notNull()
+      .references(() => departments.id),
+    activeVersion: integer('active_version').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('agent_definitions_one_active_lead')
+      .on(table.departmentId)
+      .where(sql`${table.role} = 'lead' and ${table.archivedAt} is null`),
+  ],
+);
+
+export type AgentDefinitionRow = typeof agentDefinitions.$inferSelect;
+
+/** Immutable versions of an agent's behaviour. Editing creates a new version; rollback activates an old one. */
+export const agentVersions = app.table(
+  'agent_versions',
+  {
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agentDefinitions.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    description: text('description').notNull(),
+    instructions: text('instructions').notNull(),
+    model: jsonb('model').$type<{ provider: string; model: string } | null>(),
+    tools: jsonb('tools').$type<Array<{ key: string; requireApproval: boolean }>>().notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [primaryKey({ columns: [table.agentId, table.version] })],
+);
+
+export type AgentVersionRow = typeof agentVersions.$inferSelect;

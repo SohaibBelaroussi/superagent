@@ -1,0 +1,88 @@
+# M2 walkthrough: departments, versioned agents, the tool catalog, delegation.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Prerequisite: a provider and the default model role (see m1-providers.http).
+# For the web tools: docker compose up -d searxng crawl4ai (CRAWL4AI_API_TOKEN set in .env).
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+
+### Tools an agent can be granted
+GET {{baseUrl}}/v1/catalog/tools
+Authorization: Bearer {{token}}
+
+### Create a department
+# @name department
+POST {{baseUrl}}/v1/departments
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "slug": "research", "name": "Research", "description": "Finds and summarizes information from the web." }
+
+### Its lead. A lead's team is the department's specialists (delegation tools agent-<key>).
+# @name lead
+POST {{baseUrl}}/v1/agents
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "key": "research-lead",
+  "name": "Research lead",
+  "role": "lead",
+  "departmentId": "{{department.response.body.id}}",
+  "description": "Plans research and reviews findings.",
+  "instructions": "Delegate web lookups to the web researcher. Answer in at most five sentences.",
+  "tools": [{ "key": "current_time" }]
+}
+
+### A specialist with the web tools
+# @name specialist
+POST {{baseUrl}}/v1/agents
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "key": "web-researcher",
+  "name": "Web researcher",
+  "role": "specialist",
+  "departmentId": "{{department.response.body.id}}",
+  "description": "Searches the web and reads pages; returns facts with source URLs.",
+  "instructions": "Use web_search first, then fetch_page on the best result. Always list sources.",
+  "tools": [{ "key": "web_search" }, { "key": "fetch_page" }]
+}
+
+### Both are live right away
+GET {{baseUrl}}/api/agents
+Authorization: Bearer {{token}}
+
+### Ask the lead: it delegates to the specialist, who searches the web
+POST {{baseUrl}}/api/agents/research-lead/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "messages": [{ "role": "user", "content": "What is the Mastra framework? Give one source URL." }] }
+
+### Edit the specialist: creates and activates version 2, applies to the next run
+PATCH {{baseUrl}}/v1/agents/{{specialist.response.body.id}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "instructions": "Use web_search, then summarize in two bullet points with sources." }
+
+### Version history
+GET {{baseUrl}}/v1/agents/{{specialist.response.body.id}}/versions
+Authorization: Bearer {{token}}
+
+### Roll back to version 1
+POST {{baseUrl}}/v1/agents/{{specialist.response.body.id}}/versions/1/activate
+Authorization: Bearer {{token}}
+
+### The chief of staff knows the organization
+POST {{baseUrl}}/api/agents/chief/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "messages": [{ "role": "user", "content": "Which department can research things for me?" }] }
+
+### The department with its lead and team
+GET {{baseUrl}}/v1/departments/{{department.response.body.id}}
+Authorization: Bearer {{token}}

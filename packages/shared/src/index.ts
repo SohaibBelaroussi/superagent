@@ -200,3 +200,131 @@ export const UpdateSettingsInputSchema = z.object({
   concurrency: ConcurrencySchema.partial().optional(),
 });
 export type UpdateSettingsInput = z.infer<typeof UpdateSettingsInputSchema>;
+
+// --- Departments and agents (M2) ---
+
+/** Agent keys become Mastra agent ids and the `agent-<key>` tool name leads use to delegate. */
+export const AgentKeySchema = z
+  .string()
+  .regex(/^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/, 'lowercase letters, digits and dashes (max 48)');
+
+export const DepartmentSlugSchema = z
+  .string()
+  .regex(/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/, 'lowercase letters, digits and dashes (max 40)');
+
+export const AgentRoleSchema = z.enum(['lead', 'specialist']);
+export type AgentRole = z.infer<typeof AgentRoleSchema>;
+
+export const ToolGrantSchema = z.object({
+  key: z.string().min(1).describe('Tool key from GET /v1/catalog/tools'),
+  requireApproval: z
+    .boolean()
+    .default(false)
+    .describe('Pause for the owner before each call. Approvals arrive in M5; until then true is rejected.'),
+});
+export type ToolGrant = z.infer<typeof ToolGrantSchema>;
+
+export const AgentVersionSchema = z.object({
+  version: z.number().int(),
+  description: z.string(),
+  instructions: z.string(),
+  model: ModelRefSchema.nullable().describe('null: use the default model role'),
+  tools: z.array(ToolGrantSchema),
+  createdAt: z.string(),
+});
+export type AgentVersion = z.infer<typeof AgentVersionSchema>;
+
+export const AgentSummarySchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  name: z.string(),
+  role: AgentRoleSchema,
+  description: z.string(),
+});
+export type AgentSummary = z.infer<typeof AgentSummarySchema>;
+
+export const AgentDefinitionSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  name: z.string(),
+  role: AgentRoleSchema,
+  departmentId: z.string(),
+  activeVersion: z.number().int(),
+  current: AgentVersionSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().nullable(),
+});
+export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
+
+export const AgentListSchema = z.object({ items: z.array(AgentDefinitionSchema) });
+export const AgentVersionListSchema = z.object({ items: z.array(AgentVersionSchema) });
+
+const InstructionsSchema = z.string().trim().min(1).max(20_000);
+const DescriptionSchema = z.string().trim().min(1).max(500);
+
+export const CreateAgentInputSchema = z.object({
+  key: AgentKeySchema,
+  name: z.string().trim().min(1).max(100),
+  role: AgentRoleSchema,
+  departmentId: z.string().min(1),
+  description: DescriptionSchema.describe(
+    'What this agent is good at; the lead uses it to choose a specialist',
+  ),
+  instructions: InstructionsSchema,
+  model: ModelRefSchema.nullable().default(null),
+  tools: z.array(ToolGrantSchema).max(50).default([]),
+});
+export type CreateAgentInput = z.infer<typeof CreateAgentInputSchema>;
+
+/** Changing description, instructions, model or tools creates and activates a new version. */
+export const UpdateAgentInputSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  description: DescriptionSchema.optional(),
+  instructions: InstructionsSchema.optional(),
+  model: ModelRefSchema.nullable().optional(),
+  tools: z.array(ToolGrantSchema).max(50).optional(),
+});
+export type UpdateAgentInput = z.infer<typeof UpdateAgentInputSchema>;
+
+export const DepartmentSchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  name: z.string(),
+  description: z.string(),
+  autoClose: z.boolean().describe('Close finished tasks without owner review (used from M3)'),
+  lead: AgentSummarySchema.nullable(),
+  members: z.array(AgentSummarySchema).describe('Active specialists'),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().nullable(),
+});
+export type Department = z.infer<typeof DepartmentSchema>;
+
+export const DepartmentListSchema = z.object({ items: z.array(DepartmentSchema) });
+
+export const CreateDepartmentInputSchema = z.object({
+  slug: DepartmentSlugSchema,
+  name: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(1000).default(''),
+  autoClose: z.boolean().default(false),
+});
+export type CreateDepartmentInput = z.infer<typeof CreateDepartmentInputSchema>;
+
+export const UpdateDepartmentInputSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  description: z.string().trim().max(1000).optional(),
+  autoClose: z.boolean().optional(),
+});
+export type UpdateDepartmentInput = z.infer<typeof UpdateDepartmentInputSchema>;
+
+// --- Tool catalog (M2) ---
+
+export const CatalogToolSchema = z.object({
+  key: z.string(),
+  pack: z.string(),
+  description: z.string(),
+});
+export type CatalogTool = z.infer<typeof CatalogToolSchema>;
+
+export const CatalogToolListSchema = z.object({ items: z.array(CatalogToolSchema) });

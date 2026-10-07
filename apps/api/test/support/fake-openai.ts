@@ -81,11 +81,29 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
       let delta: Record<string, unknown>;
       let finish: string;
       if (tools.length > 0 && !toolResult) {
+        // Behave like a cooperative model: delegate first, then search, then use any other tool.
+        const tool =
+          tools.find((t) => t.startsWith('agent-')) ??
+          tools.find((t) => t === 'web_search') ??
+          tools.find((t) => t !== 'current_time') ??
+          (tools[0] as string);
+        const args = tool.startsWith('agent-')
+          ? { prompt: 'Find out what Mastra is and return two sources.' }
+          : tool === 'web_search'
+            ? { query: 'mastra agent framework' }
+            : tool === 'fetch_page'
+              ? { url: 'https://example.com/' }
+              : {};
         delta = {
           role: 'assistant',
           content: null,
           tool_calls: [
-            { index: 0, id: 'call_1', type: 'function', function: { name: tools[0], arguments: '{}' } },
+            {
+              index: 0,
+              id: 'call_1',
+              type: 'function',
+              function: { name: tool, arguments: JSON.stringify(args) },
+            },
           ],
         };
         finish = 'tool_calls';

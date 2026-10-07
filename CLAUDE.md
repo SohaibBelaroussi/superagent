@@ -29,6 +29,9 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 - **Agent definitions are ours.** They live in our tables and compile into Mastra `Agent`s. Swap with `removeAgent` + `addAgent`; `addAgent` silently ignores duplicate ids.
 - **Models.** Agents reference models as `sa/<provider-slug>/<model-id>`, resolved by our gateway from the providers table, or through a settings role (`settings.modelRouterId(role)`). Set every internal model explicitly; observational memory defaults to a Google model.
 - **Secrets.** Provider keys and headers are sealed with `SecretBox` (AES-256-GCM, context-bound) using `SUPERAGENT_ENCRYPTION_KEY`. Never return or log them.
+- **Organization.** Departments and versioned agent definitions live in our tables (`OrgDirectory` keeps an in-memory view, `AgentRuntime` compiles them into Mastra agents). A lead's team is its department's specialists; specialists see only the delegation prompt.
+- **Tools.** Agents get tools from the code-defined `ToolCatalog`. Anything that fetches a URL for an agent must go through `await assertPublicUrl(url)` (no internal or private addresses; names are resolved and every address checked). A tool that fetches directly must also follow redirects manually and check each hop.
+- **Config writes.** Settings updates, provider deletion and every organization write (departments and agents) run under `settings.lock`.
 - **Errors.** `/v1` errors are problem+json: throw `ApiError`, or return `problem()`.
 - **Schemas.** zod 4 everywhere. Request and response schemas go in `packages/shared`.
 - **Tests.** Agent flows use the scripted mock model (`apps/api/test/support/mock-model.ts`). Database tests use `startTestSystem()` from `apps/api/test/int/helpers.ts` (Testcontainers, one database per file).
