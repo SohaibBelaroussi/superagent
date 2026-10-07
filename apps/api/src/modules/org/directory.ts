@@ -43,12 +43,21 @@ export interface AgentEntry {
 export class OrgDirectory {
   private departmentsById = new Map<string, DepartmentEntry>();
   private agentsById = new Map<string, AgentEntry>();
-  private generation = 0;
+  private reloading: Promise<void> = Promise.resolve();
 
   constructor(private readonly db: Db) {}
 
-  async reload(): Promise<void> {
-    const generation = ++this.generation;
+  /**
+   * Re-reads the organization. Reloads run one after another, each from a fresh snapshot, so when it
+   * resolves the directory includes every write committed before the call (callers rely on seeing their own).
+   */
+  reload(): Promise<void> {
+    const next = this.reloading.catch(() => {}).then(() => this.load());
+    this.reloading = next;
+    return next;
+  }
+
+  private async load(): Promise<void> {
     // One snapshot, so agents always match their departments.
     const { departmentRows, agentRows } = await this.db.transaction(
       async (tx) => ({
@@ -66,8 +75,6 @@ export class OrgDirectory {
       }),
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );
-    // A reload that started later has (or will have) a fresher view; never let an older one win.
-    if (generation !== this.generation) return;
     this.departmentsById = new Map(departmentRows.map((d) => [d.id, { ...d }]));
     this.agentsById = new Map(
       agentRows.map(({ agent, version }) => [

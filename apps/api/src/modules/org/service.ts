@@ -47,7 +47,11 @@ export class OrgService {
     return department;
   }
 
-  async createDepartment(input: CreateDepartmentInput): Promise<DepartmentEntry> {
+  createDepartment(input: CreateDepartmentInput): Promise<DepartmentEntry> {
+    return this.configLock.run(() => this.createDepartmentLocked(input));
+  }
+
+  private async createDepartmentLocked(input: CreateDepartmentInput): Promise<DepartmentEntry> {
     const id = uuidv7();
     try {
       await this.db.insert(departments).values({ id, ...input });
@@ -66,7 +70,11 @@ export class OrgService {
     return this.getDepartment(id);
   }
 
-  async updateDepartment(id: string, input: UpdateDepartmentInput): Promise<DepartmentEntry> {
+  updateDepartment(id: string, input: UpdateDepartmentInput): Promise<DepartmentEntry> {
+    return this.configLock.run(() => this.updateDepartmentLocked(id, input));
+  }
+
+  private async updateDepartmentLocked(id: string, input: UpdateDepartmentInput): Promise<DepartmentEntry> {
     this.activeDepartment(id);
     await this.db
       .update(departments)
@@ -76,7 +84,11 @@ export class OrgService {
     return this.getDepartment(id);
   }
 
-  async archiveDepartment(id: string): Promise<void> {
+  archiveDepartment(id: string): Promise<void> {
+    return this.configLock.run(() => this.archiveDepartmentLocked(id));
+  }
+
+  private async archiveDepartmentLocked(id: string): Promise<void> {
     this.activeDepartment(id);
     const active = this.directory.agents({ departmentId: id });
     if (active.length > 0) {
@@ -221,7 +233,11 @@ export class OrgService {
     return this.refresh(id, 'Agent version activated');
   }
 
-  async archiveAgent(id: string): Promise<void> {
+  archiveAgent(id: string): Promise<void> {
+    return this.configLock.run(() => this.archiveAgentLocked(id));
+  }
+
+  private async archiveAgentLocked(id: string): Promise<void> {
     const agent = this.activeAgent(id);
     await this.db
       .update(agentDefinitions)
@@ -237,7 +253,9 @@ export class OrgService {
   private async refresh(id: string, message: string): Promise<AgentEntry> {
     await this.directory.reload();
     const entry = this.getAgent(id);
-    this.runtime.upsert(entry);
+    // Never bring an archived agent back to life, whatever raced with the archive.
+    if (entry.archivedAt) this.runtime.remove(entry.key);
+    else this.runtime.upsert(entry);
     this.logger.info(message, { agentId: id, key: entry.key, version: entry.activeVersion });
     return entry;
   }
@@ -267,6 +285,15 @@ export class OrgService {
       if (seen.has(grant.key))
         throw new ApiError(400, 'duplicate_tool', `Tool "${grant.key}" is listed twice`);
       seen.add(grant.key);
+      // Mastra would pause the run before the call, and nothing can approve it until the attention
+      // inbox exists: the agent would just stop answering.
+      if (grant.requireApproval) {
+        throw new ApiError(
+          400,
+          'approval_not_available',
+          `Tool approvals arrive with the attention inbox (M5). Grant "${grant.key}" without requireApproval for now.`,
+        );
+      }
     }
   }
 

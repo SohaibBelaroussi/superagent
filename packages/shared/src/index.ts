@@ -220,7 +220,7 @@ export const ToolGrantSchema = z.object({
   requireApproval: z
     .boolean()
     .default(false)
-    .describe('Pause for the owner before each call (enforced from M5)'),
+    .describe('Pause for the owner before each call. Approvals arrive in M5; until then true is rejected.'),
 });
 export type ToolGrant = z.infer<typeof ToolGrantSchema>;
 

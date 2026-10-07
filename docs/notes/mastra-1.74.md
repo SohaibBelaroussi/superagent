@@ -452,6 +452,13 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 
 **Live result:** the owner's model led a research department, delegated to the web researcher, and produced a sourced answer via the real SearXNG.
 
+**From the M2 review:**
+- **A thrown tool error doesn't end the run.** Mastra returns the error message to the model as the tool result and the run goes on. [spike]
+- **`requireApproval` is enforced as soon as it's set.** The run ends with `finishReason: 'suspended'` and empty text. Without an approval route the agent just stops answering, so `true` is rejected until M5. [spike]
+- **Tools always get an abort signal on HTTP-driven runs.** The hono adapter passes the request's signal and delegation forwards it, so `signal ?? AbortSignal.timeout(ms)` never times out. Combine them with `AbortSignal.any`. [spike]
+- **Crawl4AI 0.9.4 guards its own fetches.** It resolves each host once, pins the IP and refuses non-global addresses, for the first URL and every redirect. `assertPublicUrl` is our own first line: it resolves names too, and strips trailing dots (`postgres.` is `postgres`). [spike]
+- **Directory reloads must not skip.** Returning early from a superseded reload let a caller miss its own write. Reloads now run one after another.
+
 ## 15. From earlier research, needed in later milestones
 
 - **DockerSandbox 0.9.2:**

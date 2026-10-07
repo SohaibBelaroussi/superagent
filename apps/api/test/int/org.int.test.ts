@@ -122,6 +122,11 @@ describe('departments and agents', () => {
         'duplicate_tool',
       ],
       [{ ...base, key: 'x-agent', model: { provider: 'nope', model: 'x' } }, 400, 'unknown_provider'],
+      [
+        { ...base, key: 'x-agent', tools: [{ key: 'web_search', requireApproval: true }] },
+        400,
+        'approval_not_available',
+      ],
       [{ ...base, key: 'web-researcher' }, 409, 'agent_key_taken'],
       [{ ...base, key: 'second-lead', role: 'lead' }, 409, 'lead_exists'],
     ];
@@ -210,6 +215,45 @@ describe('departments and agents', () => {
     expect(((await blocked.json()) as { detail: string }).detail).toContain('agent "research-lead"');
   });
 
+  it('keeps every write visible when organization writes overlap', async () => {
+    const [ops, finance, patched, helper] = await Promise.all([
+      send('POST', '/v1/departments', { slug: 'ops', name: 'Operations' }),
+      send('POST', '/v1/departments', { slug: 'finance', name: 'Finance' }),
+      send('PATCH', `/v1/departments/${department.id}`, { description: 'Finds, checks and summarizes.' }),
+      send('POST', '/v1/agents', {
+        key: 'fact-checker',
+        name: 'Fact checker',
+        role: 'specialist',
+        departmentId: department.id,
+        description: 'Checks claims.',
+        instructions: 'Be strict.',
+      }),
+    ]);
+    expect([ops.status, finance.status, patched.status, helper.status]).toEqual([201, 201, 200, 201]);
+    expect(((await patched.json()) as Department).description).toBe('Finds, checks and summarizes.');
+    expect(Object.keys((await (await send('GET', '/api/agents')).json()) as object)).toContain(
+      'fact-checker',
+    );
+
+    // An edit racing an archive never brings the agent back.
+    const checker = (await helper.json()) as AgentDefinition;
+    const [archived, edited] = await Promise.all([
+      send('DELETE', `/v1/agents/${checker.id}`),
+      send('PATCH', `/v1/agents/${checker.id}`, { instructions: 'Be very strict.' }),
+    ]);
+    expect(archived.status).toBe(204);
+    expect([200, 409]).toContain(edited.status);
+    expect(Object.keys((await (await send('GET', '/api/agents')).json()) as object)).not.toContain(
+      'fact-checker',
+    );
+
+    for (const res of [ops, finance]) {
+      expect((await send('DELETE', `/v1/departments/${((await res.json()) as Department).id}`)).status).toBe(
+        204,
+      );
+    }
+  });
+
   it('archives agents and departments', async () => {
     expect((await send('DELETE', `/v1/departments/${department.id}`)).status).toBe(409);
 
@@ -230,6 +274,6 @@ describe('departments and agents', () => {
     const all = (await (await send('GET', '/v1/departments?includeArchived=true')).json()) as {
       items: Department[];
     };
-    expect(all.items.map((d) => d.slug)).toEqual(['research']);
+    expect(all.items.map((d) => d.slug)).toEqual(['finance', 'ops', 'research']);
   });
 });
