@@ -2,7 +2,7 @@ import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi';
 import { AttentionListSchema, type Decision, DecisionInputSchema, DecisionSchema } from '@superagent/shared';
 import type { DecisionRow } from '../../db/schema';
 import { optionalJsonBody } from '../../http/body';
-import { ApiError, problemResponse } from '../../http/problem';
+import { problemResponse } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 
 function toDecision(row: DecisionRow): Decision {
@@ -10,9 +10,9 @@ function toDecision(row: DecisionRow): Decision {
     id: row.id,
     kind: row.kind,
     target: row.target,
+    reason: row.reason,
     status: row.status,
     taskId: row.taskId,
-    error: row.error,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -27,6 +27,7 @@ const decisionRequest = {
   headers: z.object({
     'idempotency-key': z
       .string()
+      .min(1)
       .max(200)
       .optional()
       .describe('Retrying with the same key returns the first outcome instead of deciding twice'),
@@ -36,7 +37,7 @@ const decisionResponses = {
   200: json(DecisionSchema, 'The decision, applied'),
   404: problemResponse('Nothing waits for a decision under this id'),
   409: problemResponse('The call was decided already, or the key was used for another decision'),
-  500: problemResponse('The decision could not be applied'),
+  500: problemResponse('The decision could not be applied; nothing changed, so it can be retried'),
 };
 
 const listAttention = createRoute({
@@ -79,13 +80,7 @@ export function registerAttentionRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps):
     kind: 'approve' | 'decline',
     reason: string | undefined,
     key: string | undefined,
-  ) => {
-    const row = await decisions.decide(id, kind, reason, key, 'owner');
-    if (row.status === 'failed') {
-      throw new ApiError(500, 'decision_failed', row.error ?? 'The decision could not be applied');
-    }
-    return toDecision(row);
-  };
+  ) => toDecision(await decisions.decide(id, kind, reason, key, 'owner'));
 
   v1.openapi(approve, async (c) => {
     const { id } = c.req.valid('param');

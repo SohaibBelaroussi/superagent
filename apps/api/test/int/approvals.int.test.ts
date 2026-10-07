@@ -9,6 +9,7 @@ import type {
 } from '@superagent/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { System } from '../../src/bootstrap';
+import { decisions } from '../../src/db/schema';
 import { type FakeOpenAI, type RecordedRequest, startFakeOpenAI } from '../support/fake-openai';
 import { type FakeWeb, startFakeWeb } from '../support/fake-web';
 import { jsonHeaders, startTestSystem } from './helpers';
@@ -138,6 +139,14 @@ describe('approvals and attention', () => {
     const message = await send('POST', `/v1/tasks/${task.id}/messages`, { message: 'Hurry up.' });
     expect(message.status).toBe(409);
     expect(await message.json()).toMatchObject({ code: 'approval_pending' });
+    // Refused before anything is written: the title stays.
+    const patched = await send('PATCH', `/v1/tasks/${task.id}`, { title: 'Renamed', phase: 'queued' });
+    expect(patched.status).toBe(409);
+    expect(((await (await send('GET', `/v1/tasks/${task.id}`)).json()) as Task).title).toBe('Gated search');
+    const emptyKey = await send('POST', `/v1/attention/${encodeURIComponent(item.id)}/approve`, undefined, {
+      'idempotency-key': '',
+    });
+    expect(emptyKey.status).toBe(400);
 
     const approved = await decide(item, 'approve', undefined, 'decision-1');
     expect(approved.status).toBe(200);
@@ -205,14 +214,40 @@ describe('approvals and attention', () => {
     expect(told).toBe(true);
   });
 
-  it('declines what a cancelled task was waiting for', async () => {
-    const { task } = await gatedTask('Cancelled while waiting');
+  it('declines what a cancelled task was waiting for, for good', async () => {
+    const searches = web.searches.length;
+    const { task, item } = await gatedTask('Cancelled while waiting');
     expect((await send('POST', `/v1/tasks/${task.id}/cancel`)).status).toBe(200);
-    await waitFor(
-      async () => (await attention()).some((i) => i.kind === 'approval' && i.taskId === task.id),
-      (waiting) => !waiting,
-      'approval gone',
-    );
+    // Gone at once, and recorded: it can't be approved afterwards.
+    expect((await attention()).some((i) => i.kind === 'approval' && i.taskId === task.id)).toBe(false);
+    const late = await decide(item, 'approve');
+    expect(late.status).toBe(409);
+    expect(await late.json()).toMatchObject({ code: 'already_decided' });
+    expect(web.searches.length).toBe(searches);
+  });
+
+  it("stops the lead after declining a cancelled task's call, after a restart too", async () => {
+    const searches = web.searches.length;
+    const { task, item } = await gatedTask('Cancelled after a restart');
+    const databaseUrl = system.config.DATABASE_URL;
+    await system.close();
+    await boot(databaseUrl);
+
+    const mark = fake.requests.length;
+    expect((await send('POST', `/v1/tasks/${task.id}/cancel`)).status).toBe(200);
+    expect((await decide(item, 'approve')).status).toBe(409);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // The decline resumes the lead's turn, which is stopped at once: no more model calls for the task.
+    const calls = fake.requests
+      .slice(mark)
+      .filter(
+        (r: RecordedRequest) =>
+          r.path === '/chat/completions' &&
+          JSON.stringify(r.body?.messages).includes('Cancelled after a restart'),
+      );
+    expect(calls).toHaveLength(0);
+    expect(web.searches.length).toBe(searches);
+    expect(((await (await send('GET', `/v1/tasks/${task.id}`)).json()) as Task).phase).toBe('cancelled');
   });
 
   it('keeps a pending approval across a restart', async () => {
@@ -227,6 +262,55 @@ describe('approvals and attention', () => {
     const res = await decide(after as AttentionItem, 'approve');
     expect(res.status).toBe(200);
     await waitForPhase(task.id, 'review');
+  });
+
+  it('never offers a decided call again when a restart cut its run short', async () => {
+    const searches = web.searches.length;
+    const res = await send('POST', '/v1/tasks', {
+      departmentId: ops.id,
+      title: 'Cut short',
+      brief: 'Look up the Mastra framework. [slow]',
+    });
+    const task = (await res.json()) as Task;
+    await waitFor(
+      () => eventsOf(task.id),
+      (events) => events.some((e) => e.type === 'approval_requested'),
+      'approval',
+    );
+    const item = (await waitFor(
+      async () => (await attention()).find((i) => i.kind === 'approval' && i.taskId === task.id),
+      Boolean,
+      'attention item',
+    )) as AttentionItem;
+    expect((await decide(item, 'approve')).status).toBe(200);
+    // Stop while the approved run is still going: Mastra keeps its snapshot as suspended.
+    const databaseUrl = system.config.DATABASE_URL;
+    await system.close();
+    await boot(databaseUrl);
+
+    expect((await attention()).some((i) => i.kind === 'approval' && i.taskId === task.id)).toBe(false);
+    const again = await decide(item, 'approve');
+    expect(again.status).toBe(409);
+    // Flagged as interrupted instead, for the owner to pick up.
+    const flagged = (await (await send('GET', `/v1/tasks/${task.id}`)).json()) as Task;
+    expect(flagged.phase).toBe('waiting');
+    expect(web.searches.length).toBeLessThanOrEqual(searches + 1);
+  });
+
+  it('never offers a call the decisions log has, whatever Mastra still lists', async () => {
+    const { task, item } = await gatedTask('Decided elsewhere');
+    // As if the server had died while carrying out this decision: Mastra still lists the call.
+    await system.db.insert(decisions).values({
+      id: '01900000-0000-7000-8000-00000000d001',
+      idempotencyKey: 'crashed-decision',
+      kind: 'approve',
+      target: item.id,
+      status: 'pending',
+      taskId: task.id,
+    });
+    expect((await attention()).some((i) => i.kind === 'approval' && i.taskId === task.id)).toBe(false);
+    expect((await decide(item, 'approve')).status).toBe(409);
+    expect((await send('POST', `/v1/tasks/${task.id}/cancel`)).status).toBe(200);
   });
 
   it('keeps a lead with a call waiting until the call is decided', async () => {
@@ -245,8 +329,12 @@ describe('approvals and attention', () => {
       })
     ).json()) as { id: string };
     const task = (await (
-      await send('POST', '/v1/tasks', { departmentId: audit.id, title: 'Audit', brief: 'Look it up.' })
+      await send('POST', '/v1/tasks', { departmentId: audit.id, title: 'Audit', brief: 'Look it up. [slow]' })
     ).json()) as Task;
+    // Its run is going: it could still stop for a call nobody could decide once the lead is gone.
+    const busy = await send('DELETE', `/v1/agents/${lead.id}`);
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toMatchObject({ code: 'agent_busy' });
     const item = (await waitFor(
       async () => (await attention()).find((i) => i.kind === 'approval' && i.taskId === task.id),
       Boolean,
@@ -258,7 +346,12 @@ describe('approvals and attention', () => {
 
     expect((await decide(item, 'decline', { reason: 'Not now' })).status).toBe(200);
     await waitForPhase(task.id, 'review');
-    expect((await send('DELETE', `/v1/agents/${lead.id}`)).status).toBe(204);
+    // Once its turn is over, the lead can go.
+    await waitFor(
+      async () => (await send('DELETE', `/v1/agents/${lead.id}`)).status,
+      (status) => status === 204,
+      'archive',
+    );
   });
 
   it('lists stalled tasks, questions and results to review', async () => {
@@ -280,16 +373,16 @@ describe('approvals and attention', () => {
         brief: 'Think. [no-report]',
       })
     ).json()) as Task;
+    const reviewed = (await (
+      await send('POST', '/v1/tasks', { departmentId: research.id, title: 'Reports', brief: 'Summarize.' })
+    ).json()) as Task;
     await waitForPhase(stalled.id, 'waiting');
-    const items = await waitFor(
-      attention,
-      (list) => list.some((i) => i.taskId === stalled.id),
-      'stalled item',
-    );
+    await waitForPhase(reviewed.id, 'review');
+    const items = await attention();
     expect(items.find((i) => i.taskId === stalled.id)).toMatchObject({
       kind: 'problem',
       detail: 'The lead finished its turn without reporting a result',
     });
-    expect(items.some((i) => i.kind === 'review')).toBe(true);
+    expect(items.find((i) => i.taskId === reviewed.id)).toMatchObject({ kind: 'review' });
   });
 });

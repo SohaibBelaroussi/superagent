@@ -1,7 +1,7 @@
 import type { AttentionItem } from '@superagent/shared';
 import type { TaskRow } from '../../db/schema';
 import { approvalId, type DispatchService, type PendingApproval } from '../dispatch/service';
-import type { TaskService } from '../ledger/service';
+import type { TaskService, TaskSignals } from '../ledger/service';
 import type { OrgDirectory } from '../org/directory';
 import type { ProviderService } from '../providers/service';
 import type { ScheduleService } from '../schedules/service';
@@ -18,7 +18,7 @@ export interface AttentionDeps {
   storageEnabled: boolean;
 }
 
-type Approval = PendingApproval & { task?: TaskRow; agentName: string; departmentId: string };
+type Approval = PendingApproval & { agentName: string; departmentId: string };
 
 /**
  * What needs the owner (decision D32), computed from live state on every read: tool calls waiting for
@@ -45,9 +45,12 @@ export class AttentionService {
     const waitingForApproval = new Set(
       approvals.flatMap((approval) => (approval.task ? [approval.task.id] : [])),
     );
-    for (const task of await this.deps.tasks.openTasks(['waiting', 'review', 'inbox'])) {
-      if (waitingForApproval.has(task.id)) continue;
-      const item = await this.taskItem(task);
+    const open = (await this.deps.tasks.openTasks(['waiting', 'review', 'inbox'])).filter(
+      (task) => !waitingForApproval.has(task.id),
+    );
+    const signals = await this.deps.tasks.lastSignals(open.map((task) => task.id));
+    for (const task of open) {
+      const item = this.taskItem(task, signals.get(task.id) ?? {});
       if (item) items.push(item);
     }
     items.push(...(await this.health()));
@@ -61,18 +64,16 @@ export class AttentionService {
   }
 
   private async approvals(): Promise<Approval[]> {
-    const leads = new Map(this.deps.directory.agents({ role: 'lead' }).map((lead) => [lead.key, lead]));
     const approvals: Approval[] = [];
     for (const approval of await this.deps.dispatch.listApprovals()) {
-      const lead = leads.get(approval.agentKey);
-      if (!lead) continue;
-      const task = approval.threadId ? await this.deps.tasks.getByThread(approval.threadId) : undefined;
-      approvals.push({ ...approval, agentName: lead.name, departmentId: lead.departmentId, task });
+      const agent = this.deps.directory.agentByKey(approval.agentKey);
+      if (!agent) continue;
+      approvals.push({ ...approval, agentName: agent.name, departmentId: agent.departmentId });
     }
     return approvals;
   }
 
-  private async taskItem(task: TaskRow): Promise<AttentionItem | undefined> {
+  private taskItem(task: TaskRow, signals: TaskSignals): AttentionItem | undefined {
     const base = {
       id: `task:${task.id}`,
       taskId: task.id,
@@ -81,40 +82,43 @@ export class AttentionService {
       agent: null,
       tool: null,
     };
-    const events = await this.deps.tasks.recentEvents(task.id, 20);
+    const text = (value: unknown) => (typeof value === 'string' ? value : null);
     if (task.phase === 'review') {
-      const report = events.findLast((e) => e.type === 'reported');
       return {
         ...base,
         kind: 'review',
         title: `#${task.number} ${task.title} is ready for review`,
-        detail: typeof report?.data.summary === 'string' ? report.data.summary : null,
+        detail: text(signals.reported?.data.summary),
         since: task.updatedAt.toISOString(),
       };
     }
     if (task.phase === 'waiting') {
-      const last = events.findLast(
-        (e) => e.type === 'reported' || (e.type === 'phase_changed' && e.data.to === 'waiting'),
-      );
+      const { reported, waiting } = signals;
+      const last = reported && (!waiting || reported.seq > waiting.seq) ? reported : waiting;
       const question = last?.type === 'reported' && last.data.outcome === 'blocked';
-      const detail = question ? last?.data.summary : last?.data.reason;
       return {
         ...base,
         kind: question ? 'question' : 'problem',
         title: question
           ? `#${task.number} ${task.title}: the lead needs you`
           : `#${task.number} ${task.title} stopped`,
-        detail: typeof detail === 'string' ? detail : null,
-        since: last?.createdAt ?? task.updatedAt.toISOString(),
+        detail: text(question ? last?.data.summary : last?.data.reason),
+        since: (last?.createdAt ?? task.updatedAt).toISOString(),
       };
     }
-    if (task.phase === 'inbox' && events.some((e) => e.type === 'not_dispatched')) {
+    if (task.phase === 'inbox' && signals.notDispatched) {
+      const { data, createdAt } = signals.notDispatched;
+      const hasLead = Boolean(this.deps.directory.leadOf(task.departmentId));
       return {
         ...base,
         kind: 'problem',
-        title: `#${task.number} ${task.title} has nobody to work on it`,
-        detail: 'Its department has no lead',
-        since: task.createdAt.toISOString(),
+        title: hasLead
+          ? `#${task.number} ${task.title} waits in the inbox`
+          : `#${task.number} ${task.title} has nobody to work on it`,
+        detail: hasLead
+          ? `${data.cause === 'no_lead' ? 'Its department has a lead now' : `It could not be sent: ${text(data.reason) ?? 'unknown error'}`}. Send it to the lead (phase "queued").`
+          : 'Its department has no lead',
+        since: createdAt.toISOString(),
       };
     }
     return undefined;
@@ -175,12 +179,12 @@ export class AttentionService {
     }
     const active = (await this.deps.schedules.list()).filter((s) => s.status === 'active');
     for (const departmentId of new Set(active.map((s) => s.departmentId))) {
-      if (this.deps.directory.leadOf(departmentId)) continue;
       const department = this.deps.directory.department(departmentId);
+      if (!department || department.archivedAt || this.deps.directory.leadOf(departmentId)) continue;
       items.push(
         item(
           `schedules-${departmentId}`,
-          `${department?.name ?? 'A department'} has schedules but no lead`,
+          `${department.name} has schedules but no lead`,
           'Their tasks wait in the inbox until the department has a lead.',
           departmentId,
         ),

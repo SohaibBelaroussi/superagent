@@ -1,22 +1,17 @@
 import type { IMastraLogger } from '@mastra/core/logger';
-import { and, eq } from 'drizzle-orm';
-import { v7 as uuidv7 } from 'uuid';
-import type { Db } from '../../db/client';
-import { type DecisionRow, decisions } from '../../db/schema';
+import type { DecisionRow } from '../../db/schema';
 import { ApiError } from '../../http/problem';
-import { Mutex } from '../../util/mutex';
+import type { DecisionLog } from '../dispatch/decisions';
 import type { DispatchService } from '../dispatch/service';
 import type { AttentionService } from './service';
 
 /**
- * The owner's decisions on attention items (decision D32). Each is recorded; a retry with the same
- * idempotency key returns the first outcome instead of deciding twice.
+ * The owner's decisions on attention items (decision D32). Each is recorded before it is applied; a
+ * retry with the same idempotency key returns the first outcome instead of deciding twice.
  */
 export class DecisionService {
-  private readonly lock = new Mutex();
-
   constructor(
-    private readonly db: Db,
+    private readonly log: DecisionLog,
     private readonly attention: AttentionService,
     private readonly dispatch: DispatchService,
     private readonly logger: IMastraLogger,
@@ -29,12 +24,9 @@ export class DecisionService {
     idempotencyKey: string | undefined,
     actorLabel: string,
   ): Promise<DecisionRow> {
-    return this.lock.run(async () => {
-      if (idempotencyKey) {
-        const [existing] = await this.db
-          .select()
-          .from(decisions)
-          .where(eq(decisions.idempotencyKey, idempotencyKey));
+    return this.log.lock.run(async () => {
+      if (idempotencyKey !== undefined) {
+        const existing = await this.log.byKey(idempotencyKey);
         if (existing) {
           if (existing.target !== target || existing.kind !== kind) {
             throw new ApiError(
@@ -46,51 +38,39 @@ export class DecisionService {
           return existing;
         }
       }
-      const [decided] = await this.db
-        .select()
-        .from(decisions)
-        .where(and(eq(decisions.target, target), eq(decisions.status, 'applied')))
-        .limit(1);
-      if (decided) {
+      const earlier = await this.log.of(target);
+      if (earlier) {
         throw new ApiError(
           409,
           'already_decided',
-          `This tool call was already ${decided.kind === 'approve' ? 'approved' : 'declined'}`,
+          `This tool call was already ${earlier.kind === 'approve' ? 'approved' : 'declined'}`,
         );
       }
       const approval = await this.attention.findApproval(target);
       if (!approval) {
-        throw new ApiError(
-          404,
-          'attention_item_not_found',
-          'Nothing waits for a decision under this id (it may be decided already)',
-        );
+        throw new ApiError(404, 'attention_item_not_found', 'Nothing waits for a decision under this id');
       }
-      let status: DecisionRow['status'] = 'applied';
-      let taskId: string | null = null;
-      let error: string | null = null;
+      const row = await this.log.begin({
+        target,
+        kind,
+        reason,
+        idempotencyKey,
+        taskId: approval.task?.id ?? null,
+      });
+      let taskId: string | null;
       try {
         taskId = (await this.dispatch.resolveApproval(approval, kind, reason, actorLabel))?.id ?? null;
       } catch (cause) {
-        status = 'failed';
-        error = cause instanceof Error ? cause.message : String(cause);
+        // Mastra refused it, so nothing ran: forget it, and the call can be decided again.
+        await this.log.abandon(row.id);
         this.logger.error('Applying a decision failed', { target, kind, error: cause });
+        throw new ApiError(
+          500,
+          'decision_failed',
+          `The decision could not be applied: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
       }
-      const [row] = await this.db
-        .insert(decisions)
-        .values({
-          id: uuidv7(),
-          idempotencyKey: idempotencyKey ?? uuidv7(),
-          kind,
-          target,
-          reason: reason ?? null,
-          status,
-          taskId,
-          error,
-        })
-        .returning();
-      if (!row) throw new Error('Decision insert returned no row');
-      return row;
+      return this.log.applied(row.id, taskId);
     });
   }
 }

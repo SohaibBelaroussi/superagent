@@ -526,7 +526,7 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - **Fires due at boot are lost:** the first tick claims the overdue row before the worker subscribes to the in-process pubsub, so there is no trigger row, hook or run. Several missed fires collapse into that one lost claim. A fire due during `stopWorkers` can be lost the same way. [spike]
 - **Schedules delete themselves:** a missing thread at fire time deletes the row; an unregistered agent gets it deleted after `scheduler.missesBeforeDelete` ticks (default 3), or at once on `run()`. `agentId` can't be updated, so replacing a lead means recreating its schedules. [spike]
 - `onFinish` fires as soon as the signal is accepted, not when the run ends. Without started workers, `run()` returns a claim id and nothing happens. [spike]
-- `computeNextFireAt(cron, { timezone, after })` and `validateCron(cron, timezone)` are exported from `@mastra/core/workflows`; we use them for our own schedules. [src]
+- `computeNextFireAt(cron, { timezone, after })` and `validateCron(cron, timezone)` are exported from `@mastra/core/workflows`; we use them for our own schedules. Six- and seven-field crons (seconds, years) validate, and `computeNextFireAt` throws ("has no future occurrence") once a year-limited cron has no fire left. [spike]
 
 **Tool approvals:**
 - A gated call (`requireApproval: true` in the grant) ends the stream with `finishReason: 'suspended'` and an empty text; `await output.suspendPayload` is `{ toolCallId, toolName, args, resumeSchema }`. The tool doesn't run. [spike]
@@ -539,6 +539,8 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - A specialist's gated tool suspends the lead's run too; `lead.listSuspendedRuns` lists it with the specialist's tool name and arguments, and approving the lead's run carries both on. [spike]
 - Approving or declining needs the agent registered (the snapshot names it). We refuse to archive a lead with calls waiting (409 `approvals_pending`). [spike]
 - A thrown tool error goes back to the model as the tool's result; the run carries on. [spike]
+- **Declining resumes the turn**, so after a restart (or the 30-minute sweep) a declined call's lead keeps working. Pass `abortSignal` to `declineToolCall` and abort it as soon as the call returns: the decline is kept and no model call follows. [spike]
+- A tool called directly (`tool.execute(input, context)`) returns `{ error: true, message }` for input that fails its schema instead of throwing; the model gets the same. [spike]
 - Mastra's own `/api/agents/:id/approve-tool-call` and `decline-tool-call` routes (and Studio) bypass our decisions log; a task resumed that way still reports through the ledger. [src]
 
 ## 18. From earlier research, needed in later milestones

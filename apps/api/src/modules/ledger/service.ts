@@ -15,6 +15,14 @@ import type { OrgDirectory } from '../org/directory';
 import type { EventBus, EventFilter } from './events';
 import { BOARD_PHASES, canTransition, OPEN_PHASES, type PhaseActor, TERMINAL_PHASES } from './phases';
 
+/** The events the attention inbox reads for a task (see TaskService.lastSignals). */
+export interface TaskSignals {
+  reported?: TaskEventRow;
+  /** The latest move to waiting. */
+  waiting?: TaskEventRow;
+  notDispatched?: TaskEventRow;
+}
+
 export interface NewTask {
   departmentId: string;
   title: string;
@@ -140,6 +148,46 @@ export class TaskService {
   async getByThread(threadId: string): Promise<TaskRow | undefined> {
     const [task] = await this.db.select().from(tasks).where(eq(tasks.threadId, threadId));
     return task;
+  }
+
+  /** The tasks on these threads, by thread id. */
+  async byThreads(threadIds: string[]): Promise<Map<string, TaskRow>> {
+    if (threadIds.length === 0) return new Map();
+    const rows = await this.db
+      .select()
+      .from(tasks)
+      .where(inArray(tasks.threadId, [...new Set(threadIds)]));
+    return new Map(rows.map((row) => [row.threadId, row]));
+  }
+
+  /**
+   * For each task, its latest report, its latest move to waiting and its latest failed dispatch: what
+   * the attention inbox says about it. One query for any number of tasks.
+   */
+  async lastSignals(taskIds: string[]): Promise<Map<string, TaskSignals>> {
+    const signals = new Map<string, TaskSignals>();
+    if (taskIds.length === 0) return signals;
+    const rows = await this.db
+      .selectDistinctOn([taskEvents.taskId, taskEvents.type])
+      .from(taskEvents)
+      .where(
+        and(
+          inArray(taskEvents.taskId, taskIds),
+          or(
+            inArray(taskEvents.type, ['reported', 'not_dispatched']),
+            and(eq(taskEvents.type, 'phase_changed'), sql`${taskEvents.data}->>'to' = 'waiting'`),
+          ),
+        ),
+      )
+      .orderBy(taskEvents.taskId, taskEvents.type, desc(taskEvents.seq));
+    for (const row of rows) {
+      const entry = signals.get(row.taskId) ?? {};
+      if (row.type === 'reported') entry.reported = row;
+      else if (row.type === 'not_dispatched') entry.notDispatched = row;
+      else entry.waiting = row;
+      signals.set(row.taskId, entry);
+    }
+    return signals;
   }
 
   async list(filter: {

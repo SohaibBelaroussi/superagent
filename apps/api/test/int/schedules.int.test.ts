@@ -3,6 +3,8 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { System } from '../../src/bootstrap';
 import { schedules } from '../../src/db/schema';
+import { MAX_ACTIVE_SCHEDULES, MIN_INTERVAL_MS, ScheduleService } from '../../src/modules/schedules/service';
+import { createScheduleTools } from '../../src/modules/schedules/tools';
 import { type FakeOpenAI, startFakeOpenAI } from '../support/fake-openai';
 import { jsonHeaders, startTestSystem } from './helpers';
 
@@ -120,6 +122,9 @@ describe('schedules', () => {
     const cases: Array<[Record<string, unknown>, number, string]> = [
       [{ cron: 'not a cron' }, 400, 'invalid_cron'],
       [{ cron: '* * * * *' }, 400, 'schedule_too_frequent'],
+      // Spaced out at first, dense later: every upcoming fire is checked, not just the next two.
+      [{ cron: '0,2 9 * * *' }, 400, 'schedule_too_frequent'],
+      [{ cron: '* 9 * * 1-5' }, 400, 'schedule_too_frequent'],
       [{ cron: '0 9 * * 1', timezone: 'Mars/Phobos' }, 400, 'invalid_timezone'],
       [
         { cron: '0 9 * * 1', departmentId: '01900000-0000-7000-8000-000000000000' },
@@ -168,7 +173,17 @@ describe('schedules', () => {
     const due = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
     await system.db.update(schedules).set({ nextFireAt: due }).where(eq(schedules.id, schedule.id));
 
-    await Promise.all([system.schedules.tick(), system.schedules.tick()]);
+    // Two tickers (as if two servers shared the database) race for the same fire.
+    const twin = new ScheduleService({
+      db: system.db,
+      directory: system.org.directory,
+      tasks: system.tasks,
+      dispatch: system.dispatch,
+      settings: system.settings,
+      logger: system.logger,
+      tickMs: 3_600_000,
+    });
+    await Promise.all([system.schedules.tick(), twin.tick()]);
     await system.schedules.tick();
     const fired = (await (await send('GET', `/v1/tasks?scheduleId=${schedule.id}`)).json()) as TaskPage;
     expect(fired.items).toHaveLength(1);
@@ -177,6 +192,90 @@ describe('schedules', () => {
     expect(new Date(after.nextFireAt ?? 0).getTime()).toBeGreaterThan(Date.now());
     expect(local(after.nextFireAt ?? '', 'Asia/Qatar')).toBe('Mon 09:00');
     await waitForReport(fired.items[0]?.id ?? '');
+  });
+
+  it('keeps fires five minutes apart whatever the cron says, and makes the last fire', async () => {
+    const schedule = await create({ title: 'Dense', brief: 'Check the queue.', cron: '0 9 * * *' });
+    // A cron that got past the check (saved before it existed, say): the ticker still spaces fires out.
+    const due = new Date(Date.now() - 1000);
+    await system.db
+      .update(schedules)
+      .set({ cron: '* * * * *', nextFireAt: due })
+      .where(eq(schedules.id, schedule.id));
+    await system.schedules.tick();
+    const spaced = (await (await send('GET', `/v1/schedules/${schedule.id}`)).json()) as Schedule;
+    expect(new Date(spaced.nextFireAt ?? 0).getTime() - due.getTime()).toBeGreaterThanOrEqual(
+      MIN_INTERVAL_MS - 1,
+    );
+
+    // A cron with no fire after this one: this one still happens, then the schedule pauses.
+    await system.db
+      .update(schedules)
+      .set({ cron: '0 0 9 * * * 2025', nextFireAt: new Date(Date.now() - 1000) })
+      .where(eq(schedules.id, schedule.id));
+    await system.schedules.tick();
+    const last = (await (await send('GET', `/v1/schedules/${schedule.id}`)).json()) as Schedule;
+    expect(last).toMatchObject({ status: 'paused', nextFireAt: null });
+    const fired = (await (await send('GET', `/v1/tasks?scheduleId=${schedule.id}`)).json()) as TaskPage;
+    expect(fired.items).toHaveLength(2);
+    for (const task of fired.items) await waitForReport(task.id);
+  });
+
+  it('keeps leads to their own schedules, and agents to one run per interval', async () => {
+    const owners = await create({ title: 'Owner digest', brief: 'Summarize.', cron: '0 8 * * 1' });
+    const tools = createScheduleTools(system.schedules, system.org.directory);
+    const asLead = { agent: { agentId: 'research-lead' } };
+    type Exec = (input: unknown, context: unknown) => Promise<unknown>;
+    const call = (tool: unknown, input: unknown, context?: unknown) =>
+      (tool as { execute: Exec }).execute(input, context);
+    expect(Object.keys(tools.lead)).not.toContain('run_schedule');
+    await expect(
+      call(tools.lead.update_schedule, { schedule: owners.id, brief: 'Leak it.' }, asLead),
+    ).rejects.toThrow(/owner set up that schedule/);
+    await expect(call(tools.lead.delete_schedule, { schedule: owners.id }, asLead)).rejects.toThrow(
+      /owner set up that schedule/,
+    );
+    // A lead's own schedule: it may change and pause it, not resume it.
+    const own = (await call(
+      tools.lead.create_schedule,
+      { title: 'Lead digest', brief: 'Summarize.', cron: '0 7 * * 2' },
+      asLead,
+    )) as { schedule: string };
+    expect(
+      await call(tools.lead.update_schedule, { schedule: own.schedule, status: 'paused' }, asLead),
+    ).toMatchObject({
+      status: 'paused',
+    });
+    // Refused by the tool's input schema (the model gets the validation error).
+    expect(
+      await call(tools.lead.update_schedule, { schedule: own.schedule, status: 'active' }, asLead),
+    ).toMatchObject({ error: true });
+
+    // The chief may run a schedule once per interval; the owner whenever they like.
+    await system.schedules.runNow(owners.id, 'chief');
+    await expect(system.schedules.runNow(owners.id, 'chief')).rejects.toMatchObject({
+      code: 'schedule_ran_recently',
+    });
+    expect((await send('POST', `/v1/schedules/${owners.id}/run`)).status).toBe(201);
+    const runs = (await (await send('GET', `/v1/tasks?scheduleId=${owners.id}`)).json()) as TaskPage;
+    for (const task of runs.items) await waitForReport(task.id);
+  });
+
+  it('caps the active schedules of a department', async () => {
+    const lab = (await (
+      await send('POST', '/v1/departments', { slug: 'lab', name: 'Lab' })
+    ).json()) as Department;
+    for (let i = 0; i < MAX_ACTIVE_SCHEDULES; i++) {
+      await create({ departmentId: lab.id, title: `Job ${i}`, brief: 'Run.', cron: `${i} 3 * * *` });
+    }
+    const over = await send('POST', '/v1/schedules', {
+      departmentId: lab.id,
+      title: 'One more',
+      brief: 'Run.',
+      cron: '30 4 * * *',
+    });
+    expect(over.status).toBe(409);
+    expect(await over.json()).toMatchObject({ code: 'too_many_schedules' });
   });
 
   it('lets the chief set up a schedule from a request', async () => {
@@ -214,10 +313,31 @@ describe('schedules', () => {
       kind: 'health',
     });
 
+    // Once the department has a lead, the item says the task can be sent.
+    const lead = (await (
+      await send('POST', '/v1/agents', {
+        key: 'ops-lead',
+        name: 'Ops lead',
+        role: 'lead',
+        departmentId: ops.id,
+        description: 'Runs operations.',
+        instructions: 'Be brief.',
+      })
+    ).json()) as { id: string };
+    const ready = (await (await send('GET', '/v1/attention')).json()) as AttentionList;
+    expect(ready.items.find((i) => i.taskId === task.id)?.title).toMatch(/waits in the inbox/);
+    expect(ready.items.some((i) => i.id === `health:schedules-${ops.id}`)).toBe(false);
+    expect((await send('DELETE', `/v1/agents/${lead.id}`)).status).toBe(204);
+
+    // Archiving the department pauses its schedules at once.
     expect((await send('DELETE', `/v1/departments/${ops.id}`)).status).toBe(204);
+    expect(((await (await send('GET', `/v1/schedules/${orphan.id}`)).json()) as Schedule).status).toBe(
+      'paused',
+    );
+    // Even if it were active and due, an archived department's schedule pauses instead of firing.
     await system.db
       .update(schedules)
-      .set({ nextFireAt: new Date(Date.now() - 1000) })
+      .set({ status: 'active', nextFireAt: new Date(Date.now() - 1000) })
       .where(eq(schedules.id, orphan.id));
     await system.schedules.tick();
     expect(((await (await send('GET', `/v1/schedules/${orphan.id}`)).json()) as Schedule).status).toBe(

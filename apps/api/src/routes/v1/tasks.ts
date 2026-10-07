@@ -237,7 +237,10 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
           `Task #${current.number} can't move from ${current.phase} to ${phase}`,
         );
       }
-      if (phase === 'queued') dispatch.requireLead(current.departmentId);
+      if (phase === 'queued') {
+        dispatch.requireLead(current.departmentId);
+        if (current.phase !== 'inbox') await dispatch.refuseIfApprovalPending(current);
+      }
     }
     let task = await tasks.updateFields(
       id,

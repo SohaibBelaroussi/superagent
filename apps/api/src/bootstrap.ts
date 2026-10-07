@@ -18,6 +18,7 @@ import { createChiefAgent } from './mastra/agents/chief';
 import { createScratchAgent } from './mastra/agents/scratch';
 import { DecisionService } from './modules/attention/decisions';
 import { AttentionService } from './modules/attention/service';
+import { DecisionLog } from './modules/dispatch/decisions';
 import { DispatchService } from './modules/dispatch/service';
 import { type BlobStore, S3BlobStore } from './modules/knowledge/blobs';
 import { KnowledgeService } from './modules/knowledge/service';
@@ -139,7 +140,15 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     const memoryTools = createMemoryTools(memoryService, directory);
     const bus = new EventBus();
     const tasks = new TaskService(db, directory, bus);
-    const dispatch = new DispatchService({ mastra, db, tasks, directory, memory, logger });
+    const decisionLog = new DecisionLog(db);
+    const dispatch = new DispatchService({
+      mastra,
+      decisions: decisionLog,
+      tasks,
+      directory,
+      memory,
+      logger,
+    });
     const ledgerTools = { tasks, dispatch, directory };
     const schedules = new ScheduleService({
       db,
@@ -178,16 +187,10 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       logger,
     );
     runtime.loadAll();
-    const org = new OrgService(
-      db,
-      directory,
-      runtime,
-      providers,
-      catalog,
-      logger,
-      settings.lock,
-      async (key) => (await dispatch.approvalsOf(key)).length,
-    );
+    const org = new OrgService(db, directory, runtime, providers, catalog, logger, settings.lock, {
+      archiveBlocker: (agent) => dispatch.archiveBlocker(agent),
+      departmentArchived: (departmentId) => schedules.pauseDepartment(departmentId),
+    });
 
     await dispatch.ensureChiefThread();
     const interrupted = await dispatch.recoverInterrupted();
@@ -203,7 +206,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       providers,
       storageEnabled: knowledge.enabled,
     });
-    const decisions = new DecisionService(db, attention, dispatch, logger);
+    const decisions = new DecisionService(decisionLog, attention, dispatch, logger);
 
     const app = await createApp({
       config,

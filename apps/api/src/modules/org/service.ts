@@ -26,6 +26,14 @@ function isUniqueViolation(error: unknown): boolean {
   return e?.code === '23505' || e?.cause?.code === '23505';
 }
 
+/** What other modules need to know or say about organization changes. */
+export interface OrgHooks {
+  /** Why an agent can't be archived right now, if it can't (dispatch knows about its runs). */
+  archiveBlocker?: (agent: AgentEntry) => Promise<{ code: string; message: string } | undefined>;
+  /** A department was archived (its schedules pause). */
+  departmentArchived?: (departmentId: string) => Promise<void>;
+}
+
 /** Departments and agent definitions: validation, versioning, and keeping the live agents in sync. */
 export class OrgService {
   constructor(
@@ -37,8 +45,7 @@ export class OrgService {
     private readonly logger: IMastraLogger,
     /** Shared with settings updates and provider deletion: model references must not race a delete. */
     private readonly configLock: Mutex,
-    /** How many tool calls on an agent's runs wait for the owner (from dispatch). */
-    private readonly approvalsWaiting: (agentKey: string) => Promise<number> = async () => 0,
+    private readonly hooks: OrgHooks = {},
   ) {}
 
   // --- departments ---
@@ -105,6 +112,7 @@ export class OrgService {
       .set({ archivedAt: new Date(), updatedAt: new Date() })
       .where(eq(departments.id, id));
     await this.directory.reload();
+    await this.hooks.departmentArchived?.(id);
     this.logger.info('Department archived', { departmentId: id });
   }
 
@@ -241,15 +249,9 @@ export class OrgService {
 
   private async archiveAgentLocked(id: string): Promise<void> {
     const agent = this.activeAgent(id);
-    // Deciding a call needs its agent: once archived, the call could never be approved or declined.
-    const waiting = await this.approvalsWaiting(agent.key);
-    if (waiting > 0) {
-      throw new ApiError(
-        409,
-        'approvals_pending',
-        `${agent.name} has ${waiting === 1 ? 'a tool call' : `${waiting} tool calls`} waiting for your decision: approve or decline first (GET /v1/attention)`,
-      );
-    }
+    // Deciding a call needs its agent: once archived, a call it waits on could never be decided.
+    const blocker = await this.hooks.archiveBlocker?.(agent);
+    if (blocker) throw new ApiError(409, blocker.code, blocker.message);
     await this.db
       .update(agentDefinitions)
       .set({ archivedAt: new Date(), updatedAt: new Date() })

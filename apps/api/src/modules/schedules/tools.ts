@@ -53,54 +53,40 @@ export function createScheduleTools(
     if (!agent) throw new Error('Only department leads manage their department schedules.');
     return agent;
   };
-  /** A lead may only touch its own department's schedules. */
+  /**
+   * A lead may only change its own department's schedules that an agent set up, never the owner's or the
+   * chief's: a lead that read something malicious must not be able to rewrite or restart them.
+   */
   const ownSchedule = async (id: string, context: unknown) => {
     const row = await schedules.get(id);
     if (row.departmentId !== leadOf(context).departmentId)
       throw new Error('That schedule belongs to another department.');
+    if (!row.createdBy.startsWith('agent:'))
+      throw new Error(`The ${row.createdBy} set up that schedule: ask the chief of staff to change it.`);
     return row;
   };
 
-  const shared = (forLead: boolean) => ({
-    update_schedule: createTool({
-      id: 'update_schedule',
-      description:
-        "Change a schedule's brief, timing or priority, or pause it (status 'paused') and resume it ('active').",
-      inputSchema: z.object({
-        schedule: z.string().describe('Schedule id from list_schedules'),
-        title: z.string().min(1).max(200).optional(),
-        brief: z.string().min(1).max(20_000).optional(),
-        cron: timing.cron.optional(),
-        timezone: timing.timezone,
-        priority: timing.priority,
-        status: z.enum(['active', 'paused']).optional(),
-      }),
-      execute: async ({ schedule, ...patch }, context) => {
-        if (forLead) await ownSchedule(schedule, context);
-        return summary(await schedules.update(schedule, patch));
-      },
-    }),
-    delete_schedule: createTool({
+  const updateFields = {
+    schedule: z.string().describe('Schedule id from list_schedules'),
+    title: z.string().min(1).max(200).optional(),
+    brief: z.string().min(1).max(20_000).optional(),
+    cron: timing.cron.optional(),
+    timezone: timing.timezone,
+    priority: timing.priority,
+  };
+  const deleteSchedule = (forLead: boolean) =>
+    createTool({
       id: 'delete_schedule',
-      description: 'Delete a schedule for good. Tasks it already created stay.',
+      description: forLead
+        ? 'Delete a schedule you set up, for good. Tasks it already created stay.'
+        : 'Delete a schedule for good. Tasks it already created stay.',
       inputSchema: z.object({ schedule: z.string() }),
       execute: async ({ schedule }, context) => {
         if (forLead) await ownSchedule(schedule, context);
         await schedules.remove(schedule);
         return { deleted: schedule };
       },
-    }),
-    run_schedule: createTool({
-      id: 'run_schedule',
-      description: "Fire a schedule now: its task goes to the department's lead right away.",
-      inputSchema: z.object({ schedule: z.string() }),
-      execute: async ({ schedule }, context) => {
-        if (forLead) await ownSchedule(schedule, context);
-        const task = await schedules.runNow(schedule, forLead ? `agent:${leadOf(context).key}` : 'chief');
-        return { task: `#${task.number}`, phase: task.phase };
-      },
-    }),
-  });
+    });
 
   return {
     chief: {
@@ -138,7 +124,24 @@ export function createScheduleTools(
           ).map(summary),
         }),
       }),
-      ...shared(false),
+      update_schedule: createTool({
+        id: 'update_schedule',
+        description:
+          "Change a schedule's brief, timing or priority, or pause it (status 'paused') and resume it ('active').",
+        inputSchema: z.object({ ...updateFields, status: z.enum(['active', 'paused']).optional() }),
+        execute: async ({ schedule, ...patch }) => summary(await schedules.update(schedule, patch)),
+      }),
+      delete_schedule: deleteSchedule(false),
+      run_schedule: createTool({
+        id: 'run_schedule',
+        description:
+          "Fire a schedule now: its task goes to the department's lead right away. At most once every 5 minutes per schedule.",
+        inputSchema: z.object({ schedule: z.string() }),
+        execute: async ({ schedule }) => {
+          const task = await schedules.runNow(schedule, 'chief');
+          return { task: `#${task.number}`, phase: task.phase };
+        },
+      }),
     },
     lead: {
       create_schedule: createTool({
@@ -174,7 +177,17 @@ export function createScheduleTools(
           schedules: (await schedules.list({ departmentId: leadOf(context).departmentId })).map(summary),
         }),
       }),
-      ...shared(true),
+      update_schedule: createTool({
+        id: 'update_schedule',
+        description:
+          "Change a schedule you set up: its brief, timing or priority, or pause it (status 'paused'). Only the owner or the chief of staff can resume one.",
+        inputSchema: z.object({ ...updateFields, status: z.literal('paused').optional() }),
+        execute: async ({ schedule, ...patch }, context) => {
+          await ownSchedule(schedule, context);
+          return summary(await schedules.update(schedule, patch));
+        },
+      }),
+      delete_schedule: deleteSchedule(true),
     },
   };
 }

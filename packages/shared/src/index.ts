@@ -597,10 +597,12 @@ export type DecisionInput = z.infer<typeof DecisionInputSchema>;
 export const DecisionSchema = z.object({
   id: z.uuid(),
   kind: z.enum(['approve', 'decline']),
-  target: z.string(),
-  status: z.enum(['applied', 'failed']),
+  target: z.string().describe('The attention item decided'),
+  reason: z.string().nullable(),
+  status: z
+    .enum(['pending', 'applied'])
+    .describe('pending: the server stopped while applying it, so the call may or may not have resumed'),
   taskId: z.string().nullable(),
-  error: z.string().nullable(),
   createdAt: z.iso.datetime(),
 });
 export type Decision = z.infer<typeof DecisionSchema>;

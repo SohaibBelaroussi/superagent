@@ -301,9 +301,9 @@ export const decisions = app.table(
     kind: text('kind', { enum: ['approve', 'decline'] }).notNull(),
     target: text('target').notNull(),
     reason: text('reason'),
-    status: text('status', { enum: ['applied', 'failed'] }).notNull(),
+    // pending while Mastra is told, then applied; a decision Mastra refused is deleted.
+    status: text('status', { enum: ['pending', 'applied'] }).notNull(),
     taskId: uuid('task_id'),
-    error: text('error'),
     createdAt: createdAt(),
   },
   (t) => [index('decisions_target_idx').on(t.target)],
