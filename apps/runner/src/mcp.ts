@@ -113,6 +113,8 @@ class StdioRelay {
   private child: Child | undefined;
   private session: string | undefined;
   private starts: Promise<unknown> = Promise.resolve();
+  /** Replaced (a new launch) or removed: a start still under way must not leave a process behind. */
+  private disposed = false;
   private readonly pending = new Map<
     string,
     { resolve(message: unknown): void; reject(error: Error): void }
@@ -181,6 +183,12 @@ class StdioRelay {
     this.failAll(reason);
   }
 
+  /** Closes the relay for good: the runner has forgotten it. */
+  dispose(reason: string): void {
+    this.disposed = true;
+    this.close(reason);
+  }
+
   /** A new process and session, after any start already under way. */
   private restart(): Promise<{ child: Child; session: string }> {
     const next = this.starts.then(
@@ -193,6 +201,8 @@ class StdioRelay {
 
   private async start(): Promise<{ child: Child; session: string }> {
     this.close('The MCP server restarted');
+    const gone = () => new RunnerError(503, 'mcp_unavailable', 'The server was restarted: try again');
+    if (this.disposed) throw gone();
     let child: Child | undefined;
     let ended: string | undefined;
     child = await this.open({
@@ -208,6 +218,10 @@ class StdioRelay {
       },
     });
     if (ended) throw new RunnerError(502, 'mcp_unavailable', ended);
+    if (this.disposed) {
+      child.close();
+      throw gone();
+    }
     this.child = child;
     this.session = randomUUID();
     return { child, session: this.session };
@@ -620,7 +634,8 @@ export class McpPackages {
     let info = await this.inspect(name);
     // Started with another network setting: replaced.
     if (info && info.Config.Labels[LABELS.mcpNetwork] !== spec.network) {
-      this.closeRelays(spec.packageId, 'The package was restarted');
+      // Their processes go with the container; the relays stay (one of them is starting this one).
+      this.stopRelays(spec.packageId, 'The package was restarted');
       await this.removeContainer(name);
       await this.dropNetwork(spec.packageId);
       info = undefined;
@@ -718,13 +733,20 @@ export class McpPackages {
   }
 
   private closeRelay(serverId: string, reason: string): void {
-    this.relays.get(serverId)?.close(reason);
+    this.relays.get(serverId)?.dispose(reason);
     this.relays.delete(serverId);
   }
 
   private closeRelays(packageId: string, reason: string): void {
     for (const [serverId, spec] of this.launches) {
       if (spec.packageId === packageId) this.closeRelay(serverId, reason);
+    }
+  }
+
+  /** Ends the package's sessions (their processes stop); the relays start new ones on the next call. */
+  private stopRelays(packageId: string, reason: string): void {
+    for (const [serverId, spec] of this.launches) {
+      if (spec.packageId === packageId) this.relays.get(serverId)?.close(reason);
     }
   }
 
