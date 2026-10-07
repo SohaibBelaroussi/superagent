@@ -50,6 +50,11 @@ if ! mkdir "$lock" 2>/dev/null; then
     log "Another backup is running (pid $owner)"
     exit 1
   fi
+  # No pid yet in a fresh lock: another backup is just starting.
+  if [ -z "$owner" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin -1)" ]; then
+    log "Another backup is starting"
+    exit 1
+  fi
   log "Taking over a stale lock (pid ${owner:-unknown} is gone)"
 fi
 echo $$ >"$lock/pid"
@@ -61,9 +66,10 @@ dest="$BACKUP_DIR/$stamp.partial"
 mkdir -p "$dest"
 finish() {
   status=$?
-  if [ "$status" -ne 0 ]; then
+  # Only ever the partial folder: once renamed, a backup is complete and stays.
+  if [ "$status" -ne 0 ] && [ -d "$BACKUP_DIR/$stamp.partial" ]; then
     log "Backup failed: nothing of it is kept"
-    rm -rf "$dest"
+    rm -rf "$BACKUP_DIR/$stamp.partial"
   fi
   rm -rf "$lock"
   exit "$status"
@@ -128,11 +134,10 @@ fi
 
 # 4. Complete: it counts from now on, and the last $keep stay.
 mv "$dest" "$BACKUP_DIR/$stamp"
-dest="$BACKUP_DIR/$stamp"
 for dir in "$BACKUP_DIR" "$BACKUP_DIR/s3-deleted"; do
   [ -d "$dir" ] || continue
   find "$dir" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*T*Z' | sort | head -n -"$keep" | while read -r old; do
     rm -rf "$old"
   done
 done
-log "Backup done: $dest"
+log "Backup done: $BACKUP_DIR/$stamp"
