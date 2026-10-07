@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { System } from '../../src/bootstrap';
 import { MemoryBlobStore } from '../../src/modules/knowledge/blobs';
 import { type FakeOpenAI, type RecordedRequest, startFakeOpenAI } from '../support/fake-openai';
+import { minimalPdf } from '../support/pdf';
 import { authHeader, jsonHeaders, startTestSystem } from './helpers';
 
 type ChatMessage = { role: string; content: unknown };
@@ -33,11 +34,22 @@ describe('knowledge', () => {
       headers: jsonHeaders(),
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  const upload = (file: File, fields: Record<string, string> = {}) => {
+  /** Sends a multipart upload the way browsers and curl do: with its length declared. */
+  const upload = async (file: File, fields: Record<string, string> = {}) => {
     const form = new FormData();
     form.append('file', file);
     for (const [key, value] of Object.entries(fields)) form.append(key, value);
-    return system.app.request('/v1/knowledge', { method: 'POST', headers: authHeader(), body: form });
+    const encoded = new Response(form);
+    const body = new Uint8Array(await encoded.arrayBuffer());
+    return system.app.request('/v1/knowledge', {
+      method: 'POST',
+      headers: {
+        ...authHeader(),
+        'content-type': encoded.headers.get('content-type') ?? '',
+        'content-length': String(body.byteLength),
+      },
+      body,
+    });
   };
   const search = async (q: string, departmentId?: string) =>
     (
@@ -175,6 +187,60 @@ describe('knowledge', () => {
     const toolResult = JSON.stringify(specialistCalls.at(-1)?.body?.messages);
     expect(toolResult).toContain('ninety days');
     expect(toolResult).toContain('Retention policy');
+  });
+
+  it('reads what Windows tools and web pages produce', async () => {
+    const utf16 = new Uint8Array([0xff, 0xfe, ...Buffer.from('Inventaire: 42 chaises bleues', 'utf16le')]);
+    expect((await upload(new File([utf16], 'inventaire.txt', { type: 'text/plain' }))).status).toBe(201);
+    expect((await search('chaises bleues')).map((h) => h.title)).toContain('inventaire.txt');
+
+    expect((await upload(new File(['stray\u0000null bytes here'], 'nul.txt'))).status).toBe(201);
+    expect((await search('stray null bytes')).map((h) => h.title)).toContain('nul.txt');
+
+    const page =
+      '<html><body><p>Politique de r&eacute;tention d&#233;finie par le service.</p></body></html>';
+    expect((await upload(new File([page], 'politique.html', { type: 'text/html' }))).status).toBe(201);
+    expect((await search('rétention définie')).map((h) => h.title)).toContain('politique.html');
+  });
+
+  it('matches emails, versions, file names and scripts with combining marks', async () => {
+    const text =
+      'Write to support@acme.io about release 2.4.1 and attach report_q3.pdf.\n\nहिन्दी भाषा का दस्तावेज़';
+    expect((await upload(new File([text], 'contacts.txt'))).status).toBe(201);
+    for (const query of ['support@acme.io', '2.4.1', 'report_q3.pdf', 'हिन्दी']) {
+      expect(
+        (await search(query)).map((h) => h.title),
+        query,
+      ).toContain('contacts.txt');
+    }
+  });
+
+  it('refuses huge PDFs and keeps large bodies away from unauthenticated clients', async () => {
+    const pages = await upload(new File([minimalPdf('page', 2001)], 'huge.pdf', { type: 'application/pdf' }));
+    expect(pages.status).toBe(422);
+    expect(await pages.json()).toMatchObject({ code: 'document_too_large' });
+
+    // A JSON body may be parsed before auth, so it never gets the upload allowance.
+    const json = '{"x":"' + 'a'.repeat(6 * 1024 * 1024) + '"}';
+    const parsedEarly = await system.app.request('/v1/knowledge', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': String(json.length) },
+      body: json,
+    });
+    expect(parsedEarly.status).toBe(413);
+    // A multipart upload with a declared length passes the first limit unread, then fails auth.
+    const form = new FormData();
+    form.append('file', new File([new Uint8Array(6 * 1024 * 1024)], 'big.txt'));
+    const body = new Uint8Array(await new Response(form).arrayBuffer());
+    const unauthenticated = await system.app.request('/v1/knowledge', {
+      method: 'POST',
+      headers: {
+        'content-type': new Response(form).headers.get('content-type') ?? '',
+        'content-length': String(body.byteLength),
+      },
+      body,
+    });
+    expect(unauthenticated.status).toBe(401);
   });
 
   it('gets and deletes documents', async () => {

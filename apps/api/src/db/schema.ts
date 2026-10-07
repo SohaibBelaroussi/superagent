@@ -242,3 +242,21 @@ export const knowledgeChunks = app.table(
     uniqueIndex('knowledge_chunks_document_seq_idx').on(t.documentId, t.seq),
   ],
 );
+
+// --- memory (M4) ---
+
+/** What the agents know about the owner: one row, kept by the chief and the owner (decision D30). */
+export const ownerProfile = app.table('owner_profile', {
+  id: text('id').primaryKey(),
+  profile: jsonb('profile').$type<Record<string, unknown>>().notNull(),
+  updatedAt: updatedAt(),
+});
+
+/** A department's notes: rules and lessons its lead keeps across tasks (decision D30). */
+export const departmentNotes = app.table('department_notes', {
+  departmentId: uuid('department_id')
+    .primaryKey()
+    .references(() => departments.id),
+  notes: text('notes').notNull(),
+  updatedAt: updatedAt(),
+});

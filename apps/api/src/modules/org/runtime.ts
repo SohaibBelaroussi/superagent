@@ -1,7 +1,12 @@
 import { Agent, type ToolsInput } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
-import type { MemoryProfiles, OwnerProfileProcessor } from '../memory/profiles';
+import {
+  DepartmentNotesProcessor,
+  type MemoryProfiles,
+  type OwnerProfileProcessor,
+} from '../memory/profiles';
+import type { MemoryService } from '../memory/service';
 import { routerId } from '../providers/model-ref';
 import type { SettingsService } from '../settings/service';
 import type { ToolCatalog } from '../tools/catalog';
@@ -19,13 +24,15 @@ export interface CompileDeps {
   memory: MemoryProfiles;
   /** Adds the owner's profile to every department agent's context. */
   ownerProfile: OwnerProfileProcessor;
+  /** Leads read their department's notes from it. */
+  memoryService: MemoryService;
   /** Ledger tools every lead gets (update_task, report_to_chief, ...). */
   leadTools: ToolsInput;
 }
 
 /** Turns one definition (its active version) into a Mastra agent. */
 export function compileAgent(entry: AgentEntry, deps: CompileDeps): Agent {
-  const { directory, settings, catalog, mastra, memory, leadTools, ownerProfile } = deps;
+  const { directory, settings, catalog, mastra, memory, leadTools, ownerProfile, memoryService } = deps;
   const model = entry.current.model;
   return new Agent({
     id: entry.key,
@@ -45,7 +52,10 @@ export function compileAgent(entry: AgentEntry, deps: CompileDeps): Agent {
         ? { ...catalog.build(entry.current.tools), ...leadTools }
         : catalog.build(entry.current.tools),
     memory: entry.role === 'lead' ? memory.lead : memory.specialist,
-    inputProcessors: [ownerProfile],
+    inputProcessors:
+      entry.role === 'lead'
+        ? [ownerProfile, new DepartmentNotesProcessor(memoryService, entry.departmentId)]
+        : [ownerProfile],
     // A lead's team is its department's active specialists, looked up per request so new or
     // edited specialists are picked up immediately. The agents function receives no mastra handle.
     agents:

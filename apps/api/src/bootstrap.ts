@@ -24,6 +24,7 @@ import { TaskService } from './modules/ledger/service';
 import { createChiefTools, createLeadTools } from './modules/ledger/tools';
 import { createMemoryProfiles, OwnerProfileProcessor } from './modules/memory/profiles';
 import { MemoryService } from './modules/memory/service';
+import { createMemoryTools } from './modules/memory/tools';
 import { OrgDirectory } from './modules/org/directory';
 import { AgentRuntime } from './modules/org/runtime';
 import { OrgService } from './modules/org/service';
@@ -117,12 +118,19 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     await storage.init();
 
     // A thread per task (resource dept:<slug>) and the owner's thread with the chief (resource owner).
-    const memory = createMemoryProfiles(storage, settings, {
+    // Long threads are compressed with the fast model, or the default one while the fast one can't be
+    // used (unset, its provider disabled, its key unreadable): a failing observer stops every turn.
+    const observerModel = () => {
+      const fast = settings.get().models.fast;
+      return settings.modelRouterId(fast && providers.isUsable(fast, 'chat') ? 'fast' : 'default');
+    };
+    const memory = createMemoryProfiles(storage, observerModel, {
       observeTokens: config.MEMORY_OBSERVE_TOKENS,
       reflectTokens: config.MEMORY_REFLECT_TOKENS,
       observeAhead: config.MEMORY_OBSERVE_AHEAD,
     });
-    const memoryService = new MemoryService(memory, directory, logger);
+    const memoryService = new MemoryService(db, directory, logger);
+    const memoryTools = createMemoryTools(memoryService, directory);
     const bus = new EventBus();
     const tasks = new TaskService(db, directory, bus);
     const dispatch = new DispatchService({ mastra, tasks, directory, memory, logger });
@@ -133,7 +141,8 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         settings,
         catalog,
         memory: memory.chief,
-        chiefTools: createChiefTools(ledgerTools),
+        chiefTools: { ...createChiefTools(ledgerTools), ...memoryTools.chief },
+        ownerProfile: new OwnerProfileProcessor(memoryService, true),
       }),
       'chief',
     );
@@ -146,8 +155,9 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         settings,
         catalog,
         memory,
-        ownerProfile: new OwnerProfileProcessor(memory.chief, logger),
-        leadTools: createLeadTools(ledgerTools),
+        ownerProfile: new OwnerProfileProcessor(memoryService, false),
+        memoryService,
+        leadTools: { ...createLeadTools(ledgerTools), ...memoryTools.lead },
       },
       logger,
     );

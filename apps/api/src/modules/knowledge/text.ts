@@ -1,4 +1,4 @@
-import { extractText as extractPdfText, getDocumentProxy } from 'unpdf';
+import { Worker } from 'node:worker_threads';
 
 const TEXT_TYPES = new Set(['text/plain', 'text/markdown', 'text/csv', 'application/json']);
 const BY_EXTENSION: Record<string, string> = {
@@ -26,30 +26,99 @@ export function documentType(filename: string, declared?: string): string | unde
   return BY_EXTENSION[extension];
 }
 
-/** Plain text of a document of a type `documentType` accepted. */
-export async function extractText(body: Uint8Array, type: string): Promise<string> {
-  if (type === 'application/pdf') {
-    const pdf = await getDocumentProxy(new Uint8Array(body));
-    const { text } = await extractPdfText(pdf, { mergePages: true });
-    return text;
-  }
-  const decoded = new TextDecoder('utf-8').decode(body);
-  return type === 'text/html' ? htmlToText(decoded) : decoded;
+export interface ExtractLimits {
+  /** More text than this is refused rather than indexed in part. */
+  maxChars: number;
+  maxPages: number;
+  timeoutMs: number;
+  /** Heap for the worker that reads the document. */
+  memoryMb: number;
 }
 
-function htmlToText(html: string): string {
-  return html
-    .replace(/<(script|style|noscript|template)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<br\s*\/?>|<\/(p|div|li|h[1-6]|tr|section|article|header|footer|blockquote|pre)>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&amp;/gi, '&')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/ *\n */g, '\n');
+export const DEFAULT_EXTRACT_LIMITS: ExtractLimits = {
+  maxChars: 10_000_000,
+  maxPages: 2000,
+  timeoutMs: 60_000,
+  memoryMb: 512,
+};
+
+export class ExtractError extends Error {
+  override name = 'ExtractError';
+  constructor(
+    readonly code: 'too_large' | 'unreadable' | 'timeout',
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+// From source (tsx, Vitest) the worker sits next to this file; in the bundle, next to main.mjs.
+const WORKER_URL = import.meta.url.endsWith('.ts')
+  ? new URL('./extract.worker.ts', import.meta.url)
+  : new URL('./extract.worker.mjs', import.meta.url);
+
+const MAX_PARALLEL = 2;
+let running = 0;
+const waiting: Array<() => void> = [];
+
+async function inSlot<T>(work: () => Promise<T>): Promise<T> {
+  while (running >= MAX_PARALLEL) await new Promise<void>((resolve) => waiting.push(resolve));
+  running += 1;
+  try {
+    return await work();
+  } finally {
+    running -= 1;
+    waiting.shift()?.();
+  }
+}
+
+/**
+ * Plain text of a document of a type `documentType` accepted, read in a worker thread with a memory
+ * limit and a timeout: a hostile file (a PDF bomb, a pathological HTML page) costs the worker, not the
+ * API. At most two documents are read at once.
+ */
+export function extractText(
+  body: Uint8Array,
+  type: string,
+  limits: ExtractLimits = DEFAULT_EXTRACT_LIMITS,
+): Promise<string> {
+  return inSlot(
+    () =>
+      new Promise<string>((resolve, reject) => {
+        const worker = new Worker(WORKER_URL, {
+          workerData: { body, type, maxChars: limits.maxChars, maxPages: limits.maxPages },
+          resourceLimits: { maxOldGenerationSizeMb: limits.memoryMb, maxYoungGenerationSizeMb: 32 },
+        });
+        let done = false;
+        const settle = (outcome: () => void) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          void worker.terminate();
+          outcome();
+        };
+        const timer = setTimeout(
+          () => settle(() => reject(new ExtractError('timeout', 'Reading this document took too long'))),
+          limits.timeoutMs,
+        );
+        worker.once(
+          'message',
+          (result: { ok: boolean; text?: string; code?: 'too_large' | 'unreadable'; message?: string }) =>
+            settle(() =>
+              result.ok
+                ? resolve(result.text ?? '')
+                : reject(
+                    new ExtractError(result.code ?? 'unreadable', result.message ?? 'Unreadable document'),
+                  ),
+            ),
+        );
+        // Out-of-memory and crashes in the worker end up here.
+        worker.once('error', (error) => settle(() => reject(new ExtractError('unreadable', error.message))));
+        worker.once('exit', (code) =>
+          settle(() => reject(new ExtractError('unreadable', `The document reader stopped (exit ${code})`))),
+        );
+      }),
+  );
 }
 
 /**
@@ -112,8 +181,18 @@ const STOPWORDS = new Set(
   ).split(' '),
 );
 
-/** The words of a search, for a full-text query in which any word may match (more matches rank higher). */
-export function searchTerms(query: string): string[] {
-  const words = query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-  return [...new Set(words.filter((w) => w.length > 1 && !STOPWORDS.has(w)))].slice(0, 32);
+/**
+ * The query's words without common ones, for Postgres to tokenise exactly like the indexed text (so
+ * emails, versions and file names stay whole). Empty when nothing worth searching is left.
+ */
+export function searchQuery(query: string): string {
+  return query
+    .normalize('NFC')
+    .split(/\s+/)
+    .filter((word) => {
+      const bare = word.toLowerCase().replace(/[^\p{L}\p{N}\p{M}]/gu, '');
+      return bare.length > 1 && !STOPWORDS.has(bare);
+    })
+    .slice(0, 32)
+    .join(' ');
 }

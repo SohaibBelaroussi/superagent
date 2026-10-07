@@ -491,7 +491,7 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 
 ## 16. Learned while building M4 (2026-10-07)
 
-**Working memory:**
+**Working memory** (we evaluated it for the profile and notes, then kept both in our own tables: its writes don't validate, its merges aren't locked, template mode replaces the whole text):
 - Schema mode gives the agent `updateWorkingMemory({ memory: <object> })`, deep-merged (objects merge, lists are replaced, `null` deletes). Every schema field must be optional, or partial updates fail validation. Template mode takes `{ memory: string }` and replaces the whole text. [spike]
 - Resource scope is shared by every thread of the resource, across Memory instances on the same storage. [spike]
 - From server code, `memory.getWorkingMemory({ threadId, resourceId })` and `memory.updateWorkingMemory({ ..., workingMemory })` work without the thread existing. The write neither validates nor merges, so do both yourself (`deepMergeWorkingMemory` is exported). [spike]
@@ -499,7 +499,7 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 
 **Observational memory (OM):**
 - Options: `{ model, observation: { messageTokens, bufferTokens, failurePolicy }, reflection: { observationTokens, failurePolicy } }`. `model` may be a function, called only when OM observes or reflects. Without a model, OM uses a Google model. [spike]
-- **With thread scope (the default), OM throws when a call has no thread**, which fails the whole call (a direct `/api/agents/:id/generate`). We subclass Memory and leave the OM processor out of `getInputProcessors`/`getOutputProcessors` for calls without one. [spike]
+- **With thread scope (the default), OM throws when a call has no thread**, which fails the whole call (a direct `/api/agents/:id/generate`). We subclass Memory and wrap the OM processor so `processInputStep`/`processOutputResult` return the message list unchanged without a thread. Removing the processor instead hides OM from Mastra's memory routes (`/api/memory/config` reports it disabled), since they look it up with a thread-less context. [spike]
 - **An unresolvable model stops every turn on the thread** once the threshold is crossed (a tripwire, even with `failurePolicy: 'continue'`). Fall back from `fast` to `default`. [spike]
 - With OM on, `lastMessages` no longer caps history: the agent sees observations plus unobserved messages. [spike]
 - The observer expects `<observations>…</observations>` (optionally `<current-task>`); a fake model must answer that, or OM marks messages observed and stores nothing. [spike]
@@ -508,7 +508,14 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 
 **Input processors:** `processInput({ messageList })` with `messageList.addSystem(text, tag)` adds context for one run without saving it. Memory processors run first, so working memory is already in place; specialists reached by delegation run the processor too. Type the processor as its class (the generic `Processor` doesn't satisfy `inputProcessors`). [spike]
 
-**SeaweedFS 4.48:** `weed mini -bucket=<name> -master.telemetry=false -admin.ui=false` runs everything in one process and creates the bucket. `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the environment turn on S3 auth (anonymous gets 403). Telemetry is on by default. `GET /healthz` on the S3 port answers 200. [spike]
+**SeaweedFS 4.48:** `weed mini -bucket=<name> -master.telemetry=false -admin.ui=false` runs everything in one process and creates the bucket. `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the environment turn on S3 auth (anonymous gets 403), but only for the S3 port: the filer (8888), master, WebDAV and admin ports answer without credentials, so keep it on a network only the API joins. Telemetry is on by default. `GET /healthz` on the S3 port answers 200. [spike]
+
+**Reading untrusted documents:**
+- pdf.js (through `unpdf`) runs on the calling thread and has no limits: a crafted 8 MiB PDF exhausted the heap and killed the process. Read documents in a `worker_threads` worker with `resourceLimits` and a wall-clock `terminate()`, cap `pdf.numPages`, budget the text, and `await pdf.loadingTask.destroy()`. [spike]
+- Node 24 runs a `.ts` worker straight from source (type stripping) if it imports only packages; the bundle ships it as its own entry. [spike]
+- Regexes like `/<[^>]+>/g` are quadratic on input full of `<`; `/<[^<>]*>/g` is linear. [spike]
+- Postgres text can't hold NUL; UTF-16 files (Notepad "Unicode", PowerShell 5.1) need their byte-order mark honoured. [spike]
+- For full-text queries, let Postgres tokenise: `replace(plainto_tsquery('simple', $1)::text, ' & ', ' | ')::tsquery` keeps emails, versions and file names whole, and handles combining marks. [spike]
 
 **Live result:** with "answer in French" in the owner profile, a department answered in French; a rule the lead saved in its notes was applied on the next task (more reliably once the lead's instructions say to follow its notes); the owner's model compressed a long task thread (1683 tokens observed into 725).
 

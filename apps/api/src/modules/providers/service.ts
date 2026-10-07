@@ -174,6 +174,16 @@ export class ProviderService {
    * Rejects references to unknown or disabled providers, to models the provider doesn't list, and to a
    * listed model of the wrong kind (e.g. a chat model as the embedding role).
    */
+  /** Whether a model can be used right now: provider known and enabled, secrets readable, model listed. */
+  isUsable(ref: ModelRef, kind?: ModelKind): boolean {
+    try {
+      this.assertUsable(ref, 'model', kind);
+    } catch {
+      return false;
+    }
+    return this.registry.get(ref.provider)?.secretsReadable ?? false;
+  }
+
   assertUsable(ref: ModelRef, label: string, kind?: ModelKind): void {
     const provider = this.registry.get(ref.provider);
     if (!provider)

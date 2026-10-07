@@ -6,7 +6,15 @@ import { type KnowledgeDocumentRow, knowledgeChunks, knowledgeDocuments } from '
 import { ApiError } from '../../http/problem';
 import type { OrgDirectory } from '../org/directory';
 import type { BlobStore } from './blobs';
-import { chunkText, documentType, extractText, searchTerms } from './text';
+import {
+  chunkText,
+  DEFAULT_EXTRACT_LIMITS,
+  documentType,
+  ExtractError,
+  type ExtractLimits,
+  extractText,
+  searchQuery,
+} from './text';
 
 const CHUNK_BATCH = 500;
 
@@ -29,6 +37,7 @@ export class KnowledgeService {
     private readonly directory: OrgDirectory,
     private readonly blobs: BlobStore | undefined,
     private readonly logger: IMastraLogger,
+    private readonly limits: ExtractLimits = DEFAULT_EXTRACT_LIMITS,
   ) {}
 
   async upload(input: {
@@ -56,10 +65,15 @@ export class KnowledgeService {
     }
     let text: string;
     try {
-      text = await extractText(input.body, type);
+      text = await extractText(input.body, type, this.limits);
     } catch (error) {
       this.logger.warn('Could not read an uploaded document', { filename: input.filename, error });
-      throw new ApiError(422, 'unreadable_document', `Could not read the text of ${input.filename}`);
+      if (error instanceof ExtractError && error.code === 'too_large') {
+        throw new ApiError(422, 'document_too_large', error.message);
+      }
+      const why =
+        error instanceof ExtractError && error.code === 'timeout' ? ': reading it took too long' : '';
+      throw new ApiError(422, 'unreadable_document', `Could not read the text of ${input.filename}${why}`);
     }
     const passages = chunkText(text);
     if (passages.length === 0)
@@ -128,9 +142,10 @@ export class KnowledgeService {
    * shared ones are searched.
    */
   async search(query: string, options: { departmentId?: string; limit: number }): Promise<KnowledgeHit[]> {
-    const terms = searchTerms(query);
-    if (terms.length === 0) return [];
-    const tsquery = sql`to_tsquery('simple', ${terms.join(' | ')})`;
+    const words = searchQuery(query);
+    if (!words) return [];
+    // Postgres tokenises the words like the indexed text; any of them may match (more rank higher).
+    const tsquery = sql`replace(plainto_tsquery('simple', ${words})::text, ' & ', ' | ')::tsquery`;
     const score = sql<number>`ts_rank_cd(${knowledgeChunks.search}, ${tsquery})`.mapWith(Number);
     return this.db
       .select({

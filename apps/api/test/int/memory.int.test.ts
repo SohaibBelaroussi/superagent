@@ -8,6 +8,7 @@ import type {
   TaskEvent,
 } from '@superagent/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { ownerProfile } from '../../src/db/schema';
 import { OBSERVATIONS, REMEMBERED, type RecordedRequest, startFakeOpenAI } from '../support/fake-openai';
 import { jsonHeaders, startTestSystem } from './helpers';
 
@@ -167,13 +168,13 @@ describe('owner profile and department notes', () => {
     const memory = (await (
       await send('GET', `/v1/departments/${research.id}/memory`)
     ).json()) as DepartmentMemory;
-    expect(memory.notes).toContain('always cite two sources');
+    expect(memory.notes).toContain(REMEMBERED.note);
 
     const mark = ctx.fake.requests.length;
     await ctx.runTask('Task B', 'Research Mastra again.');
     // By title: the previous task's last model call may still land after the mark.
     const lead = leadCallsFor(ctx.chatRequests(mark), 'Task B')[0];
-    expect(lead && systemPrompt(lead)).toContain('always cite two sources');
+    expect(lead && systemPrompt(lead)).toContain(REMEMBERED.note);
 
     // Corrections from the owner apply on the next task.
     const replaced = await send('PUT', `/v1/departments/${research.id}/memory`, {
@@ -184,11 +185,55 @@ describe('owner profile and department notes', () => {
     await ctx.runTask('Task C', 'Research Mastra once more.');
     const corrected = leadCallsFor(ctx.chatRequests(next), 'Task C')[0];
     expect(corrected && systemPrompt(corrected)).toContain('Use metric units.');
-    expect(corrected && systemPrompt(corrected)).not.toContain('always cite two sources');
+    expect(corrected && systemPrompt(corrected)).not.toContain(REMEMBERED.note);
 
     expect((await send('GET', '/v1/departments/01900000-0000-7000-8000-000000000000/memory')).status).toBe(
       404,
     );
+  });
+
+  it('keeps the valid fields of a stored profile that no longer fits', async () => {
+    // As if an older version had stored preferences as text.
+    await ctx.system.db
+      .insert(ownerProfile)
+      .values({ id: 'owner', profile: { name: 'Sohaib', preferences: 'metric', about: 'Builds agents' } })
+      .onConflictDoUpdate({
+        target: ownerProfile.id,
+        set: { profile: { name: 'Sohaib', preferences: 'metric', about: 'Builds agents' } },
+      });
+    expect(await (await ctx.send('GET', '/v1/profile')).json()).toEqual({
+      name: 'Sohaib',
+      about: 'Builds agents',
+    });
+    const patched = await ctx.send('PATCH', '/v1/profile', { timezone: 'Asia/Qatar' });
+    expect(await patched.json()).toEqual({ name: 'Sohaib', about: 'Builds agents', timezone: 'Asia/Qatar' });
+  });
+
+  it('never loses a write when the owner, the chief and leads save at once', async () => {
+    const { send, system, research } = ctx;
+    await Promise.all([
+      send('PATCH', '/v1/profile', { language: 'English' }),
+      send('PATCH', '/v1/profile', { communicationStyle: 'Short' }),
+      system.memory.updateProfile({ preferences: ['Metric units'] }),
+    ]);
+    expect(await (await send('GET', '/v1/profile')).json()).toMatchObject({
+      language: 'English',
+      communicationStyle: 'Short',
+      preferences: ['Metric units'],
+    });
+
+    const lessons = ['One', 'Two', 'Three', 'Four', 'Five'].map((n) => `Lesson ${n}.`);
+    await Promise.all(lessons.map((note) => system.memory.addDepartmentNote(research.id, note)));
+    const { notes } = (await (
+      await send('GET', `/v1/departments/${research.id}/memory`)
+    ).json()) as DepartmentMemory;
+    for (const note of lessons) expect(notes).toContain(`- ${note}`);
+    // Saving the same lesson twice keeps one line.
+    await system.memory.addDepartmentNote(research.id, 'Lesson One.');
+    const again = (await (
+      await send('GET', `/v1/departments/${research.id}/memory`)
+    ).json()) as DepartmentMemory;
+    expect(again.notes?.split('- Lesson One.').length).toBe(2);
   });
 
   it('still answers direct calls that have no thread', async () => {
@@ -244,5 +289,45 @@ describe('long threads', () => {
     // Every turn reported: nothing was cut short by the compression.
     const task2 = (await (await ctx.send('GET', `/v1/tasks/${task.id}`)).json()) as Task;
     expect(task2.phase).toBe('review');
+
+    // Mastra's memory routes still see observational memory.
+    const config = await ctx.send('GET', '/api/memory/config?agentId=research-lead');
+    expect(config.status).toBe(200);
+    expect(JSON.stringify(await config.json())).toMatch(/"observationalMemory":\{"enabled":true/);
+  });
+
+  it('compresses with the default model while the fast one cannot be used', async () => {
+    const fast = await startFakeOpenAI(['fake-fast']);
+    try {
+      const provider = (await (
+        await ctx.send('POST', '/v1/providers', { slug: 'quick', name: 'Quick', baseUrl: fast.url })
+      ).json()) as Provider;
+      await ctx.send('POST', `/v1/providers/${provider.id}/refresh-models`);
+      await ctx.send('PATCH', '/v1/settings', {
+        models: { fast: { provider: 'quick', model: 'fake-fast' } },
+      });
+      const observed = (fake: { requests: RecordedRequest[] }) =>
+        fake.requests.filter(
+          (r) => r.path === '/chat/completions' && systemPrompt(r).includes('memory consciousness'),
+        ).length;
+
+      const task = await ctx.runTask('Fast observer', 'Find out what Mastra is and keep me posted.');
+      await ctx.send('POST', `/v1/tasks/${task.id}/messages`, { message: 'Add the license.' });
+      await ctx.waitForReports(task.id, 2);
+      expect(observed(fast)).toBeGreaterThan(0);
+
+      // The fast model's provider goes away: compression falls back instead of failing every turn.
+      const disabled = await ctx.send('PATCH', `/v1/providers/${provider.id}`, { enabled: false });
+      expect(disabled.status).toBe(200);
+      const before = observed(ctx.fake);
+      for (const [n, text] of ['Add the features.', 'Add who maintains it.'].entries()) {
+        await ctx.send('POST', `/v1/tasks/${task.id}/messages`, { message: text });
+        await ctx.waitForReports(task.id, n + 3);
+      }
+      expect(observed(ctx.fake)).toBeGreaterThan(before);
+      expect(((await (await ctx.send('GET', `/v1/tasks/${task.id}`)).json()) as Task).phase).toBe('review');
+    } finally {
+      await fast.close();
+    }
   });
 });

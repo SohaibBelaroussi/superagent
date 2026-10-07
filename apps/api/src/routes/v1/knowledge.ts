@@ -12,9 +12,26 @@ import type { AppDeps, AppEnv } from '../../http/types';
 /** Uploads get a larger body limit than other requests (see app.ts and the v1 router). */
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
-/** The one request that may carry a large body. Mastra parses only JSON bodies before auth. */
+/** The one request that may carry a large body (checked after auth, in the v1 router). */
 export const isUpload = (c: { req: { method: string; path: string } }) =>
   c.req.method === 'POST' && c.req.path === '/v1/knowledge';
+
+/**
+ * Before auth, a large body is only allowed when it can't be read early: a multipart upload that
+ * declares its length. Mastra parses any body whose content type mentions JSON, and a body without a
+ * length would have to be read to be counted.
+ */
+export const isUploadBeforeAuth = (c: {
+  req: { method: string; path: string; header(name: string): string | undefined };
+}) => {
+  const type = c.req.header('content-type')?.toLowerCase() ?? '';
+  return (
+    isUpload(c) &&
+    type.startsWith('multipart/form-data') &&
+    !type.includes('json') &&
+    Boolean(c.req.header('content-length'))
+  );
+};
 
 function toDocument(d: KnowledgeDocumentRow): KnowledgeDocument {
   return {
@@ -73,8 +90,9 @@ const uploadDocument = createRoute({
     400: problemResponse('Invalid request'),
     404: problemResponse('Department not found'),
     413: problemResponse('File too large'),
+    409: problemResponse('Department archived'),
     415: problemResponse('Unsupported document type'),
-    422: problemResponse('No readable text in the document'),
+    422: problemResponse('No readable text, or too much of it'),
     503: problemResponse('Document storage is not configured'),
   },
 });

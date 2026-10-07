@@ -23,9 +23,7 @@ export interface FakeOpenAI {
 }
 
 type ChatMessage = { role: string; content: unknown; tool_calls?: Array<{ function?: { name?: string } }> };
-type ToolDef = {
-  function: { name: string; parameters?: { properties?: Record<string, { type?: string }> } };
-};
+type ToolDef = { function: { name: string } };
 
 /**
  * A cooperative model: in each turn (everything after the last user message) it calls tools in this
@@ -33,11 +31,11 @@ type ToolDef = {
  * chief create a task, "[artifact]" makes a lead attach a deliverable, "[no-report]" makes a lead stop
  * without reporting, "[slow]" delays every answer in the conversation, "[linger]" only the final (text)
  * answers and "[slow-report]" only the answer that calls report_to_chief. "[fixed-ids]" reuses one tool-call id.
- * "[remember]" makes an agent update its working memory (the owner profile, or the department notes).
+ * "[remember]" makes the chief update the owner profile and a lead save a department note.
  * Observational memory's observer and reflector get valid observations back.
  */
 const PRIORITY: Array<(tool: string) => boolean> = [
-  (t) => t === 'updateWorkingMemory',
+  (t) => t === 'update_owner_profile' || t === 'save_department_note',
   (t) => t === 'create_task',
   (t) => t === 'update_task',
   (t) => t.startsWith('agent-'),
@@ -71,7 +69,7 @@ function pickTool(tools: string[], messages: ChatMessage[]): string | undefined 
     !NEVER_AUTOMATIC.has(t) &&
     !(t === 'create_task' && !directives.includes('[assign]')) &&
     !(t === 'add_artifact' && !directives.includes('[artifact]')) &&
-    !(t === 'updateWorkingMemory' && !directives.includes('[remember]')) &&
+    !((t === 'update_owner_profile' || t === 'save_department_note') && !directives.includes('[remember]')) &&
     !(t === 'report_to_chief' && directives.includes('[no-report]'));
   for (const matches of PRIORITY) {
     const tool = tools.find((t) => matches(t) && allowed(t));
@@ -80,19 +78,19 @@ function pickTool(tools: string[], messages: ChatMessage[]): string | undefined 
   return tools.find(allowed);
 }
 
-/** What a "[remember]" puts in working memory: a profile field (schema mode) or notes (template mode). */
+/** What a "[remember]" saves: a profile preference (the chief) or a department note (a lead). */
 export const REMEMBERED = {
   preference: 'Prefers answers in French',
-  notes: '# Department notes\n- Rules and preferences from the owner: always cite two sources.\n',
+  note: 'Always cite two sources.',
 };
 
-function argsFor(tool: string, def?: ToolDef): Record<string, unknown> {
+function argsFor(tool: string): Record<string, unknown> {
   if (tool.startsWith('agent-')) return { prompt: 'Find out what Mastra is and return two sources.' };
-  if (tool === 'updateWorkingMemory') {
-    const templateMode = def?.function.parameters?.properties?.memory?.type === 'string';
-    return { memory: templateMode ? REMEMBERED.notes : { preferences: [REMEMBERED.preference] } };
-  }
   switch (tool) {
+    case 'update_owner_profile':
+      return { preferences: [REMEMBERED.preference] };
+    case 'save_department_note':
+      return { note: REMEMBERED.note };
     case 'create_task':
       return {
         department: 'research',
@@ -180,8 +178,7 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
 
     if (req.method === 'POST' && path === '/chat/completions' && body) {
       const messages = (body.messages as ChatMessage[] | undefined) ?? [];
-      const toolDefs = (body.tools as ToolDef[] | undefined) ?? [];
-      const tools = toolDefs.map((t) => t.function.name);
+      const tools = ((body.tools as ToolDef[] | undefined) ?? []).map((t) => t.function.name);
       const toolResult = [...messages].reverse().find((m) => m.role === 'tool');
       const lastUser = [...messages].reverse().find((m) => m.role === 'user');
       const base = { id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1, model: body.model };
@@ -195,10 +192,7 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
         await new Promise((r) => setTimeout(r, SLOW_MS * 2));
       }
       if (tool) {
-        const args = argsFor(
-          tool,
-          toolDefs.find((t) => t.function.name === tool),
-        );
+        const args = argsFor(tool);
         delta = {
           role: 'assistant',
           content: null,
