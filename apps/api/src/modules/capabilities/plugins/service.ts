@@ -9,12 +9,14 @@ import type {
 } from '@superagent/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../../../db/client';
+import { isUniqueViolation } from '../../../db/errors';
 import {
   type McpServerRow,
   mcpServers,
   type PluginRow,
   pluginFiles,
   plugins,
+  secrets,
   skills,
 } from '../../../db/schema';
 import { ApiError } from '../../../http/problem';
@@ -22,17 +24,10 @@ import { Mutex } from '../../../util/mutex';
 import type { RunnerClient } from '../../workspace/runner-client';
 import { mcpToolKeys } from '../mcp/naming';
 import type { McpService } from '../mcp/service';
-import type { SecretService } from '../secrets';
+import { type SecretService, secretNames } from '../secrets';
 import type { SkillStore } from '../skills';
 import { ARCHIVE_LIMITS, type PluginFetcher, type PluginFile } from './fetch';
-import {
-  CONTAINER_ROOT,
-  type PlannedServer,
-  type PluginPlan,
-  placeholders,
-  planPlugin,
-  render,
-} from './formats';
+import { type PlannedServer, type PluginPlan, placeholders, planPlugin, render, serverSlug } from './formats';
 import { writeTar } from './tar';
 
 const PREVIEW_TTL_MS = 30 * 60_000;
@@ -45,6 +40,7 @@ const MANIFESTS = [
   '.codex-plugin/plugin.json',
   '.claude-plugin/plugin.json',
 ];
+const INTERRUPTED = 'Its setup was interrupted by a restart: uninstall it and install it again';
 
 interface Preview {
   id: string;
@@ -54,6 +50,12 @@ interface Preview {
   plan: PluginPlan;
   files: Map<string, PluginFile>;
   bytes: number;
+}
+
+/** A plugin's background setup: an uninstall stops it, then waits for it. */
+interface Setup {
+  abort: AbortController;
+  done: Promise<void>;
 }
 
 export interface PluginDeps {
@@ -82,25 +84,55 @@ function fallbackName(source: PluginSource): string | undefined {
 }
 
 /**
+ * The name of a secret a plugin's install creates: readable, and unique to that install (a hash of
+ * its id and the value's place), so no plugin can ever take or replace another's.
+ */
+export function pluginSecretName(
+  pluginId: string,
+  plugin: string,
+  server: string,
+  kind: string,
+  name: string,
+): string {
+  const hash = createHash('sha256')
+    .update(`${pluginId}/${server}/${kind}/${name}`)
+    .digest('hex')
+    .slice(0, 8)
+    .toUpperCase();
+  let base = `${plugin}_${server}_${kind}_${name}`
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/g, '_')
+    .replace(/_+/g, '_');
+  if (!/^[A-Z]/.test(base)) base = `P_${base}`;
+  return `${base.slice(0, 55).replace(/_+$/, '')}_${hash}`;
+}
+
+/**
  * Plugins (decision D38): previewed from a pinned source, then installed into owned rows: their
  * files, skills, MCP servers and the secrets their inputs became. stdio servers are set up in the
- * background (files and packages into the runner's volume, then tool discovery). Uninstalling detaches
- * them from agents and departments and removes all of it.
+ * background (files and packages into the runner's volume, then tool discovery). Uninstalling stops
+ * that setup, detaches them from agents and departments and removes all of it.
  */
 export class PluginService {
   private readonly previews = new Map<string, Preview>();
   private readonly lock = new Mutex();
-  private readonly setups = new Set<Promise<void>>();
+  private readonly setups = new Map<string, Setup>();
 
   constructor(private readonly deps: PluginDeps) {}
 
   async preview(source: PluginSource): Promise<PluginPreview> {
     this.expire();
-    const { files, sha } = await this.fetch(source);
+    const { files, sha, refused } = await this.fetch(source);
     const plan = planPlugin(files, {
       takenSlugs: new Set(this.deps.mcp.list().map((server) => server.slug)),
       fallbackName: fallbackName(source),
     });
+    if (refused.length > 0) {
+      const shown = refused.slice(0, 10).join(', ');
+      plan.warnings.push(
+        `Left out (links and other entries that are not regular files): ${shown}${refused.length > 10 ? ` and ${refused.length - 10} more` : ''}`,
+      );
+    }
     if (this.previews.size >= MAX_PREVIEWS) {
       const oldest = [...this.previews.values()].sort((a, b) => a.expiresAt - b.expiresAt)[0];
       if (oldest) this.previews.delete(oldest.id);
@@ -125,7 +157,11 @@ export class PluginService {
     if (!preview)
       throw new ApiError(404, 'preview_not_found', 'No such preview (they last 30 minutes): preview again');
     const { plan } = preview;
-    const values = input.inputs ?? {};
+    // The values given, else the plugin's defaults.
+    const values: Record<string, string> = {
+      ...Object.fromEntries(plan.inputs.flatMap((i) => (i.default !== null ? [[i.name, i.default]] : []))),
+      ...(input.inputs ?? {}),
+    };
     const missing = plan.inputs.filter((i) => i.required && !values[i.name]).map((i) => i.name);
     if (missing.length > 0) {
       throw new ApiError(400, 'inputs_missing', `This plugin needs: ${missing.join(', ')}`);
@@ -140,92 +176,108 @@ export class PluginService {
       }
       const id = randomUUID();
       const servers = plan.servers.filter((server) => input.servers?.[server.key]?.enabled !== false);
-      const secretsToWrite: Array<{ name: string; value: string }> = [];
-      const rows: McpServerRow[] = [];
-      await this.deps.db.transaction(async (tx) => {
-        await tx.insert(plugins).values({
-          id,
-          name: plan.name,
-          title: plan.title,
-          version: plan.version,
-          description: plan.description,
-          format: plan.format,
-          source: preview.source as Record<string, unknown>,
-          sha: preview.sha,
-          license: plan.license,
-          status: servers.length > 0 ? 'installing' : 'installed',
-          network: input.network ?? 'egress',
-          warnings: [...plan.warnings, ...plan.skipped.map((s) => `${s.component}: ${s.reason}`)],
-        });
-        const fileRows = [...preview.files.entries()].map(([path, file]) => ({
-          pluginId: id,
-          path,
-          mode: file.mode,
-          size: file.data.length,
-          sha256: createHash('sha256').update(file.data).digest('hex'),
-          content: file.data,
-        }));
-        for (let i = 0; i < fileRows.length; i += 200)
-          await tx.insert(pluginFiles).values(fileRows.slice(i, i + 200));
-        if (plan.skills.length > 0) {
-          await tx.insert(skills).values(
-            plan.skills.map((skill) => ({
-              id: randomUUID(),
-              pluginId: id,
-              name: skill.name,
-              description: skill.description,
-              dir: skill.dir,
-              license: skill.license,
-              compatibility: skill.compatibility,
-              fileCount: skill.files,
-              sizeBytes: skill.bytes,
-            })),
-          );
-        }
-        for (const server of servers) {
-          const extra = input.servers?.[server.key];
-          const env = this.values(plan, server, server.env, values, secretsToWrite, 'ENV');
-          const headers = this.values(plan, server, server.headers, values, secretsToWrite, 'HEADER');
-          const [row] = await tx
-            .insert(mcpServers)
-            .values({
-              id: randomUUID(),
-              slug: server.slug,
-              name: `${plan.title}: ${server.key}`,
-              description: `MCP server ${server.key} of the ${plan.name} plugin`,
-              pluginId: id,
-              key: server.key,
-              transport: server.transport,
-              url: server.url,
-              headers: { ...headers, ...(extra?.headers ?? {}) },
-              runtime: server.runtime,
-              package: server.package ? `${server.package}@${server.version}` : null,
-              command: server.transport === 'stdio' ? server.command : null,
-              cwd: server.cwd,
-              env: { ...env, ...(extra?.env ?? {}) },
-              status: 'pending',
-            })
-            .returning();
-          rows.push(row as McpServerRow);
-        }
+      // The secrets the owner named for its servers exist before anything is written.
+      const named = servers.flatMap((server) => {
+        const extra = input.servers?.[server.key];
+        return [...secretNames(extra?.env), ...secretNames(extra?.headers)];
       });
-      for (const secret of secretsToWrite) {
-        await this.deps.secrets.put(
-          secret.name,
-          { value: secret.value, description: `For the ${plan.name} plugin` },
-          { pluginId: id },
-        );
-      }
-      // Its servers' secrets (given at install) must exist before they are used.
-      const named = rows.flatMap((row) => [...Object.values(row.env), ...Object.values(row.headers)]);
-      const absent = await this.deps.secrets.missing(named.flatMap((v) => ('secret' in v ? [v.secret] : [])));
+      const absent = await this.deps.secrets.missing(named);
       if (absent.length > 0) {
-        await this.deps.db.delete(plugins).where(eq(plugins.id, id));
         throw new ApiError(
           400,
           'secret_missing',
           `No secret named ${absent.join(', ')} (PUT /v1/secrets/{name})`,
         );
+      }
+      // A slug taken since the preview: that server gets another.
+      const taken = new Set(this.deps.mcp.list().map((server) => server.slug));
+      const secretRows: Array<typeof secrets.$inferInsert> = [];
+      const args = new Map<string, string[]>();
+      const serverRows = servers.map((server) => {
+        const slug = taken.has(server.slug) ? serverSlug(plan.name, server.key, taken) : server.slug;
+        taken.add(slug);
+        const extra = input.servers?.[server.key];
+        const env = this.values(id, plan, server, server.env, values, secretRows, 'ENV');
+        const headers = this.values(id, plan, server, server.headers, values, secretRows, 'HEADER');
+        const command = server.command.map((arg) => this.fill(plan, arg, values));
+        args.set(server.key, command);
+        return {
+          id: randomUUID(),
+          slug,
+          name: `${plan.title}: ${server.key}`,
+          description: `MCP server ${server.key} of the ${plan.name} plugin`,
+          pluginId: id,
+          key: server.key,
+          transport: server.transport,
+          url: server.url ? this.url(plan, server, values) : null,
+          headers: { ...headers, ...(extra?.headers ?? {}) },
+          runtime: server.runtime,
+          package: server.package ? `${server.package}@${server.version}` : null,
+          // A package's executable is known once it is installed (setup).
+          command: server.transport === 'stdio' && server.runtime === 'bundled' ? command : null,
+          cwd: server.cwd,
+          env: { ...env, ...(extra?.env ?? {}) },
+          status: 'pending' as const,
+        };
+      });
+      const rows: McpServerRow[] = [];
+      try {
+        await this.deps.db.transaction(async (tx) => {
+          await tx.insert(plugins).values({
+            id,
+            name: plan.name,
+            title: plan.title,
+            version: plan.version,
+            description: plan.description,
+            format: plan.format,
+            source: preview.source as Record<string, unknown>,
+            sha: preview.sha,
+            license: plan.license,
+            status: servers.length > 0 ? 'installing' : 'installed',
+            network: input.network ?? 'egress',
+            warnings: [...plan.warnings, ...plan.skipped.map((s) => `${s.component}: ${s.reason}`)],
+          });
+          const fileRows = [...preview.files.entries()].map(([path, file]) => ({
+            pluginId: id,
+            path,
+            mode: file.mode,
+            size: file.data.length,
+            sha256: createHash('sha256').update(file.data).digest('hex'),
+            content: file.data,
+          }));
+          for (let i = 0; i < fileRows.length; i += 200)
+            await tx.insert(pluginFiles).values(fileRows.slice(i, i + 200));
+          if (plan.skills.length > 0) {
+            await tx.insert(skills).values(
+              plan.skills.map((skill) => ({
+                id: randomUUID(),
+                pluginId: id,
+                name: skill.name,
+                description: skill.description,
+                dir: skill.dir,
+                license: skill.license,
+                compatibility: skill.compatibility,
+                fileCount: skill.files,
+                sizeBytes: skill.bytes,
+              })),
+            );
+          }
+          // Its secrets are new ones, written with it: never another's, never replaced.
+          if (secretRows.length > 0) await tx.insert(secrets).values(secretRows);
+          for (const row of serverRows) {
+            const [inserted] = await tx.insert(mcpServers).values(row).returning();
+            rows.push(inserted as McpServerRow);
+          }
+        });
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new ApiError(
+            409,
+            'plugin_conflict',
+            'A server slug or secret this plugin needs was taken meanwhile: preview it again',
+          );
+        }
+        throw error;
       }
       await this.deps.skills.load();
       this.deps.mcp.adopt(rows, plan.name);
@@ -235,7 +287,7 @@ export class PluginService {
         skills: plan.skills.length,
         servers: rows.length,
       });
-      if (rows.length > 0) this.track(this.setUp(id, plan.name, rows, preview.files, plan));
+      if (rows.length > 0) this.start(id, plan.name, rows, preview.files, plan, args);
       return id;
     });
     return this.get(plugin);
@@ -253,8 +305,9 @@ export class PluginService {
   }
 
   /**
-   * Removes a plugin and everything it brought: its skills and servers leave the agents (a new version
-   * of each) and departments that had them, its containers and volumes go, then its rows and secrets.
+   * Removes a plugin and everything it brought: its setup stops, its skills and servers leave the
+   * agents (a new version of each) and departments that had them, its containers and volumes go, then
+   * its rows and the secrets nothing else uses.
    */
   async uninstall(id: string): Promise<void> {
     await this.lock.run(async () => {
@@ -281,11 +334,19 @@ export class PluginService {
         row.name,
         servers.map((server) => server.slug),
       );
+      // Its setup stops, and nothing of it may come back (the runner refuses the package from now on).
+      const setup = this.setups.get(id);
+      setup?.abort.abort();
       await this.deps.mcp.forgetPlugin(id);
       if (servers.some((server) => server.transport === 'stdio')) {
         await this.deps.runner?.removeMcp(id, true).catch((error: unknown) => {
           this.deps.logger.warn("Could not remove a plugin's MCP container", { plugin: row.name, error });
         });
+      }
+      await setup?.done;
+      const kept = await this.deps.secrets.release(id);
+      if (kept.length > 0) {
+        this.deps.logger.info("A plugin's secrets other servers use were kept", { plugin: row.name, kept });
       }
       await this.deps.db.delete(plugins).where(eq(plugins.id, id));
       await this.deps.skills.load();
@@ -293,53 +354,144 @@ export class PluginService {
     });
   }
 
+  /**
+   * At boot: setups a restart interrupted can't resume (their files and values are gone), so their
+   * plugins and waiting servers are marked failed, where the owner sees them.
+   */
+  async recover(): Promise<void> {
+    const stuck = await this.deps.db
+      .select({ id: plugins.id, name: plugins.name })
+      .from(plugins)
+      .where(eq(plugins.status, 'installing'));
+    for (const plugin of stuck) {
+      await this.deps.db
+        .update(plugins)
+        .set({ status: 'failed', statusDetail: INTERRUPTED, updatedAt: new Date() })
+        .where(eq(plugins.id, plugin.id));
+      for (const server of this.deps.mcp.ofPlugin(plugin.id)) {
+        if (server.status === 'pending') await this.deps.mcp.fail(server.id, INTERRUPTED);
+      }
+      this.deps.logger.warn('A plugin setup was interrupted by a restart', { plugin: plugin.name });
+    }
+  }
+
+  /**
+   * Removes what the runner keeps for plugins that are gone (an uninstall that couldn't reach it, or
+   * a crash in the middle of one): containers, launches and volumes.
+   */
+  async reconcile(): Promise<void> {
+    const runner = this.deps.runner;
+    if (!runner) return;
+    await this.lock.run(async () => {
+      const installed = new Set(
+        (await this.deps.db.select({ id: plugins.id }).from(plugins)).map((row) => row.id),
+      );
+      for (const leftover of await runner.listMcp()) {
+        if (installed.has(leftover.packageId)) continue;
+        await runner.removeMcp(leftover.packageId, true);
+        this.deps.logger.info("Removed an uninstalled plugin's MCP leftovers", {
+          packageId: leftover.packageId,
+        });
+      }
+    });
+  }
+
   /** Waits for background setups (shutdown and tests). */
   async settled(): Promise<void> {
-    while (this.setups.size > 0) await Promise.allSettled([...this.setups]);
+    while (this.setups.size > 0) await Promise.allSettled([...this.setups.values()].map((s) => s.done));
   }
 
   // --- install helpers ---
 
   /**
-   * A server's environment or headers: values with placeholders are filled from the install inputs,
-   * and a value that holds a sensitive input becomes a secret owned by the plugin.
+   * A server's environment or headers. Agent Plugins packages take no values: their text is used as
+   * is. Otherwise a value made from install inputs is kept in the vault, owned by the plugin, and the
+   * others are plain.
    */
   private values(
+    pluginId: string,
     plan: PluginPlan,
     server: PlannedServer,
     templates: Record<string, string>,
     inputs: Record<string, string>,
-    secrets: Array<{ name: string; value: string }>,
-    kind: string,
+    secretRows: Array<typeof secrets.$inferInsert>,
+    kind: 'ENV' | 'HEADER',
   ): Record<string, ConfigValue> {
     const out: Record<string, ConfigValue> = {};
-    const sensitive = new Set(plan.inputs.filter((i) => i.sensitive).map((i) => i.name));
+    const names = new Set(plan.inputs.map((i) => i.name));
     for (const [name, template] of Object.entries(templates)) {
-      // Agent Plugins packages take no values: their text is used as is.
-      if (plan.format === 'agent-plugins') {
-        out[name] = { value: template };
+      if (plan.format === 'agent-plugins' || !placeholders(template).some((p) => names.has(p))) {
+        out[name] = { value: this.fill(plan, template, inputs) };
         continue;
       }
-      const value = render(template, inputs);
-      if (placeholders(template).some((p) => sensitive.has(p))) {
-        const secret = `${plan.name}_${server.key}_${kind}_${name}`
-          .toUpperCase()
-          .replace(/[^A-Z0-9_]/g, '_')
-          .slice(0, 64);
-        secrets.push({ name: secret, value });
-        out[name] = { secret };
-      } else out[name] = { value };
+      const secret = pluginSecretName(pluginId, plan.name, server.key, kind, name);
+      secretRows.push(
+        this.deps.secrets.sealed(
+          secret,
+          render(template, inputs, names),
+          `For the ${plan.name} plugin (${server.key})`,
+          pluginId,
+        ),
+      );
+      out[name] = { secret };
     }
     return out;
   }
 
-  /** Puts a plugin's stdio servers in place (files, packages), then asks every server for its tools. */
+  /** A value with the install's inputs filled in (Agent Plugins packages take none). */
+  private fill(plan: PluginPlan, template: string, inputs: Record<string, string>): string {
+    if (plan.format === 'agent-plugins') return template;
+    return render(template, inputs, new Set(plan.inputs.map((i) => i.name)));
+  }
+
+  /** A remote server's URL, filled in: still https. */
+  private url(plan: PluginPlan, server: PlannedServer, inputs: Record<string, string>): string {
+    const filled = this.fill(plan, server.url as string, inputs);
+    let url: URL | undefined;
+    try {
+      url = new URL(filled);
+    } catch {
+      url = undefined;
+    }
+    if (url?.protocol !== 'https:') {
+      throw new ApiError(
+        400,
+        'invalid_input',
+        `The ${server.key} server's URL is not an https URL once filled in`,
+      );
+    }
+    return url.toString();
+  }
+
+  private start(
+    id: string,
+    name: string,
+    rows: McpServerRow[],
+    files: Map<string, PluginFile>,
+    plan: PluginPlan,
+    args: Map<string, string[]>,
+  ): void {
+    const abort = new AbortController();
+    const done: Promise<void> = this.setUp(id, name, rows, files, plan, args, abort.signal)
+      .catch((error: unknown) => this.deps.logger.error('Plugin setup failed', { plugin: name, error }))
+      .finally(() => {
+        if (this.setups.get(id)?.done === done) this.setups.delete(id);
+      });
+    this.setups.set(id, { abort, done });
+  }
+
+  /**
+   * Puts a plugin's stdio servers in place (files, then each server's package), then asks every
+   * server for its tools. Stops as soon as the plugin is uninstalled.
+   */
   private async setUp(
     id: string,
     name: string,
     rows: McpServerRow[],
     files: Map<string, PluginFile>,
     plan: PluginPlan,
+    args: Map<string, string[]>,
+    signal: AbortSignal,
   ): Promise<void> {
     const problems: string[] = [];
     let ready = rows;
@@ -349,6 +501,7 @@ export class PluginService {
       if (!runner) {
         problems.push('stdio servers need the runner (RUNNER_URL and RUNNER_TOKEN)');
         ready = rows.filter((row) => row.transport === 'http');
+        for (const row of stdio) await this.deps.mcp.fail(row.id, 'stdio servers need the runner');
       } else {
         try {
           // The plugin's files, without its skills (agents read those from the database).
@@ -356,48 +509,46 @@ export class PluginService {
           const kept = [...files.entries()]
             .filter(([path]) => !skillDirs.some((dir) => path.startsWith(dir)))
             .map(([path, file]) => ({ path, mode: file.mode, data: file.data }));
-          await runner.mcpFiles(id, writeTar(kept));
-          const packaged = stdio.filter((row) => row.runtime === 'npm' || row.runtime === 'uv');
-          if (packaged.length > 0) {
-            const planned = new Map(plan.servers.map((server) => [server.key, server]));
-            const result = await runner.mcpInstall(id, {
-              servers: packaged.map((row) => {
-                const server = planned.get(row.key ?? '') as PlannedServer;
-                return {
-                  key: row.key ?? '',
-                  runtime: row.runtime as 'npm' | 'uv',
-                  package: server.package as string,
-                  version: server.version as string,
-                  ...(server.bin ? { bin: server.bin } : {}),
-                };
-              }),
-            });
-            for (const installed of result.servers) {
-              const row = packaged.find((r) => r.key === installed.key) as McpServerRow;
-              const server = planned.get(installed.key) as PlannedServer;
-              if (!installed.ok || !installed.executable) {
-                problems.push(`${row.slug}: install failed (${installed.log.slice(-300)})`);
-                ready = ready.filter((r) => r.id !== row.id);
-                await this.deps.mcp.fail(row.id, `Its package did not install: ${installed.log.slice(-500)}`);
-                continue;
-              }
-              const command =
-                row.runtime === 'npm'
-                  ? ['node', installed.executable, ...server.command]
-                  : [installed.executable, ...server.command];
-              const [next] = await this.deps.db
-                .update(mcpServers)
-                .set({
-                  command,
-                  package: `${server.package}@${installed.version ?? server.version}`,
-                  updatedAt: new Date(),
-                })
-                .where(eq(mcpServers.id, row.id))
-                .returning();
-              this.deps.mcp.adopt([next as McpServerRow], name);
+          await runner.mcpFiles(id, writeTar(kept), signal);
+          const planned = new Map(plan.servers.map((server) => [server.key, server]));
+          // One request per server: each install may take up to the runner's install timeout.
+          for (const row of stdio.filter((r) => r.runtime === 'npm' || r.runtime === 'uv')) {
+            signal.throwIfAborted();
+            const server = planned.get(row.key ?? '') as PlannedServer;
+            const result = await runner.mcpInstall(
+              id,
+              {
+                servers: [
+                  {
+                    key: server.key,
+                    runtime: row.runtime as 'npm' | 'uv',
+                    package: server.package as string,
+                    version: server.version as string,
+                    ...(server.bin ? { bin: server.bin } : {}),
+                  },
+                ],
+              },
+              signal,
+            );
+            const installed = result.servers[0];
+            if (!installed?.ok || !installed.executable) {
+              const log = installed?.log ?? '';
+              problems.push(`${row.slug}: install failed (${log.slice(-300)})`);
+              ready = ready.filter((r) => r.id !== row.id);
+              await this.deps.mcp.fail(row.id, `Its package did not install: ${log.slice(-500)}`);
+              continue;
             }
+            const rest = args.get(server.key) ?? [];
+            await this.deps.mcp.installed(
+              row.id,
+              row.runtime === 'npm'
+                ? ['node', installed.executable, ...rest]
+                : [installed.executable, ...rest],
+              `${server.package}@${installed.version ?? server.version}`,
+            );
           }
         } catch (error) {
+          if (signal.aborted) return;
           problems.push(`setting up its stdio servers failed: ${(error as Error).message}`);
           ready = rows.filter((row) => row.transport === 'http');
           for (const row of stdio) await this.deps.mcp.fail(row.id, (error as Error).message);
@@ -405,16 +556,20 @@ export class PluginService {
       }
     }
     for (const row of ready) {
+      if (signal.aborted) return;
       try {
-        const current = this.deps.mcp.ofPlugin(id).find((r) => r.id === row.id) ?? row;
+        const current = this.deps.mcp.ofPlugin(id).find((r) => r.id === row.id);
+        if (!current) continue;
         if (current.transport === 'stdio') await this.deps.mcp.launch(current);
         const server = await this.deps.mcp.refresh(row.id);
         if (server.status !== 'ready') problems.push(`${server.slug}: ${server.statusDetail ?? 'no tools'}`);
       } catch (error) {
+        if (signal.aborted) return;
         problems.push(`${row.slug}: ${(error as Error).message}`);
         await this.deps.mcp.fail(row.id, (error as Error).message);
       }
     }
+    if (signal.aborted) return;
     await this.deps.db
       .update(plugins)
       .set({
@@ -428,15 +583,11 @@ export class PluginService {
       this.deps.logger.warn('A plugin was installed with problems', { plugin: name, problems });
   }
 
-  private track(work: Promise<void>): void {
-    const tracked = work.catch((error: unknown) => this.deps.logger.error('Plugin setup failed', { error }));
-    this.setups.add(tracked);
-    void tracked.finally(() => this.setups.delete(tracked));
-  }
-
   // --- fetching ---
 
-  private async fetch(source: PluginSource): Promise<{ files: Map<string, PluginFile>; sha: string | null }> {
+  private async fetch(
+    source: PluginSource,
+  ): Promise<{ files: Map<string, PluginFile>; sha: string | null; refused: string[] }> {
     const { fetcher } = this.deps;
     if (source.kind === 'url') {
       const unpacked = await fetcher.unpack(
@@ -451,7 +602,7 @@ export class PluginService {
           `The archive's sha256 is ${unpacked.sha256}, not the one given`,
         );
       }
-      return { files: unpacked.files, sha: null };
+      return { files: unpacked.files, sha: null, refused: unpacked.refused };
     }
     const sha = await fetcher.resolveSha(source.repo, source.ref ?? 'HEAD');
     const prefix = source.path ? `${source.path.replace(/\/+$/, '')}/` : '';
@@ -469,11 +620,14 @@ export class PluginService {
     if (unpacked.comment !== sha) {
       throw new ApiError(422, 'plugin_unavailable', 'The archive GitHub sent is not the pinned commit');
     }
-    return { files: unpacked.files, sha };
+    return { files: unpacked.files, sha, refused: unpacked.refused };
   }
 
-  /** What to keep of a repository's archive: manifests, skills, and the folders bundled servers run from. */
-  private keepFor(probed: Map<string, PluginFile>): string[] {
+  /**
+   * What to keep of a repository's archive: its manifests and skills, or the whole plugin when it has
+   * MCP servers of its own (their code may sit anywhere, and a manifest may name a config file).
+   */
+  private keepFor(probed: Map<string, PluginFile>): string[] | null {
     const keep = new Set([
       ...MANIFESTS,
       '.codex-plugin/',
@@ -483,24 +637,21 @@ export class PluginService {
       'LICENSE.md',
       'LICENSE.txt',
     ]);
-    keep.add('package.json');
-    keep.add('package-lock.json');
     try {
       const plan = planPlugin(probed, { fallbackName: 'probe' });
-      for (const server of plan.servers) {
-        for (const part of server.command) {
-          if (!part.startsWith(`${CONTAINER_ROOT}/`)) continue;
-          const rel = part.slice(CONTAINER_ROOT.length + 1);
-          keep.add(rel.includes('/') ? `${rel.split('/')[0]}/` : rel);
-        }
-      }
+      if (plan.servers.some((server) => server.runtime === 'bundled')) return null;
       for (const manifest of [
         probed.get('.codex-plugin/plugin.json'),
         probed.get('.claude-plugin/plugin.json'),
       ]) {
         if (!manifest) continue;
-        const skillsField = (JSON.parse(manifest.data.toString('utf8')) as { skills?: unknown }).skills;
-        for (const path of Array.isArray(skillsField) ? skillsField : [skillsField]) {
+        const parsed = JSON.parse(manifest.data.toString('utf8')) as {
+          skills?: unknown;
+          mcpServers?: unknown;
+        };
+        const configs = Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [parsed.mcpServers];
+        if (configs.some((config) => typeof config === 'string')) return null;
+        for (const path of Array.isArray(parsed.skills) ? parsed.skills : [parsed.skills]) {
           if (typeof path === 'string') keep.add(`${path.replace(/^\.\//, '').replace(/\/+$/, '')}/`);
         }
       }

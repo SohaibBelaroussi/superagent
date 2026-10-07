@@ -71,10 +71,11 @@ export function compileAgent(entry: AgentEntry, deps: CompileDeps): Agent {
         : specialistInstructions(fresh, directory);
     },
     model: model ? routerId(model) : () => settings.modelRouterId('default'),
+    // Built-in tools come last: no MCP tool can take one's name (reserved slugs keep them apart anyway).
     tools:
       entry.role === 'lead'
-        ? { ...catalog.build(entry.current.tools), ...mcpTools, ...leadTools }
-        : { ...catalog.build(entry.current.tools), ...mcpTools },
+        ? { ...mcpTools, ...catalog.build(entry.current.tools), ...leadTools }
+        : { ...mcpTools, ...catalog.build(entry.current.tools) },
     memory: entry.role === 'lead' ? memory.lead : memory.specialist,
     // Inside a task only: the task's folder and sandbox (decision D33).
     workspace: workspaces.workspaceFor(entry.key, entry.current.tools, {

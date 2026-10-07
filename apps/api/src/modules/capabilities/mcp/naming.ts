@@ -1,9 +1,31 @@
 import { createHash } from 'node:crypto';
 
-/** Names Mastra gives skills' tools: an MCP tool must never take one. */
-const RESERVED = new Set(['skill', 'skill_read', 'skill_search']);
 const MAX = 64;
 const SAFE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Slugs an MCP server may not take: the first word of every built-in tool's name (catalog, lead and
+ * chief tools, skills, browser and workspace tools). A tool's name is `<slug>_<tool>` and slugs have no
+ * underscore, so no MCP tool can then take a built-in's name. A new built-in tool adds its first word
+ * here (a unit test checks them).
+ */
+export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
+  'add',
+  'board',
+  'browser',
+  'cancel',
+  'create',
+  'current',
+  'fetch',
+  'inspect',
+  'knowledge',
+  'mastra',
+  'message',
+  'report',
+  'skill',
+  'update',
+  'web',
+]);
 
 const shortHash = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 6);
 
@@ -22,7 +44,7 @@ export function mcpToolKeys(slug: string, tools: string[]): Map<string, string> 
     const plain = `${slug}_${tool.replace(/[^A-Za-z0-9_-]/g, '_')}`;
     const hashed = `${plain.slice(0, MAX - 7)}_${shortHash(tool)}`;
     let key = plain.length <= MAX ? plain : hashed;
-    if (taken.has(key) || RESERVED.has(key)) key = hashed;
+    if (taken.has(key)) key = hashed;
     taken.add(key);
     keys.set(tool, key);
   }

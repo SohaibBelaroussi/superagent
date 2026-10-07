@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { BrowserIdentity, CreateBrowserIdentityInput } from '@superagent/shared';
 import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client';
+import { isUniqueViolation } from '../../db/errors';
 import { type BrowserIdentityRow, browserIdentities, type TaskRow } from '../../db/schema';
 import { ApiError } from '../../http/problem';
 import type { TaskService } from '../ledger/service';
@@ -13,11 +14,6 @@ export const LEASE_MS = 2 * 60_000;
 
 /** Who holds an identity: a task's browser, or the owner's sign-in session. */
 export type IdentityHolder = { kind: 'task'; taskId: string } | { kind: 'owner' };
-
-function isUniqueViolation(error: unknown): boolean {
-  const e = error as { code?: string; cause?: { code?: string } };
-  return e?.code === '23505' || e?.cause?.code === '23505';
-}
 
 /**
  * Browser identities (decision D34): named, signed-in browser profiles. The runner keeps each profile

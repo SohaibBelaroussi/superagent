@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ConfigValue, PutSecretInput, Secret } from '@superagent/shared';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { SecretBox } from '../../crypto/secret-box';
 import type { Db } from '../../db/client';
 import { mcpServers, plugins, type SecretRow, secrets } from '../../db/schema';
@@ -64,6 +64,43 @@ export class SecretService {
       });
     }
     return this.get(name);
+  }
+
+  /**
+   * A plugin's secret, sealed, for its install to insert in its own transaction: inserts never
+   * replace a secret (a clash fails the install).
+   */
+  sealed(name: string, value: string, description: string, pluginId: string): typeof secrets.$inferInsert {
+    const id = randomUUID();
+    return { id, name, description, valueEnc: this.box.seal(value, context(id)), pluginId };
+  }
+
+  /**
+   * Before a plugin goes: its secrets that servers of other origins use stay, owned by nobody, so
+   * uninstalling never takes a credential away from them. Returns their names.
+   */
+  async release(pluginId: string): Promise<string[]> {
+    const owned = await this.db
+      .select({ name: secrets.name })
+      .from(secrets)
+      .where(eq(secrets.pluginId, pluginId));
+    if (owned.length === 0) return [];
+    const others = await this.db
+      .select({ headers: mcpServers.headers, env: mcpServers.env, pluginId: mcpServers.pluginId })
+      .from(mcpServers);
+    const used = new Set(
+      others
+        .filter((row) => row.pluginId !== pluginId)
+        .flatMap((row) => [...secretNames(row.headers), ...secretNames(row.env)]),
+    );
+    const kept = owned.map((row) => row.name).filter((name) => used.has(name));
+    if (kept.length > 0) {
+      await this.db
+        .update(secrets)
+        .set({ pluginId: null, updatedAt: new Date() })
+        .where(and(eq(secrets.pluginId, pluginId), inArray(secrets.name, kept)));
+    }
+    return kept;
   }
 
   async get(name: string): Promise<Secret> {

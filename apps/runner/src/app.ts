@@ -190,6 +190,12 @@ export function createRunnerApp(
     return c.body(null, 204);
   });
 
+  // The server was disabled: its launch is forgotten and its process stopped.
+  app.delete('/mcp/servers/:serverId/launch', (c) => {
+    mcp.forget(c.req.param('serverId'));
+    return c.body(null, 204);
+  });
+
   // The server's Streamable HTTP endpoint (JSON responses; no server-sent stream).
   app.on(['GET', 'POST', 'DELETE'], '/mcp/servers/:serverId', async (c) => {
     if (c.req.method === 'GET') return c.body(null, 405, { allow: 'POST, DELETE' });

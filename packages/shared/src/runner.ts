@@ -299,6 +299,7 @@ export type RunnerErrorCode =
   | 'browsers_busy'
   | 'browser_unavailable'
   | 'launch_unknown'
+  | 'package_removed'
   | 'mcp_busy'
   | 'mcp_unavailable'
   | 'docker_error';

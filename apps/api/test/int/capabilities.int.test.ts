@@ -23,9 +23,12 @@ import type {
   Task,
   TaskEvent,
 } from '@superagent/shared';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { System } from '../../src/bootstrap';
+import { mcpServers, secrets as secretsTable } from '../../src/db/schema';
+import { McpService } from '../../src/modules/capabilities/mcp/service';
 import { writeTar } from '../../src/modules/capabilities/plugins/tar';
 import { type FakeOpenAI, startFakeOpenAI } from '../support/fake-openai';
 import { jsonHeaders, startTestSystem } from './helpers';
@@ -60,6 +63,40 @@ function fixtureArchive(): Buffer {
   return gzipSync(writeTar(files));
 }
 
+/**
+ * A Claude Code plugin whose stdio server never answers and ignores the end of its input, with a
+ * credential it is installed with.
+ */
+function hangingArchive(): Buffer {
+  const file = (path: string, content: unknown) => ({
+    path,
+    mode: 0o644,
+    data: Buffer.from(typeof content === 'string' ? content : JSON.stringify(content)),
+  });
+  return gzipSync(
+    writeTar([
+      file('.claude-plugin/plugin.json', {
+        name: 'hang-kit',
+        version: '0.1.0',
+        userConfig: { token: { description: 'Its token', sensitive: true, required: true } },
+      }),
+      file('.mcp.json', {
+        mcpServers: {
+          stuck: {
+            command: 'node',
+            args: [`${'$'}{CLAUDE_PLUGIN_ROOT}/hang.mjs`],
+            env: { HANG_TOKEN: `${'$'}{user_config.token}` },
+          },
+        },
+      }),
+      file(
+        'hang.mjs',
+        "process.stdin.on('data', () => {}).on('end', () => {});\nsetInterval(() => {}, 1 << 30);\n",
+      ),
+    ]),
+  );
+}
+
 describe('capabilities', () => {
   let runner: Runner;
   let runnerServer: ServerType;
@@ -70,6 +107,8 @@ describe('capabilities', () => {
   let mcpUrl = '';
   let archiveUrl = '';
   let archiveSha = '';
+  let hangUrl = '';
+  let hangSha = '';
   let ops: Department;
   let lead: AgentDefinition;
   const mcpHeaders: string[] = [];
@@ -143,11 +182,16 @@ describe('capabilities', () => {
     // The fixture plugin, served as a release archive.
     const archive = fixtureArchive();
     archiveSha = createHash('sha256').update(archive).digest('hex');
-    files = createServer((_req, res) =>
-      res.writeHead(200, { 'content-type': 'application/gzip' }).end(archive),
+    const hanging = hangingArchive();
+    hangSha = createHash('sha256').update(hanging).digest('hex');
+    files = createServer((req, res) =>
+      res
+        .writeHead(200, { 'content-type': 'application/gzip' })
+        .end(req.url === '/hang-kit.tar.gz' ? hanging : archive),
     );
     await new Promise<void>((resolve) => files.listen(0, '127.0.0.1', resolve));
     archiveUrl = `http://127.0.0.1:${(files.address() as AddressInfo).port}/demo-kit.tar.gz`;
+    hangUrl = `http://127.0.0.1:${(files.address() as AddressInfo).port}/hang-kit.tar.gz`;
 
     runner = createRunner(
       RunnerConfigSchema.parse({
@@ -383,6 +427,20 @@ describe('capabilities', () => {
     const running = await runner.mcp.list();
     expect(running.find((p) => p.packageId === plugin.id)?.state).toBe('running');
 
+    // A changed environment reaches the server's process; disabling it stops the process.
+    const notes = (
+      (await (await send('GET', '/v1/mcp-servers')).json()) as { items: McpServer[] }
+    ).items.find((s) => s.slug === 'demo-kit-notes') as McpServer;
+    expect((await send('PATCH', `/v1/mcp-servers/${notes.id}`, { env: {} })).status).toBe(200);
+    const again = fake.requests.length;
+    await reported((await createTask('Greet again. [mcp:greet {"name":"Bo"}]')).id);
+    // Its whole environment went: the greeting too.
+    expect(seenSince(again)).toContain('Hi, Bo! root=/opt/plugin data=/data cwd=/opt/plugin token=unset');
+    expect((await send('PATCH', `/v1/mcp-servers/${notes.id}`, { enabled: false })).status).toBe(200);
+    expect((await runner.mcp.list()).find((p) => p.packageId === plugin.id)?.servers).toEqual([]);
+    expect((await send('PATCH', `/v1/mcp-servers/${notes.id}`, { enabled: true })).status).toBe(200);
+    expect((await runner.mcp.list()).find((p) => p.packageId === plugin.id)?.servers).toEqual([notes.id]);
+
     // Uninstalled: nothing of it is left, and nobody refers to it.
     expect((await send('DELETE', `/v1/plugins/${plugin.id}`)).status).toBe(204);
     const department = (await (await send('GET', `/v1/departments/${ops.id}`)).json()) as Department;
@@ -396,5 +454,75 @@ describe('capabilities', () => {
     expect(servers.map((s) => s.slug)).toEqual(['local-mcp']);
     expect((await runner.mcp.list()).some((p) => p.packageId === plugin.id)).toBe(false);
     expect(docker('volume', 'ls', '-q', '--filter', `name=${VOLUMES}`).trim()).toBe('');
+  }, 240_000);
+
+  it('uninstalls a plugin whose server hangs at start: nothing comes back, shared secrets stay', async () => {
+    const previewed = await send('POST', '/v1/plugins/preview', {
+      source: { kind: 'url', url: hangUrl, sha256: hangSha, allowPrivateNetwork: true },
+    });
+    expect(previewed.status, await previewed.clone().text()).toBe(200);
+    const preview = (await previewed.json()) as PluginPreview;
+    expect(preview.inputs).toEqual([
+      { name: 'token', description: 'Its token', sensitive: true, required: true, default: null },
+    ]);
+    const installed = await send('POST', '/v1/plugins', {
+      previewId: preview.id,
+      network: 'none',
+      inputs: { token: 'hang-secret-value' },
+    });
+    expect(installed.status, await installed.clone().text()).toBe(201);
+    const plugin = (await installed.json()) as Plugin;
+    // Its credential became a secret it owns, with a name no other plugin can take.
+    const owned = ((await (await send('GET', '/v1/secrets')).json()) as { items: Secret[] }).items.find(
+      (s) => s.plugin === 'hang-kit',
+    ) as Secret;
+    expect(owned.name).toMatch(/^HANG_KIT_STUCK_ENV_HANG_TOKEN_[0-9A-F]{8}$/);
+    // The owner's own server uses it too.
+    const local = (
+      (await (await send('GET', '/v1/mcp-servers')).json()) as { items: McpServer[] }
+    ).items.find((s) => s.slug === 'local-mcp') as McpServer;
+    const reused = await send('PATCH', `/v1/mcp-servers/${local.id}`, {
+      headers: { Authorization: { secret: owned.name } },
+    });
+    expect(reused.status, await reused.clone().text()).toBe(200);
+
+    // Its setup waits on a server that never answers.
+    await waitFor(
+      () => runner.mcp.list(),
+      (packages) => (packages.find((p) => p.packageId === plugin.id)?.servers.length ?? 0) > 0,
+      'the server launched',
+    );
+    const started = Date.now();
+    expect((await send('DELETE', `/v1/plugins/${plugin.id}`)).status).toBe(204);
+    expect(Date.now() - started).toBeLessThan(30_000);
+    await system.plugins.settled();
+
+    // Nothing of it is left or comes back, and the API still answers.
+    const servers = ((await (await send('GET', '/v1/mcp-servers')).json()) as { items: McpServer[] }).items;
+    expect(servers.map((s) => s.slug)).toEqual(['local-mcp']);
+    expect((await runner.mcp.list()).some((p) => p.packageId === plugin.id)).toBe(false);
+    expect(docker('volume', 'ls', '-q', '--filter', `name=${VOLUMES}`).trim()).toBe('');
+    expect((await send('PUT', '/v1/secrets/ACME_TOKEN', { value: 's3cr3t-value' })).status).toBe(200);
+    expect((await send('GET', '/v1/capabilities')).status).toBe(200);
+    // The secret the owner's server uses stayed, owned by nobody now.
+    const kept = ((await (await send('GET', '/v1/secrets')).json()) as { items: Secret[] }).items.find(
+      (secret) => secret.name === owned.name,
+    );
+    expect(kept).toMatchObject({ plugin: null, usedBy: ['local-mcp'] });
+
+    // A server whose secret is gone no longer stops the API from starting: it is marked failed.
+    await system.db.delete(secretsTable).where(eq(secretsTable.name, owned.name));
+    const fresh = new McpService({
+      db: system.db,
+      secrets: system.secrets,
+      logger: system.mastra.getLogger(),
+      grantedTo: () => [],
+    });
+    await fresh.load();
+    expect(fresh.get(local.id)).toMatchObject({ status: 'failed' });
+    expect(fresh.get(local.id).statusDetail).toMatch(new RegExp(owned.name));
+    const [row] = await system.db.select().from(mcpServers).where(eq(mcpServers.id, local.id));
+    expect(row?.status).toBe('failed');
+    await fresh.close();
   }, 180_000);
 });

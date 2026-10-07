@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { posix } from 'node:path';
 import { validateSkillContent } from '@mastra/core/skills';
 import type { PluginInput } from '@superagent/shared';
 import { ApiError } from '../../../http/problem';
@@ -13,6 +14,8 @@ const SKILL_LIMITS = { files: 2_000, bytes: 20 * 1024 * 1024 };
 /** A placeholder as plugins write it: `${NAME}`. */
 const placeholder = (name: string) => `\${${name}}`;
 const SENSITIVE = /KEY|TOKEN|SECRET|PASSWORD|PASS|CREDENTIAL|AUTH/i;
+/** A placeholder an install fills: `${NAME}` or `${NAME:-default}`. */
+const INPUT = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g;
 
 export type PluginFormat = 'agent-plugins' | 'codex' | 'claude' | 'skills';
 
@@ -30,6 +33,7 @@ export interface PlannedServer {
   key: string;
   slug: string;
   transport: 'http' | 'stdio';
+  /** May hold `${NAME}` placeholders filled from install inputs (then checked again). */
   url: string | null;
   /** Values may hold `${NAME}` placeholders filled from install inputs. */
   headers: Record<string, string>;
@@ -39,7 +43,10 @@ export interface PlannedServer {
   version: string | null;
   /** npm: which of the package's bins; uv: which console script. */
   bin: string | null;
-  /** bundled: the whole command; npm and uv: the arguments after the package's executable. */
+  /**
+   * bundled: the whole command; npm and uv: the arguments after the package's executable. Arguments
+   * may hold `${NAME}` placeholders filled from install inputs.
+   */
   command: string[];
   cwd: string | null;
   env: Record<string, string>;
@@ -90,7 +97,10 @@ function folder(path: string): string | null {
   return clean;
 }
 
-/** A slug for a plugin's MCP server: `<plugin>-<server>`, lowercase, at most 32 characters. */
+/**
+ * A slug for a plugin's MCP server: `<plugin>-<server>`, lowercase, at most 32 characters. It always
+ * keeps its dash, so it is never one of the reserved slugs (built-in tools' first words).
+ */
 export function serverSlug(plugin: string, key: string, taken: Set<string>): string {
   const clean = (text: string) =>
     text
@@ -98,9 +108,10 @@ export function serverSlug(plugin: string, key: string, taken: Set<string>): str
       .replace(/[^a-z0-9-]+/g, '-')
       .replace(/-+/g, '-')
       .replace(/^-|-$/g, '');
-  const base = clean(`${plugin}-${key}`);
+  const keyClean = clean(key) || 'server';
+  const base = `${clean(plugin)}-${keyClean}`;
   // Too long: the plugin's part is cut (and a hash keeps it unique), the server's key stays readable.
-  const keyPart = clean(key).slice(0, 16).replace(/-$/, '') || 'server';
+  const keyPart = keyClean.slice(0, 16).replace(/-$/, '');
   const hash = createHash('sha256').update(base).digest('hex').slice(0, 6);
   const pluginPart = clean(plugin)
     .slice(0, 32 - keyPart.length - 9)
@@ -211,11 +222,15 @@ export function planPlugin(
   if (format === 'claude' && manifest.userConfig && typeof manifest.userConfig === 'object') {
     for (const [key, raw] of Object.entries(manifest.userConfig as Json)) {
       const entry = (raw ?? {}) as Json;
+      const fallback = ['string', 'number', 'boolean'].includes(typeof entry.default)
+        ? String(entry.default)
+        : null;
       inputs.set(key, {
         name: key,
         description: str(entry.description) ?? str(entry.title) ?? key,
         sensitive: entry.sensitive === true,
-        required: entry.required === true && entry.default === undefined,
+        required: entry.required === true && fallback === null,
+        default: fallback,
       });
     }
   }
@@ -343,17 +358,19 @@ function serverDefinitions(
   }
   if (format === 'skills') return {};
   const declared = manifest.mcpServers;
-  if (typeof declared === 'string') {
-    const path = folder(declared);
-    return path ? unwrap(json(files, path)) : {};
-  }
+  // A config file the manifest names: one that isn't in the plugin is reported, never dropped silently.
+  const configFile = (entry: string): Record<string, Json> => {
+    const path = folder(entry);
+    const config = path ? json(files, path) : undefined;
+    if (!config) skipped.push({ component: `mcpServers ${entry}`, reason: 'The file is not in the plugin' });
+    return unwrap(config);
+  };
+  if (typeof declared === 'string') return configFile(declared);
   if (Array.isArray(declared)) {
     const merged: Record<string, Json> = {};
     for (const entry of declared) {
-      if (typeof entry === 'string') {
-        const path = folder(entry);
-        if (path) Object.assign(merged, unwrap(json(files, path)));
-      } else if (entry && typeof entry === 'object') Object.assign(merged, unwrap(entry as Json));
+      if (typeof entry === 'string') Object.assign(merged, configFile(entry));
+      else if (entry && typeof entry === 'object') Object.assign(merged, unwrap(entry as Json));
     }
     return merged;
   }
@@ -373,6 +390,8 @@ function planServers(
   const planned: PlannedServer[] = [];
   const definitions = serverDefinitions(files, format, manifest, skipped);
   const strict = format === 'agent-plugins';
+  // The inputs a server's values use: they become the plugin's only if the server is kept.
+  let found = new Map<string, PluginInput>();
   // Agent Plugins expands only its two placeholders; Claude and Codex also take user values.
   const expand = (value: string): string => {
     let out = value
@@ -386,12 +405,13 @@ function planServers(
       /\$\{(user_config\.)?([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
       (whole, userConfig, variable, fallback) => {
         if (!userConfig && ['HOME', 'PATH', 'CLAUDE_PROJECT_DIR'].includes(variable)) return whole;
-        if (!inputs.has(variable)) {
-          inputs.set(variable, {
+        if (!inputs.has(variable) && !found.has(variable)) {
+          found.set(variable, {
             name: variable,
             description: `Used by the plugin's MCP servers (${variable})`,
             sensitive: SENSITIVE.test(variable),
             required: fallback === undefined,
+            default: null,
           });
         }
         return fallback === undefined ? `\${${variable}}` : `\${${variable}:-${fallback}}`;
@@ -404,7 +424,17 @@ function planServers(
         .filter(([, v]) => typeof v === 'string')
         .map(([k, v]) => [k, expand(v as string)]),
     );
+  // A credential never goes on a command line or into a URL: the API shows both, and so does `ps`.
+  const exposes = (values: string[]) =>
+    values
+      .flatMap((value) => placeholders(value))
+      .find((name) => (inputs.get(name) ?? found.get(name))?.sensitive);
+  const keep = (server: PlannedServer) => {
+    planned.push(server);
+    for (const [name, input] of found) inputs.set(name, input);
+  };
   for (const [key, definition] of Object.entries(definitions)) {
+    found = new Map();
     const skip = (reason: string) => skipped.push({ component: `MCP server ${key}`, reason });
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(key)) {
       skip('Its name has characters superagent does not take');
@@ -434,9 +464,12 @@ function planServers(
     };
     if (type === 'http' || type === 'streamable-http') {
       const url = str(definition.url);
+      const template = url ? expand(url) : '';
+      // Placeholders are filled at install (and the URL checked again then).
+      const filled = !strict && placeholders(template).length > 0;
       let parsed: URL | undefined;
       try {
-        parsed = url ? new URL(expand(url)) : undefined;
+        parsed = url ? new URL(filled ? template.replace(INPUT, 'x') : template) : undefined;
       } catch {
         parsed = undefined;
       }
@@ -448,11 +481,16 @@ function planServers(
         skip('headersHelper runs a command on the host: not supported');
         continue;
       }
-      planned.push({
+      const secret = exposes([template]);
+      if (secret) {
+        skip(`Its URL holds the credential ${secret}: superagent sends credentials in headers only`);
+        continue;
+      }
+      keep({
         ...base,
         slug: serverSlug(plugin, key, taken),
         transport: 'http',
-        url: parsed.toString(),
+        url: filled ? template : parsed.toString(),
         headers: record(definition.headers),
       });
       continue;
@@ -473,11 +511,23 @@ function planServers(
       continue;
     }
     const cwdRaw = str(definition.cwd);
-    const cwd = cwdRaw
+    const cwdExpanded = cwdRaw
       ? expand(cwdRaw.startsWith('./') ? `${CONTAINER_ROOT}/${cwdRaw.slice(2)}` : cwdRaw)
       : null;
-    if (cwd && !cwd.startsWith(`${CONTAINER_ROOT}`) && !cwd.startsWith(CONTAINER_DATA)) {
+    if (cwdExpanded && placeholders(cwdExpanded).length > 0) {
+      skip('Its cwd depends on install values: not supported');
+      continue;
+    }
+    const cwd = cwdExpanded ? posix.normalize(cwdExpanded) : null;
+    if (cwd && !insideContainerFolders(cwd)) {
       skip('Its cwd is outside the plugin');
+      continue;
+    }
+    const secret = exposes([expand(command), ...args]);
+    if (secret) {
+      skip(
+        `Its command line holds the credential ${secret}: superagent passes credentials in the environment only`,
+      );
       continue;
     }
     const mapped = mapCommand(expand(command), args, files);
@@ -485,7 +535,7 @@ function planServers(
       skip(mapped.skip);
       continue;
     }
-    planned.push({ ...base, slug: serverSlug(plugin, key, taken), transport: 'stdio', ...mapped, cwd, env });
+    keep({ ...base, slug: serverSlug(plugin, key, taken), transport: 'stdio', ...mapped, cwd, env });
   }
   return planned;
 }
@@ -577,16 +627,28 @@ function mapCommand(
   };
 }
 
-/** Fills `${NAME}` and `${NAME:-default}` placeholders from install inputs. */
-export function render(template: string, inputs: Record<string, string>): string {
-  return template.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g, (whole, name, fallback) => {
+/** Whether a folder is the plugin's root or data folder, or inside one. */
+export function insideContainerFolders(dir: string): boolean {
+  return [CONTAINER_ROOT, CONTAINER_DATA].some((root) => dir === root || dir.startsWith(`${root}/`));
+}
+
+/**
+ * Fills `${NAME}` and `${NAME:-default}` placeholders from install inputs. A known input that was
+ * given no value and has no default becomes empty; other placeholders (`${HOME}`) stay as written.
+ */
+export function render(
+  template: string,
+  inputs: Record<string, string>,
+  known: ReadonlySet<string> = new Set(),
+): string {
+  return template.replace(INPUT, (whole, name: string, fallback: string | undefined) => {
     const value = inputs[name];
     if (value !== undefined) return value;
-    return fallback ?? whole;
+    return fallback ?? (known.has(name) ? '' : whole);
   });
 }
 
 /** The input names a template uses. */
 export function placeholders(template: string): string[] {
-  return [...template.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g)].map((m) => m[1] as string);
+  return [...template.matchAll(INPUT)].map((m) => m[1] as string);
 }

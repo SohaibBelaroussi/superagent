@@ -289,6 +289,13 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       pendingApprovals: async () => (await dispatch.listApprovals()).map((approval) => approval.tool),
       logger,
     });
+    // Setups a restart cut short are marked failed; what the runner keeps for gone plugins is removed.
+    await plugins.recover();
+    const reconciled = plugins.reconcile().catch((error: unknown) =>
+      logger.warn("Could not check the runner for uninstalled plugins' leftovers", {
+        error: String(error),
+      }),
+    );
 
     await dispatch.ensureChiefThread();
     const interrupted = await dispatch.recoverInterrupted();
@@ -368,6 +375,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         // Saves identities' cookies and frees their locks.
         await browsers.stop();
         await plugins.settled();
+        await reconciled;
         await mcp.close();
         await mastra.shutdown({ drainTimeout: drainTimeoutMs });
         // Observational memory may still be writing in the background.

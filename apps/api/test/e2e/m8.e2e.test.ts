@@ -1,7 +1,9 @@
 // M8 end-to-end check against a running stack (`pnpm stack:up`, then `pnpm test:e2e`), with GitHub
 // reachable: real plugins, pinned to commits. HyperFrames is skills only; the Agent Plugins conformance
-// fixture has bundled stdio servers, which run in their own container. Agents calling MCP tools and
-// using skills are covered by the integration and live suites (they need a model).
+// fixture has bundled stdio servers, which run in their own container, on a network of their own that
+// only the egress proxy joins. Agents calling MCP tools and using skills are covered by the integration
+// and live suites (they need a model).
+import { execFileSync } from 'node:child_process';
 import type { Capabilities, Department, McpServer, Plugin, PluginPreview } from '@superagent/shared';
 import { describe, expect, it } from 'vitest';
 import { loadDotEnv } from '../../src/env';
@@ -18,6 +20,8 @@ const call = (method: string, path: string, body?: unknown) =>
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+const docker = (...args: string[]) =>
+  execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const HYPERFRAMES_SHA = '5c7f6316d3646477a0f725176c00335cb8575560';
 const CONFORMANCE_SHA = '6bfce5436435ffed10ab0020ee0f331ddeb640d6';
 
@@ -82,7 +86,7 @@ describe(`M8 against ${BASE_URL}`, () => {
         path: 'plugins/agent-plugins-conformance-core',
         ref: CONFORMANCE_SHA,
       },
-      { network: 'none' },
+      { network: 'egress' },
     );
     expect(preview.format).toBe('agent-plugins');
     expect(preview.mcpServers.some((s) => s.key === 'default' && s.transport === 'stdio')).toBe(true);
@@ -100,11 +104,30 @@ describe(`M8 against ${BASE_URL}`, () => {
       transport: 'stdio',
     });
     expect(probe?.tools.map((tool) => tool.name)).toContain('observe');
+    // Its container's network has the container and the egress proxy, nothing else.
+    const network = docker('network', 'ls', '--format', '{{.Name}}', '--filter', `name=${plugin.id}`);
+    expect(network).toMatch(new RegExp(`-mcp-${plugin.id}-net$`));
+    const members = docker(
+      'network',
+      'inspect',
+      network,
+      '--format',
+      '{{range .Containers}}{{.Name}} {{end}}',
+    );
+    expect(members.split(' ')).toHaveLength(2);
+    expect(members.split(' ')).toEqual(
+      expect.arrayContaining([expect.stringContaining('egress'), expect.stringContaining(plugin.id)]),
+    );
 
     expect((await call('DELETE', `/v1/plugins/${plugin.id}`)).status).toBe(204);
     const remaining = ((await (await call('GET', '/v1/mcp-servers')).json()) as { items: McpServer[] }).items;
-    expect(remaining.some((server) => server.plugin === plugin.name)).toBe(false);
+    // By slug: a server left behind would have lost its plugin.
+    const slugs = new Set(plugin.mcpServers);
+    expect(slugs.size).toBeGreaterThan(0);
+    expect(remaining.filter((server) => slugs.has(server.slug))).toEqual([]);
     expect((await call('GET', `/v1/plugins/${plugin.id}`)).status).toBe(404);
+    expect(docker('network', 'ls', '-q', '--filter', `name=${plugin.id}`)).toBe('');
+    expect(docker('volume', 'ls', '-q', '--filter', `name=${plugin.id}`)).toBe('');
   }, 240_000);
 
   it('keeps secrets write-only and the capability routes behind the token', async () => {

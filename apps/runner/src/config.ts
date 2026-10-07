@@ -65,7 +65,10 @@ export const RunnerConfigSchema = z.object({
     .default('superagent-identity'),
   /** The image stdio MCP servers run in (decision D36): Node, Python and uv. */
   RUNNER_MCP_IMAGE: z.string().regex(IMAGE_REF).default('superagent-mcp:1'),
-  /** The internal network MCP containers join: its only way out is the egress proxy. */
+  /**
+   * The internal network the egress proxy joins for MCP servers. Each package gets an internal network
+   * of its own, which the runner has the proxy join too: its only way out, and no way to other packages.
+   */
   RUNNER_MCP_NETWORK: z
     .string()
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/)
@@ -83,8 +86,11 @@ export const RunnerConfigSchema = z.object({
   RUNNER_MAX_MCP: z.coerce.number().int().min(1).default(8),
   /** A package nobody has called for this long is stopped (its servers start again on the next call). */
   RUNNER_MCP_IDLE_STOP_MS: duration(10 * 60_000, 100),
-  /** How long installing one server's package may take. */
-  RUNNER_MCP_INSTALL_TIMEOUT_MS: duration(10 * 60_000, 1_000),
+  /**
+   * How long installing one server's package may take. The API waits for each install in one request,
+   * and Node's fetch gives up on an answer after 300 s: keep it under that.
+   */
+  RUNNER_MCP_INSTALL_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(270_000).default(240_000),
   /** Labels this runner's containers, so two runners (say, tests) never touch each other's. */
   RUNNER_NAME_PREFIX: z
     .string()

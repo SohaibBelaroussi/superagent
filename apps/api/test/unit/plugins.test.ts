@@ -4,10 +4,12 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join, relative } from 'node:path';
 import { gzipSync } from 'node:zlib';
+import { SecretNameSchema } from '@superagent/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mcpToolKeys } from '../../src/modules/capabilities/mcp/naming';
 import { ARCHIVE_LIMITS, PluginFetcher, type PluginFile } from '../../src/modules/capabilities/plugins/fetch';
-import { placeholders, planPlugin, render } from '../../src/modules/capabilities/plugins/formats';
+import { placeholders, planPlugin, render, serverSlug } from '../../src/modules/capabilities/plugins/formats';
+import { pluginSecretName } from '../../src/modules/capabilities/plugins/service';
 import { writeTar } from '../../src/modules/capabilities/plugins/tar';
 
 const FIXTURE = join(import.meta.dirname, '../fixtures/plugins/demo-kit');
@@ -118,7 +120,7 @@ describe('plugin formats', () => {
     expect(byKey.plain).toBeUndefined();
     expect(plan.inputs).toEqual(
       expect.arrayContaining([
-        { name: 'API_KEY', description: 'Your Acme key', sensitive: true, required: true },
+        { name: 'API_KEY', description: 'Your Acme key', sensitive: true, required: true, default: null },
         expect.objectContaining({ name: 'TZ', required: false }),
       ]),
     );
@@ -155,7 +157,100 @@ describe('plugin formats', () => {
   it('fills placeholders from inputs and keeps the rest', () => {
     expect(render('Bearer ${TOKEN}', { TOKEN: 'abc' })).toBe('Bearer abc');
     expect(render('${TZ:-UTC}/${MISSING}', {})).toBe('UTC/${MISSING}');
+    // A known input given no value is empty; anything else stays as written.
+    expect(render('--dir=${DIR} --home=${HOME}', {}, new Set(['DIR']))).toBe('--dir= --home=${HOME}');
     expect(placeholders('a ${X} b ${Y:-1}')).toEqual(['X', 'Y']);
+  });
+
+  it('applies userConfig defaults, fills URLs at install, and keeps credentials off command lines', () => {
+    const plan = planPlugin(
+      files({
+        '.claude-plugin/plugin.json': {
+          name: 'acme',
+          userConfig: {
+            region: { description: 'Region', default: 'eu' },
+            token: { description: 'Token', sensitive: true, required: true },
+            port: { description: 'Port', default: 8080 },
+          },
+          mcpServers: ['./config/servers.json', './config/missing.json'],
+        },
+        'config/servers.json': {
+          mcpServers: {
+            api: { type: 'http', url: 'https://${user_config.region}.acme.example/mcp' },
+            leaky: { command: 'node', args: ['server.js', '--token=${user_config.token}'] },
+            keyed: { type: 'http', url: 'https://acme.example/mcp?key=${API_KEY}' },
+            climb: { command: 'node', args: ['x.js'], cwd: '${CLAUDE_PLUGIN_ROOT}/../../etc' },
+            near: { command: 'node', args: ['x.js'], cwd: '/database' },
+            local: { command: 'node', args: ['x.js', '--port=${user_config.port}'], cwd: './srv' },
+            _: { command: 'node', args: ['x.js'] },
+          },
+        },
+      }),
+    );
+    expect(plan.inputs.find((i) => i.name === 'region')).toMatchObject({ default: 'eu', required: false });
+    expect(plan.inputs.find((i) => i.name === 'port')).toMatchObject({ default: '8080' });
+    const byKey = Object.fromEntries(plan.servers.map((s) => [s.key, s]));
+    // Filled at install: the template is kept as written.
+    expect(byKey.api?.url).toBe('https://${region}.acme.example/mcp');
+    expect(byKey.local).toMatchObject({
+      cwd: '/opt/plugin/srv',
+      command: ['node', 'x.js', '--port=${port}'],
+    });
+    // A key that cleans to nothing still gets a slug with its dash.
+    expect(byKey._?.slug).toBe('acme-server');
+    const reasons = Object.fromEntries(plan.skipped.map((s) => [s.component, s.reason]));
+    expect(reasons['MCP server leaky']).toMatch(/credential token/);
+    expect(reasons['MCP server keyed']).toMatch(/credential API_KEY/);
+    expect(reasons['MCP server climb']).toMatch(/outside the plugin/);
+    expect(reasons['MCP server near']).toMatch(/outside the plugin/);
+    expect(reasons['mcpServers ./config/missing.json']).toMatch(/not in the plugin/);
+    // Only kept servers' values are asked for.
+    expect(plan.inputs.map((i) => i.name).sort()).toEqual(['port', 'region', 'token']);
+  });
+
+  it('gives plugin servers slugs that keep their dash and stay unique', () => {
+    const taken = new Set(['demo-notes']);
+    expect(serverSlug('demo', 'notes', taken)).toBe('demo-notes-2');
+    expect(serverSlug('web', '.', new Set())).toBe('web-server');
+    const long = serverSlug('a-very-long-plugin-name-for-testing', 'search-tools', new Set());
+    expect(long.length).toBeLessThanOrEqual(32);
+    expect(long).toMatch(/-search-tools$/);
+  });
+
+  it("names plugins' secrets uniquely per install, always valid names", () => {
+    const a = pluginSecretName(
+      '11111111-1111-4111-8111-111111111111',
+      'acme',
+      'github-tools',
+      'HEADER',
+      'Authorization',
+    );
+    const b = pluginSecretName(
+      '22222222-2222-4222-8222-222222222222',
+      'acme-github',
+      'tools',
+      'HEADER',
+      'Authorization',
+    );
+    expect(a).not.toBe(b);
+    expect(a).toMatch(/^ACME_GITHUB_TOOLS_HEADER_AUTHORIZATION_[0-9A-F]{8}$/);
+    const digits = pluginSecretName(
+      '33333333-3333-4333-8333-333333333333',
+      '1password',
+      'op',
+      'ENV',
+      'OP_TOKEN',
+    );
+    expect(digits.startsWith('P_1PASSWORD_')).toBe(true);
+    const long = pluginSecretName(
+      '44444444-4444-4444-8444-444444444444',
+      'x'.repeat(60),
+      'y'.repeat(60),
+      'ENV',
+      'Z',
+    );
+    for (const name of [a, b, digits, long])
+      expect(SecretNameSchema.safeParse(name).success, name).toBe(true);
   });
 
   it('names MCP tools for agents: safe characters, 64 at most, never clashing', () => {
@@ -199,6 +294,12 @@ describe('plugin archives', () => {
 
   beforeAll(async () => {
     server = createServer((req, res) => {
+      // Starts an archive, then never finishes it.
+      if (req.url === '/stall.tgz') {
+        res.writeHead(200, { 'content-type': 'application/gzip' });
+        res.write(gzipSync(Buffer.alloc(1024, 0)).subarray(0, 10));
+        return;
+      }
       const body = archives.get((req.url ?? '').slice(1));
       if (!body) return res.writeHead(404).end();
       res.writeHead(200, { 'content-type': 'application/gzip' }).end(body);
@@ -287,5 +388,14 @@ describe('plugin archives', () => {
     ).rejects.toThrow(/too large once decompressed/);
     archives.set('junk.tgz', Buffer.from('not gzip at all'));
     await expect(unpack('junk.tgz')).rejects.toThrow(/Not a gzip archive/);
+  });
+
+  it("answers a download that takes too long as the source's problem (422)", async () => {
+    const stalled = fetcher.unpack(
+      `${base}/stall.tgz`,
+      { stripTop: false, root: null, keep: null, limits: ARCHIVE_LIMITS },
+      { allowPrivate: true, signal: AbortSignal.timeout(300) },
+    );
+    await expect(stalled).rejects.toMatchObject({ status: 422, message: expect.stringMatching(/too long/) });
   });
 });

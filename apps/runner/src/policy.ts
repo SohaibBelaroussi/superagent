@@ -205,6 +205,11 @@ export function mcpName(config: RunnerConfig, packageId: string): string {
   return `${config.RUNNER_NAME_PREFIX}-mcp-${packageId}`;
 }
 
+/** A package's own internal network: its containers and the egress proxy, nothing else. */
+export function mcpNetworkName(config: RunnerConfig, packageId: string): string {
+  return `${mcpName(config, packageId)}-net`;
+}
+
 /** MCP containers carry their own runner label, like browsers. */
 export function mcpLabel(config: RunnerConfig): string {
   return `${config.RUNNER_NAME_PREFIX}-mcp`;
@@ -260,8 +265,9 @@ function mcpMounts(config: RunnerConfig, packageId: string, readOnlyOpt: boolean
 
 /**
  * A package's MCP container (decision D36): third-party servers as the sandbox user, no capabilities,
- * a read-only root and package files, limits; on the MCP network (internal: its only way out is the
- * egress proxy) or no network. It only sleeps: the runner execs each server and relays its stdio.
+ * a read-only root and package files, limits; on the package's own network (internal: its only way out
+ * is the egress proxy, and other packages can't be reached) or no network. It only sleeps: the runner
+ * execs each server and relays its stdio.
  */
 export function mcpSpec(
   config: RunnerConfig,
@@ -283,7 +289,7 @@ export function mcpSpec(
     },
     NetworkDisabled: !egress,
     HostConfig: {
-      NetworkMode: egress ? config.RUNNER_MCP_NETWORK : 'none',
+      NetworkMode: egress ? mcpNetworkName(config, input.packageId) : 'none',
       CapDrop: ['ALL'],
       SecurityOpt: ['no-new-privileges:true'],
       ReadonlyRootfs: true,
@@ -325,7 +331,7 @@ export function mcpWorkerSpec(
     Labels: { [LABELS.runner]: `${mcpLabel(config)}-worker`, [LABELS.mcpPackage]: input.packageId },
     NetworkDisabled: !install,
     HostConfig: {
-      NetworkMode: install ? config.RUNNER_MCP_NETWORK : 'none',
+      NetworkMode: install ? mcpNetworkName(config, input.packageId) : 'none',
       CapDrop: ['ALL'],
       CapAdd: input.asRoot ? ['CHOWN'] : [],
       SecurityOpt: ['no-new-privileges:true'],

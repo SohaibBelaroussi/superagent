@@ -10,16 +10,12 @@ import { and, eq, notInArray } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { SecretBox } from '../../crypto/secret-box';
 import type { Db } from '../../db/client';
+import { isUniqueViolation } from '../../db/errors';
 import { providerModels, providers } from '../../db/schema';
 import { ApiError } from '../../http/problem';
 import { redactSecrets } from '../../util/text';
 import { DiscoveryError, discoverModels } from './discovery';
 import { type ProviderRegistry, type ResolvedModel, type ResolvedProvider, secretContext } from './registry';
-
-function isUniqueViolation(error: unknown): boolean {
-  const e = error as { code?: string; cause?: { code?: string } };
-  return e?.code === '23505' || e?.cause?.code === '23505';
-}
 
 /** Provider management: CRUD with sealed secrets, model discovery and manual models. */
 export class ProviderService {

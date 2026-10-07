@@ -11,6 +11,7 @@ import type {
   ProcessInfo,
   ProcessStatus,
   RunnerBrowser,
+  RunnerMcpPackage,
   RunnerReady,
   RunnerSandbox,
 } from '@superagent/shared/runner';
@@ -145,18 +146,31 @@ export class RunnerClient {
   }
 
   /** Writes a plugin's files into its MCP package (decision D36): a tar of its folder. */
-  async mcpFiles(packageId: string, tar: Buffer): Promise<void> {
-    await this.request('PUT', `/mcp/packages/${packageId}/files`, tar);
+  async mcpFiles(packageId: string, tar: Buffer, signal?: AbortSignal): Promise<void> {
+    await this.request('PUT', `/mcp/packages/${packageId}/files`, tar, signal);
   }
 
-  /** Installs MCP servers' npm or PyPI packages into the plugin's volume. */
-  mcpInstall(packageId: string, input: McpInstallInput): Promise<McpInstallResult> {
-    return this.request('POST', `/mcp/packages/${packageId}/install`, input);
+  /**
+   * Installs MCP servers' npm or PyPI packages into the plugin's volume. One server per request: each
+   * install takes up to the runner's install timeout, kept under what Node's fetch waits for.
+   */
+  mcpInstall(packageId: string, input: McpInstallInput, signal?: AbortSignal): Promise<McpInstallResult> {
+    return this.request('POST', `/mcp/packages/${packageId}/install`, input, signal);
   }
 
   /** Tells the runner how a stdio MCP server starts (kept in its memory only). */
   async launchMcp(serverId: string, spec: McpLaunch): Promise<void> {
     await this.request('PUT', `/mcp/servers/${serverId}/launch`, spec);
+  }
+
+  /** Makes the runner forget how a server starts, and stop its process (it was disabled). */
+  async forgetMcp(serverId: string): Promise<void> {
+    await this.request('DELETE', `/mcp/servers/${serverId}/launch`);
+  }
+
+  /** The MCP packages the runner has: containers, launches or volumes. */
+  async listMcp(): Promise<RunnerMcpPackage[]> {
+    return (await this.request<{ items: RunnerMcpPackage[] }>('GET', '/mcp')).items;
   }
 
   /** Removes a plugin's MCP container, and its volumes when asked. */

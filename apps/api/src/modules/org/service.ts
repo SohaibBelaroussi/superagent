@@ -11,6 +11,7 @@ import type {
 import { and, desc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { Db } from '../../db/client';
+import { isUniqueViolation } from '../../db/errors';
 import { type AgentVersionRow, agentDefinitions, agentVersions, departments } from '../../db/schema';
 import { ApiError } from '../../http/problem';
 import type { Mutex } from '../../util/mutex';
@@ -21,11 +22,6 @@ import type { AgentRuntime } from './runtime';
 
 /** Keys of agents defined in code. Definitions can't take them. */
 export const RESERVED_AGENT_KEYS = new Set(['chief', 'scratch', 'provider-test', 'provider-test-tools']);
-
-function isUniqueViolation(error: unknown): boolean {
-  const e = error as { code?: string; cause?: { code?: string } };
-  return e?.code === '23505' || e?.cause?.code === '23505';
-}
 
 /** What other modules need to know or say about organization changes. */
 export interface OrgHooks {

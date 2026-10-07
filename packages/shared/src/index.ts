@@ -922,7 +922,6 @@ export const PluginSourceSchema = z.discriminatedUnion('kind', [
       .regex(/^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/, 'a folder in the repository')
       .optional(),
     ref: z.string().min(1).max(200).default('HEAD').describe('A branch, tag or commit'),
-    entry: z.string().min(1).max(64).optional().describe("A marketplace repository: the plugin's entry"),
   }),
   z.object({
     kind: z.literal('url'),
@@ -938,8 +937,13 @@ export const PluginFormatSchema = z.enum(['agent-plugins', 'codex', 'claude', 's
 export const PluginInputSchema = z.object({
   name: z.string().describe('What to send in install inputs'),
   description: z.string(),
-  sensitive: z.boolean().describe('Stored in the secrets vault'),
+  sensitive: z
+    .boolean()
+    .describe(
+      "A credential. Values that go into a server's environment or headers are kept in the secrets vault either way",
+    ),
   required: z.boolean(),
+  default: z.string().nullable().describe('Used when no value is given'),
 });
 export type PluginInput = z.infer<typeof PluginInputSchema>;
 

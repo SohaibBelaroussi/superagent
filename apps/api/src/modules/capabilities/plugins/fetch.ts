@@ -147,6 +147,14 @@ export class PluginFetcher {
       }
       if (!stopped) worker.postMessage({ type: 'end' });
       return await result;
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      // A download cut short (its time ran out, or the connection dropped) is the source's problem.
+      throw fail(
+        signal.aborted
+          ? 'The archive took too long to download'
+          : `The download failed: ${(error as Error).message}`,
+      );
     } finally {
       void worker.terminate();
     }
@@ -195,7 +203,12 @@ export class PluginFetcher {
   private async readSmall(response: Response): Promise<Buffer> {
     const length = Number(response.headers.get('content-length') ?? '0');
     if (length > MAX_SMALL_BYTES) throw fail('A manifest is too large');
-    const body = Buffer.from(await response.arrayBuffer());
+    let body: Buffer;
+    try {
+      body = Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      throw fail(`Reading a manifest failed: ${(error as Error).message}`);
+    }
     if (body.length > MAX_SMALL_BYTES) throw fail('A manifest is too large');
     return body;
   }

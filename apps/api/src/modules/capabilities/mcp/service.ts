@@ -4,31 +4,26 @@ import type { IMastraLogger } from '@mastra/core/logger';
 import { createTool, type Tool } from '@mastra/core/tools';
 import { MCPClient, type SerializableMCPToolDefinition } from '@mastra/mcp';
 import type { CreateMcpServerInput, McpGrant, McpServer, UpdateMcpServerInput } from '@superagent/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Db } from '../../../db/client';
 import { type McpServerRow, type McpToolDefinition, mcpServers, plugins } from '../../../db/schema';
 import { ApiError } from '../../../http/problem';
 import { Mutex } from '../../../util/mutex';
-import { assertPublicUrl, BlockedUrlError, type ResolveHost } from '../../tools/web';
+import { assertPublicUrl, type ResolveHost } from '../../tools/web';
 import type { RunnerClient } from '../../workspace/runner-client';
 import { type SecretService, secretNames } from '../secrets';
-import { mcpToolKeys } from './naming';
+import { mcpToolKeys, RESERVED_SLUGS } from './naming';
 
 /** What a tool result may weigh when it reaches the model (like fetch_page's pages). */
 const MAX_RESULT_CHARS = 50_000;
+/** What a remote server's answer to one request may weigh before it is cut off. */
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+/** A tool whose input schema is bigger than this is not offered (it would flood every prompt). */
+const MAX_SCHEMA_CHARS = 64 * 1024;
 const MAX_REDIRECTS = 5;
 /** A stdio server's first call may wait for its container to start. */
 const STDIO_CONNECT_MS = 120_000;
 const HTTP_CONNECT_MS = 30_000;
-
-/** A stdio server's runner-side launch: what to run, where, with which environment. */
-export interface LaunchSpec {
-  packageId: string;
-  command: string[];
-  cwd: string | null;
-  env: Record<string, string>;
-  network: 'egress' | 'none';
-}
 
 export interface McpDeps {
   db: Db;
@@ -49,36 +44,47 @@ interface Entry {
 }
 
 /** Arguments and results stay out of the logs: MCP clients log failing calls with their arguments. */
-function redacting(logger: IMastraLogger): IMastraLogger {
+export function redacting(logger: IMastraLogger): IMastraLogger {
   const scrub = (data: unknown) => {
     if (!data || typeof data !== 'object') return data;
     const { toolArgs: _args, args: _a, arguments: _b, result: _r, ...rest } = data as Record<string, unknown>;
     return rest;
   };
   return new Proxy(logger, {
-    get(target, prop, receiver) {
+    get(target, prop) {
       if (prop === 'debug' || prop === 'info' || prop === 'warn' || prop === 'error') {
         return (message: string, ...rest: unknown[]) =>
           (target[prop] as (m: string, ...r: unknown[]) => void)(message, ...rest.map(scrub));
       }
-      // Called on the logger itself: its methods use private fields, which a proxy doesn't have.
-      const value = Reflect.get(target, prop, receiver);
+      // A child logger redacts too.
+      if (prop === 'child' && typeof (target as { child?: unknown }).child === 'function') {
+        return (...args: unknown[]) =>
+          redacting((target as unknown as { child: (...a: unknown[]) => IMastraLogger }).child(...args));
+      }
+      // Read and called on the logger itself: it uses private fields, which a proxy doesn't have.
+      const value = Reflect.get(target, prop);
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
 }
 
-/** An MCP server that forgot its session (it restarted or was stopped idle) answers 404. */
-function lostSession(error: unknown): boolean {
+/**
+ * Whether a call failed because the server forgot its session (it restarted, or was stopped idle):
+ * an HTTP 404 from the transport, which means the call never reached the server. A tool's own error
+ * (whatever its text says) never counts: retrying it would run the tool twice.
+ */
+export function lostSession(error: unknown): boolean {
+  let status = false;
   for (
-    let e = error as { status?: number; message?: string; cause?: unknown } | undefined, i = 0;
-    e && i < 5;
+    let e = error as Record<string, unknown> | undefined, i = 0;
+    e && typeof e === 'object' && i < 6;
     i++
   ) {
-    if (e.status === 404 || /\b404\b|no valid session/i.test(String(e.message ?? ''))) return true;
-    e = e.cause as typeof e;
+    if (e.id === 'MCP_CLIENT_TOOL_EXECUTION_FAILED') return false;
+    if (e.status === 404 || e.statusCode === 404) status = true;
+    e = e.cause as Record<string, unknown> | undefined;
   }
-  return false;
+  return status;
 }
 
 /** Long results are cut before they reach the model. */
@@ -88,11 +94,33 @@ function capped(result: unknown): unknown {
   return { truncated: true, content: `${text.slice(0, MAX_RESULT_CHARS)}…` };
 }
 
+/** A response whose body errors once it passes `max` bytes (the client sees a failed request). */
+function limited(response: Response, max: number): Response {
+  if (!response.body) return response;
+  let seen = 0;
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        seen += chunk.byteLength;
+        if (seen > max) controller.error(new Error('The MCP server answered with too much data'));
+        else controller.enqueue(chunk);
+      },
+    }),
+  );
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 /**
  * MCP servers (decision D36): one @mastra/mcp client per server revision, tools discovered once and
  * kept in our table, and wrapper tools per grant (our names, the grant's allowlist and approvals).
  * HTTP servers reach public addresses only, unless the owner marked them private-network; stdio
- * servers run in the runner's containers, which relay their stdio as Streamable HTTP.
+ * servers run in the runner's containers, which relay their stdio as Streamable HTTP. Network I/O
+ * never happens under the lock: discovery runs outside it, and its result is kept only if the server
+ * didn't change (or go) meanwhile.
  */
 export class McpService {
   private readonly rows = new Map<string, McpServerRow>();
@@ -100,6 +128,8 @@ export class McpService {
   private readonly listeners = new Set<(slugs: string[]) => void>();
   private readonly lock = new Mutex();
   private readonly pluginNames = new Map<string, string>();
+  /** Plugins whose servers were forgotten (uninstalled): their rows never come back. */
+  private readonly gone = new Set<string>();
   private readonly logger: IMastraLogger;
 
   constructor(private readonly deps: McpDeps) {
@@ -112,6 +142,7 @@ export class McpService {
     this.listeners.add(listener);
   }
 
+  /** Reads every server and builds its client; one that can't be built is marked, never fatal. */
   async load(): Promise<void> {
     const rows = await this.deps.db.select().from(mcpServers);
     const names = await this.deps.db.select({ id: plugins.id, name: plugins.name }).from(plugins);
@@ -142,6 +173,13 @@ export class McpService {
   /** Adds an HTTP server by hand and discovers its tools. */
   async create(input: CreateMcpServerInput): Promise<McpServer> {
     const id = await this.lock.run(async () => {
+      if (RESERVED_SLUGS.has(input.slug)) {
+        throw new ApiError(
+          400,
+          'reserved_slug',
+          `"${input.slug}" is the first word of built-in tools: pick another slug`,
+        );
+      }
       if (this.bySlug(input.slug)) {
         throw new ApiError(409, 'mcp_server_exists', `An MCP server with slug "${input.slug}" exists`);
       }
@@ -162,8 +200,10 @@ export class McpService {
           status: 'pending',
         })
         .returning();
-      this.rows.set((row as McpServerRow).id, row as McpServerRow);
-      return (row as McpServerRow).id;
+      const created = row as McpServerRow;
+      this.rows.set(created.id, created);
+      await this.hydrate(created);
+      return created.id;
     });
     return this.refresh(id).catch(() => this.get(id));
   }
@@ -171,6 +211,7 @@ export class McpService {
   /** Rows a plugin install wrote: track them (their tools come from refresh). */
   adopt(rows: McpServerRow[], pluginName: string): void {
     for (const row of rows) {
+      if (row.pluginId && this.gone.has(row.pluginId)) continue;
       this.rows.set(row.id, row);
       if (row.pluginId) this.pluginNames.set(row.pluginId, pluginName);
     }
@@ -188,9 +229,9 @@ export class McpService {
       await this.requireSecrets([...secretNames(input.headers), ...secretNames(input.env)]);
       const allowPrivate = input.allowPrivateNetwork ?? row.allowPrivateNetwork;
       const url =
-        input.url !== undefined || input.allowPrivateNetwork !== undefined
-          ? row.url && this.checkUrl(input.url ?? row.url, allowPrivate).toString()
-          : row.url;
+        row.transport === 'http'
+          ? this.checkUrl(input.url ?? (row.url as string), allowPrivate).toString()
+          : null;
       const [next] = await this.deps.db
         .update(mcpServers)
         .set({
@@ -207,9 +248,12 @@ export class McpService {
         })
         .where(eq(mcpServers.id, id))
         .returning();
-      this.rows.set(id, next as McpServerRow);
-      await this.retire(id);
-      await this.hydrate(next as McpServerRow);
+      const saved = this.keep(id, next);
+      if (!saved) throw new ApiError(404, 'mcp_server_not_found', 'No MCP server with this id');
+      this.retire(id);
+      await this.hydrate(saved);
+      // A stdio server's process runs with its launch: it learns the new one, or stops when disabled.
+      if (saved.transport === 'stdio') await this.relaunch(saved);
       return (input.enabled ?? row.enabled) !== row.enabled;
     });
     if (changed) this.notify([this.row(id).slug]);
@@ -236,69 +280,94 @@ export class McpService {
         );
       }
       await this.deps.db.delete(mcpServers).where(eq(mcpServers.id, id));
-      await this.retire(id);
+      this.retire(id);
       this.rows.delete(id);
     });
   }
 
-  /** Forgets a plugin's servers (its rows are deleted with the plugin). */
-  async forgetPlugin(pluginId: string): Promise<string[]> {
-    const gone = this.ofPlugin(pluginId);
-    for (const row of gone) {
-      await this.retire(row.id);
-      this.rows.delete(row.id);
-    }
-    this.pluginNames.delete(pluginId);
-    return gone.map((row) => row.slug);
+  /** Forgets a plugin's servers before its rows are deleted: nothing of them may come back. */
+  forgetPlugin(pluginId: string): Promise<string[]> {
+    return this.lock.run(async () => {
+      this.gone.add(pluginId);
+      const forgotten = this.ofPlugin(pluginId);
+      for (const row of forgotten) {
+        this.retire(row.id);
+        this.rows.delete(row.id);
+      }
+      this.pluginNames.delete(pluginId);
+      return forgotten.map((row) => row.slug);
+    });
   }
 
   /** Records that a server could not be set up (its plugin's install), where the owner sees it. */
-  async fail(id: string, detail: string): Promise<void> {
-    const [next] = await this.deps.db
-      .update(mcpServers)
-      .set({ status: 'failed', statusDetail: detail.slice(0, 1000), updatedAt: new Date() })
-      .where(eq(mcpServers.id, id))
-      .returning();
-    if (next) this.rows.set(id, next as McpServerRow);
+  fail(id: string, detail: string): Promise<void> {
+    return this.lock.run(async () => {
+      if (!this.rows.has(id)) return;
+      const [next] = await this.deps.db
+        .update(mcpServers)
+        .set({ status: 'failed', statusDetail: detail.slice(0, 1000), updatedAt: new Date() })
+        .where(eq(mcpServers.id, id))
+        .returning();
+      this.keep(id, next);
+    });
+  }
+
+  /** A package-run server's command, once its package is installed (its plugin's setup). */
+  installed(id: string, command: string[], pkg: string): Promise<void> {
+    return this.lock.run(async () => {
+      if (!this.rows.has(id)) return;
+      const [next] = await this.deps.db
+        .update(mcpServers)
+        .set({ command, package: pkg, updatedAt: new Date() })
+        .where(eq(mcpServers.id, id))
+        .returning();
+      this.keep(id, next);
+    });
   }
 
   /** Asks the server for its tools and keeps them. The server's status says how it went. */
   async refresh(id: string): Promise<McpServer> {
-    const before = JSON.stringify(this.row(id).tools);
-    await this.lock.run(async () => {
+    const { row, entry } = await this.lock.run(async () => {
       const row = this.row(id);
       if (!row.enabled) throw new ApiError(409, 'mcp_server_disabled', 'Enable the server first');
-      const entry = this.entries.get(id) ?? (await this.hydrate(row));
-      let update: Partial<McpServerRow>;
-      try {
-        const { definitions, errors } = await entry.client.listToolDefinitionsWithErrors();
-        const found = definitions[row.slug];
-        if (!found) throw new Error(errors[row.slug] ?? 'The server listed no tools');
-        update = {
-          status: 'ready',
-          statusDetail: null,
-          tools: Object.values(found).map((definition) => this.stored(definition)),
-          toolsRefreshedAt: new Date(),
-        };
-      } catch (error) {
-        update = { status: 'failed', statusDetail: String((error as Error)?.message ?? error).slice(0, 500) };
-        this.logger.warn('MCP server discovery failed', { server: row.slug, error: update.statusDetail });
-      }
+      return { row, entry: this.entries.get(id) ?? (await this.hydrate(row)) };
+    });
+    if (!entry) return this.get(id);
+    let update: Partial<McpServerRow>;
+    try {
+      const { definitions, errors } = await entry.client.listToolDefinitionsWithErrors();
+      const found = definitions[row.slug];
+      if (!found) throw new Error(errors[row.slug] ?? 'The server listed no tools');
+      update = {
+        status: 'ready',
+        statusDetail: null,
+        tools: Object.values(found).flatMap((definition) => this.stored(row.slug, definition)),
+        toolsRefreshedAt: new Date(),
+      };
+    } catch (error) {
+      update = { status: 'failed', statusDetail: String((error as Error)?.message ?? error).slice(0, 500) };
+      this.logger.warn('MCP server discovery failed', { server: row.slug, error: update.statusDetail });
+    }
+    const changed = await this.lock.run(async () => {
+      const current = this.rows.get(id);
+      // Changed or gone while it was asked: its answer is for an old version.
+      if (!current || current.revision !== row.revision || this.entries.get(id) !== entry) return false;
       const [next] = await this.deps.db
         .update(mcpServers)
         .set({ ...update, updatedAt: new Date() })
-        .where(eq(mcpServers.id, id))
+        .where(and(eq(mcpServers.id, id), eq(mcpServers.revision, row.revision)))
         .returning();
-      this.rows.set(id, next as McpServerRow);
+      const saved = this.keep(id, next);
+      if (!saved) return false;
       // The client stays; only the tools it serves are rebuilt.
-      await this.hydrateTools(next as McpServerRow, entry);
+      await this.hydrateTools(saved, entry);
+      return JSON.stringify(saved.tools) !== JSON.stringify(current.tools);
     });
-    const row = this.row(id);
-    if (JSON.stringify(row.tools) !== before) this.notify([row.slug]);
-    return this.present(row);
+    if (changed) this.notify([row.slug]);
+    return this.get(id);
   }
 
-  /** The wrapper tools a set of grants gives: the granted tools of enabled servers, our names. */
+  /** The wrapper tools a set of grants gives: the granted tools of enabled servers, with our names. */
   toolsFor(grants: McpGrant[]): ToolsInput {
     const tools: ToolsInput = {};
     for (const grant of grants) {
@@ -326,13 +395,30 @@ export class McpService {
     return tools;
   }
 
-  /** The tools a server lists, with the names agents see. */
-  toolNames(slug: string): string[] {
-    return this.bySlug(slug)?.tools.map((tool) => tool.name) ?? [];
+  /** Tells the runner how to start a stdio server (secrets resolved now, kept in its memory only). */
+  async launch(row: McpServerRow): Promise<void> {
+    const runner = this.deps.runner;
+    if (!runner || row.transport !== 'stdio') return;
+    if (!row.pluginId || this.gone.has(row.pluginId)) throw new Error('Its plugin is uninstalled');
+    if (!row.command) throw new Error("Its package isn't installed yet");
+    const [plugin] = await this.deps.db
+      .select({ network: plugins.network })
+      .from(plugins)
+      .where(eq(plugins.id, row.pluginId));
+    if (!plugin) throw new Error('Its plugin is uninstalled');
+    await runner.client.launchMcp(row.id, {
+      packageId: row.pluginId,
+      command: row.command,
+      cwd: row.cwd,
+      env: await this.deps.secrets.resolve(row.env),
+      network: plugin.network,
+    });
   }
 
   async close(): Promise<void> {
-    await Promise.allSettled([...this.entries.keys()].map((id) => this.retire(id)));
+    const entries = [...this.entries.values()];
+    this.entries.clear();
+    await Promise.allSettled(entries.map((entry) => entry.client.disconnect()));
   }
 
   // --- calls ---
@@ -349,7 +435,7 @@ export class McpService {
       return capped(await run());
     } catch (error) {
       if (!lostSession(error)) throw error;
-      // A 404 means the call never reached the server: reconnect and send it once more.
+      // The call never reached the server: reconnect and send it once more.
       await entry.client.reconnectServer(row.slug);
       return capped(await run());
     }
@@ -357,13 +443,32 @@ export class McpService {
 
   // --- clients ---
 
-  /** Builds the server's client for its current revision and rebuilds its tools (no connection yet). */
-  private async hydrate(row: McpServerRow): Promise<Entry> {
+  /**
+   * Builds the server's client for its current revision and rebuilds its tools (no connection yet).
+   * A server whose secrets are missing gets no client: it is marked failed instead.
+   */
+  private async hydrate(row: McpServerRow): Promise<Entry | undefined> {
+    let definition: Awaited<ReturnType<McpService['definition']>>;
+    try {
+      definition = await this.definition(row);
+    } catch (error) {
+      this.entries.delete(row.id);
+      const detail = `It can't connect: ${(error as Error).message}`;
+      this.logger.warn('An MCP server cannot be used', { server: row.slug, error: detail });
+      const [next] = await this.deps.db
+        .update(mcpServers)
+        .set({ status: 'failed', statusDetail: detail.slice(0, 500), updatedAt: new Date() })
+        .where(eq(mcpServers.id, row.id))
+        .returning()
+        .catch(() => []);
+      this.keep(row.id, next);
+      return undefined;
+    }
     const entry: Entry = {
       revision: row.revision,
       client: new MCPClient({
         id: `mcp:${row.id}:${row.revision}`,
-        servers: { [row.slug]: await this.definition(row) },
+        servers: { [row.slug]: definition },
         timeout: row.timeoutMs,
       }),
       tools: new Map(),
@@ -428,9 +533,15 @@ export class McpService {
           }
         }
         const response = await fetch(url, { ...init, redirect: 'manual' });
-        if (response.status < 300 || response.status >= 400) return response;
+        if (response.status < 300 || response.status >= 400) {
+          // Answers to calls are bounded; the server's long-lived event stream (GET) is not.
+          return (init?.method ?? 'GET').toUpperCase() === 'POST'
+            ? limited(response, MAX_RESPONSE_BYTES)
+            : response;
+        }
         const location = response.headers.get('location');
         if (!location) return response;
+        await response.body?.cancel();
         const next = new URL(location, url);
         // Its headers carry credentials: they never follow a redirect to another origin.
         if (next.origin !== origin)
@@ -466,48 +577,59 @@ export class McpService {
     };
   }
 
-  /** Tells the runner how to start a stdio server (secrets resolved now, kept in its memory only). */
-  async launch(row: McpServerRow): Promise<void> {
+  /** A stdio server's new launch reaches the runner; a disabled one's process is stopped. */
+  private async relaunch(row: McpServerRow): Promise<void> {
     const runner = this.deps.runner;
-    if (!runner || row.transport !== 'stdio' || !row.pluginId || !row.command) return;
-    const [plugin] = await this.deps.db
-      .select({ network: plugins.network })
-      .from(plugins)
-      .where(eq(plugins.id, row.pluginId));
-    await runner.client.launchMcp(row.id, {
-      packageId: row.pluginId,
-      command: row.command,
-      cwd: row.cwd,
-      env: await this.deps.secrets.resolve(row.env),
-      network: plugin?.network ?? 'none',
-    });
+    if (!runner) return;
+    try {
+      if (row.enabled && row.command) await this.launch(row);
+      else await runner.client.forgetMcp(row.id);
+    } catch (error) {
+      this.logger.warn('Could not update a stdio server in the runner', { server: row.slug, error });
+    }
   }
 
-  /** Disconnects the server's current client. */
-  private async retire(id: string): Promise<void> {
+  /** Disconnects the server's current client, without waiting for it. */
+  private retire(id: string): void {
     const entry = this.entries.get(id);
     this.entries.delete(id);
-    await entry?.client.disconnect().catch(() => {});
+    void entry?.client.disconnect().catch(() => {});
+  }
+
+  /** Keeps a row the database returned, or forgets one that is gone (never stores nothing). */
+  private keep(id: string, next: McpServerRow | undefined): McpServerRow | undefined {
+    if (!next) {
+      this.retire(id);
+      this.rows.delete(id);
+      return undefined;
+    }
+    this.rows.set(id, next);
+    return next;
   }
 
   /** A secret changed: servers using it get a new client (new headers or environment). */
   private async secretChanged(name: string): Promise<void> {
-    for (const row of [...this.rows.values()]) {
-      if (![...secretNames(row.headers), ...secretNames(row.env)].includes(name)) continue;
+    const users = [...this.rows.values()].filter((row) =>
+      [...secretNames(row.headers), ...secretNames(row.env)].includes(name),
+    );
+    for (const user of users) {
       await this.lock
         .run(async () => {
+          const row = this.rows.get(user.id);
+          if (!row) return;
           const [next] = await this.deps.db
             .update(mcpServers)
             .set({ revision: row.revision + 1, updatedAt: new Date() })
             .where(eq(mcpServers.id, row.id))
             .returning();
-          this.rows.set(row.id, next as McpServerRow);
-          await this.retire(row.id);
-          await this.hydrate(next as McpServerRow);
-          if (row.transport === 'stdio') await this.launch(next as McpServerRow);
+          const saved = this.keep(row.id, next);
+          if (!saved) return;
+          this.retire(row.id);
+          await this.hydrate(saved);
+          if (saved.transport === 'stdio') await this.relaunch(saved);
         })
         .catch((error: unknown) =>
-          this.logger.warn('Could not apply a rotated secret', { server: row.slug, error }),
+          this.logger.warn('Could not apply a rotated secret', { server: user.slug, error }),
         );
     }
   }
@@ -516,18 +638,28 @@ export class McpService {
     for (const listener of this.listeners) listener(slugs);
   }
 
-  private stored(definition: SerializableMCPToolDefinition): McpToolDefinition {
+  private stored(slug: string, definition: SerializableMCPToolDefinition): McpToolDefinition[] {
+    const inputSchema = (definition.inputSchema ?? { type: 'object' }) as Record<string, unknown>;
+    if (JSON.stringify(inputSchema).length > MAX_SCHEMA_CHARS) {
+      this.logger.warn('An MCP tool was left out: its input schema is too large', {
+        server: slug,
+        tool: definition.name,
+      });
+      return [];
+    }
     // The server's instructions never reach a model (it could be anyone's server).
-    return {
-      name: definition.name,
-      ...(definition.title ? { title: definition.title } : {}),
-      ...(definition.description ? { description: definition.description } : {}),
-      inputSchema: (definition.inputSchema ?? { type: 'object' }) as Record<string, unknown>,
-      ...(definition.outputSchema
-        ? { outputSchema: definition.outputSchema as Record<string, unknown> }
-        : {}),
-      ...(definition.annotations ? { annotations: definition.annotations as Record<string, unknown> } : {}),
-    };
+    return [
+      {
+        name: definition.name,
+        ...(definition.title ? { title: definition.title } : {}),
+        ...(definition.description ? { description: definition.description.slice(0, 4096) } : {}),
+        inputSchema,
+        ...(definition.outputSchema
+          ? { outputSchema: definition.outputSchema as Record<string, unknown> }
+          : {}),
+        ...(definition.annotations ? { annotations: definition.annotations as Record<string, unknown> } : {}),
+      },
+    ];
   }
 
   private checkUrl(raw: string, allowPrivate: boolean): URL {
@@ -591,5 +723,3 @@ export class McpService {
     };
   }
 }
-
-export { BlockedUrlError };
