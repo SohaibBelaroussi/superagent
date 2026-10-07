@@ -60,24 +60,36 @@ jobs:
             echo "LOG_LEVEL=info"
             echo "MASTRA_TELEMETRY_DISABLED=true"
             echo "API_PORT=4112"
+            echo "SUPERAGENT_VERSION=ci"
+            echo "DOCKER_SOCKET=/var/run/docker.sock"
           } > .env
 
-      - name: Build the images
-        # The API, the runner, the egress proxy, and the sandbox and browser images the runner starts.
-        run: docker compose --profile app build
+      - name: Build and tag the images
+        # The API, the runner, the egress proxy, and the sandbox, browser and MCP images the runner starts.
+        run: scripts/release.sh ci
 
-      - name: Start the packaged stack
-        # The API with its database, document storage, runner and egress proxy (it creates the browsers
-        # network): the web-tool services are exercised with fakes in tests.
-        run: docker compose --profile app up -d --wait --wait-timeout 180 postgres seaweedfs egress runner api
+      - name: Start the stack as the server runs it
+        # From the tagged images with the production overrides (limits, nothing built): the API with its
+        # database, document storage, runner and egress proxy. Web-tool services are faked in tests.
+        run: >-
+          docker compose -f compose.yaml -f compose.prod.yaml --profile app up -d --wait --wait-timeout 180
+          postgres seaweedfs egress runner api
 
       - name: End-to-end tests against the container
         run: pnpm test:e2e
 
+      - name: Back up the stack, then restore the backup in a drill
+        env:
+          COMPOSE_FILES: -f compose.yaml -f compose.prod.yaml
+          API_IMAGE: superagent-api:ci
+        run: |
+          scripts/backup.sh
+          scripts/restore-drill.sh
+
       - name: Container logs
         if: failure()
-        run: docker compose --profile app logs --no-color
+        run: docker compose -f compose.yaml -f compose.prod.yaml --profile app logs --no-color
 
       - name: Stop the stack
         if: always()
-        run: docker compose --profile app down -v
+        run: docker compose -f compose.yaml -f compose.prod.yaml --profile app down -v

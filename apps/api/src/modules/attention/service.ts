@@ -180,6 +180,23 @@ export class AttentionService {
     return this.mcpCheck.problem;
   }
 
+  private limitsCheck: { at: number; ignored: Promise<boolean> } | undefined;
+
+  /** Whether the runner's Docker ignores container limits (the runner then creates no container). */
+  private limitsIgnored(): Promise<boolean> {
+    const now = Date.now();
+    if (!this.limitsCheck || now - this.limitsCheck.at > RUNNER_CHECK_MS) {
+      this.limitsCheck = {
+        at: now,
+        ignored: this.deps.browsers.runnerReady().then(
+          (ready) => ready?.docker === true && ready.limits === false,
+          () => false,
+        ),
+      };
+    }
+    return this.limitsCheck.ignored;
+  }
+
   private browserProblem(): Promise<string | undefined> {
     const now = Date.now();
     if (!this.browserCheck || now - this.browserCheck.at > RUNNER_CHECK_MS) {
@@ -246,6 +263,15 @@ export class AttentionService {
           'storage',
           'Document uploads are off',
           'Set S3_ACCESS_KEY and S3_SECRET_KEY to store documents.',
+        ),
+      );
+    }
+    if (await this.limitsIgnored()) {
+      items.push(
+        item(
+          'runner-limits',
+          "The runner's Docker ignores container limits",
+          'No sandbox, browser or MCP server starts until the daemon enforces memory, CPU and process limits. Rootless Docker needs cgroup delegation (docs/runbooks/server.md).',
         ),
       );
     }

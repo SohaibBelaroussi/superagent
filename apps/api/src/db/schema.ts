@@ -7,6 +7,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgSchema,
   primaryKey,
   text,
@@ -70,6 +71,61 @@ export const providerModels = app.table(
 );
 
 export type ProviderModelRow = typeof providerModels.$inferSelect;
+
+/**
+ * What a model costs, in USD per million tokens (decision D40). Kept apart from the model list, so a
+ * refresh that drops a model for a while doesn't lose its price.
+ */
+export const modelPrices = app.table(
+  'model_prices',
+  {
+    providerId: uuid('provider_id')
+      .notNull()
+      .references(() => providers.id, { onDelete: 'cascade' }),
+    modelId: text('model_id').notNull(),
+    inputUsd: numeric('input_usd', { precision: 12, scale: 6, mode: 'number' }).notNull(),
+    /** Input tokens read from the provider's cache; the input price when unset. */
+    cachedInputUsd: numeric('cached_input_usd', { precision: 12, scale: 6, mode: 'number' }),
+    outputUsd: numeric('output_usd', { precision: 12, scale: 6, mode: 'number' }).notNull(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [primaryKey({ columns: [table.providerId, table.modelId] })],
+);
+
+export type ModelPriceRow = typeof modelPrices.$inferSelect;
+
+/**
+ * One model call (a MODEL_GENERATION span), written as its span ends (decision D40): its tokens, and
+ * its cost at the price of the day. Attributed to a task and department when the run carried them.
+ * An append-only log: no foreign keys, so a row is never lost to a missing task.
+ */
+export const usageEvents = app.table(
+  'usage_events',
+  {
+    traceId: text('trace_id').notNull(),
+    spanId: text('span_id').notNull(),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    taskId: uuid('task_id'),
+    departmentId: uuid('department_id'),
+    /** The Mastra agent that called the model (an agent key, "chief", ...). */
+    agent: text('agent'),
+    provider: text('provider'),
+    model: text('model'),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    cachedInputTokens: integer('cached_input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    reasoningTokens: integer('reasoning_tokens').notNull().default(0),
+    /** USD; null when the model had no price then. */
+    costUsd: numeric('cost_usd', { precision: 16, scale: 8, mode: 'number' }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.traceId, table.spanId] }),
+    index('usage_events_task_idx').on(table.taskId),
+    index('usage_events_occurred_idx').on(table.occurredAt),
+  ],
+);
+
+export type UsageEventRow = typeof usageEvents.$inferSelect;
 
 /** Small key/value store for server settings (model roles, timezone, concurrency). */
 export const settings = app.table('settings', {

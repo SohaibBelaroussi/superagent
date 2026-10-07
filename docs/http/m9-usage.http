@@ -1,0 +1,45 @@
+# M9 walkthrough: model prices, task cards with tokens and cost, and the usage report.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Prerequisites: a provider and a default model (m1-providers.http), a department with a lead.
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+@providerId = paste-a-provider-id
+@departmentId = paste-a-department-id
+@taskId = paste-a-task-id
+
+### What a model costs, USD per million tokens (cached input: the input price when left out).
+### Calls are priced as they happen: a price set now doesn't reprice earlier calls.
+PUT {{baseUrl}}/v1/providers/{{providerId}}/prices
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "modelId": "your-model-id", "inputUsd": 0.5, "cachedInputUsd": 0.05, "outputUsd": 1.5 }
+
+### The provider's models, with their prices.
+GET {{baseUrl}}/v1/providers/{{providerId}}/models
+Authorization: Bearer {{token}}
+
+### A task: its "usage" counts every call made for it (its lead's, its specialists', memory's).
+GET {{baseUrl}}/v1/tasks/{{taskId}}
+Authorization: Bearer {{token}}
+
+### The board: every card has its usage too.
+GET {{baseUrl}}/v1/board?departmentId={{departmentId}}
+Authorization: Bearer {{token}}
+
+### Tokens and cost by department (calls outside tasks, the chief's, under a null key).
+GET {{baseUrl}}/v1/usage?group=department
+Authorization: Bearer {{token}}
+
+### By model, or agent, or task, or day (your timezone), over a period.
+GET {{baseUrl}}/v1/usage?group=day&from=2026-10-01T00:00:00Z&to=2026-11-01T00:00:00Z
+Authorization: Bearer {{token}}
+
+### One department's tasks only.
+GET {{baseUrl}}/v1/usage?group=task&departmentId={{departmentId}}
+Authorization: Bearer {{token}}
+
+### Traces: Mastra's own routes (Studio's Traces page reads them). A task's runs carry its id.
+GET {{baseUrl}}/api/observability/traces?page=0&perPage=20
+Authorization: Bearer {{token}}

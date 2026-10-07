@@ -16,7 +16,9 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 - `infra/sandbox`: the sandbox images the runner may start (`dev`: Node, Python, git).
 - `infra/browser`: the browser image (Chromium) and the seccomp profile it runs under.
 - `infra/mcp`: the image plugins' stdio MCP servers run in (Node, Python, uv).
-- `compose.yaml`: Postgres (pgvector), SeaweedFS (S3 storage), SearXNG and Crawl4AI (web tools), the egress proxy (it creates the internal `superagent-browsers` network), and, under the `app` profile, the packaged API, the runner, and the sandbox and browser images.
+- `compose.yaml`: Postgres (pgvector), SeaweedFS (S3 storage), SearXNG and Crawl4AI (web tools), the egress proxy (it creates the internal `superagent-browsers` network), and, under the `app` profile, the packaged API, the runner, and the sandbox and browser images. Under `backup`, rclone for the backup script.
+- `compose.prod.yaml`: the server's overrides (prebuilt images by `SUPERAGENT_VERSION`, limits, rotated logs, only the API published, the rootless Docker socket).
+- `scripts/`: `release.sh` (build, tag, save images), `backup.sh` and `restore-drill.sh` (decision D41). Runbooks in `docs/runbooks/`.
 
 ## Commands (from the repo root)
 - `pnpm db:up`, then `pnpm dev`: the API on http://127.0.0.1:4111 with reload. Docs UI at `/v1/docs`.
@@ -29,6 +31,8 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 - `pnpm db:generate`: new Drizzle migration after editing `apps/api/src/db/schema.ts`.
 - `pnpm stack:up` / `pnpm stack:down`: packaged API plus Postgres in Docker.
 - `pnpm studio`: Mastra Studio on :3000 against the dev server. Log in with `STUDIO_TOKEN`.
+- `pnpm release [version] [--save]`: build and tag the images (and save them for the server).
+- `pnpm backup` / `pnpm backup:drill`: back up the running stack, and restore the newest backup in throwaway containers.
 
 ## Rules
 - **Routes.** Mastra built-ins live under `/api`; our routes go under `/v1`, registered on the v1 router so `requireAuth` covers them. Native Hono routes are public otherwise. An integration test lists every `/v1` route and asserts 401 without a token.
@@ -48,6 +52,9 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 - **Browsers.** Only the runner starts browsers, from the browser image, on the internal `superagent-browsers` network whose only exit is the egress proxy; keep their hardening (non-root, no capabilities, read-only root, the seccomp profile, limits, `StopSignal: SIGINT` so cookies are saved). DevTools is reached only through the runner's relay, with a single-use ticket. `BrowserService` gives each browser its own AgentBrowser and routes tool calls by `taskOf(requestContext)`, never by the thread; agents' URLs go through `assertPublicUrl` before the browser sees them. An identity is used by one browser at a time: its lock is the `browser_identities` lease, taken and released only by `BrowserService` (stop the container before releasing). Live views are WebSockets on the v1 router (behind `requireAuth`); never mount Mastra's `setupBrowserStream`.
 - **Capabilities.** Secrets only through `SecretService` (sealed, names only out). MCP tools reach agents only as `McpService` wrappers built from grants (allowlist, approvals); every request to a remote server goes through its guarded fetch (public addresses unless the owner marked it private-network, redirects by hand, same origin). stdio servers run only in the runner's per-plugin containers, their stdio relayed; never spawn an MCP server in the API process. Skills reach Mastra only through `SkillStore.source`, never from a filesystem the sandbox can write. Plugins are fetched pinned (a commit, or a sha256), unpacked in `archive.worker` (never on the main thread, nothing on disk), and uninstalls go through `PluginService` (detach, containers, rows).
 - **Config writes.** Settings updates, provider deletion, identity and MCP server deletion, and every organization write (departments and agents) run under `settings.lock`.
+- **Tracing and usage.** Every run our code starts or resumes for a task (`stream`, `approveToolCall`, `declineToolCall`) passes `DispatchService.tracing(task)`: its metadata is how model calls are counted to tasks. Usage rows are written only by `UsageExporter` (one per MODEL_INFERENCE span), priced from `model_prices` when written. Flush tracing before `mastra.shutdown()` (it closes the storage first).
+- **Backups.** New data a restore needs goes into `scripts/backup.sh`; `scripts/restore-drill.sh` must check it (new tables are counted on their own, new volumes aren't). Backups never go into git or an image (`backups/` is ignored by both).
+- **Server.** In `compose.prod.yaml` our images are never built or pulled, and every service has limits and rotated logs: a new service needs both. The runner creates no container where the daemon ignores limits (rootless Docker without cgroup delegation).
 - **Errors.** `/v1` errors are problem+json: throw `ApiError`, or return `problem()`.
 - **Schemas.** zod 4 everywhere. Request and response schemas go in `packages/shared`.
 - **Tests.** Single-agent checks use the scripted mock model (`apps/api/test/support/mock-model.ts`). Multi-agent flows run against the fake OpenAI server (`apps/api/test/support/fake-openai.ts`), steered by directives in the user message (`[assign]`, `[artifact]`, `[no-report]`, `[slow]`, `[linger]`, `[code]`, `[browse:<url>]`, `[visit:<url>]`, `[skill:<name>]`, `[mcp:<tool> {args}]`). Browser tests need the browser image (`pnpm browsers:up`), capability tests the MCP image (`pnpm mcp:up`). Database tests use `startTestSystem()` from `apps/api/test/int/helpers.ts` (Testcontainers, one database per file).
@@ -59,7 +66,7 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
   1. Work on one branch per milestone (`m0-foundation`, `m1-providers`, ...) and commit as you go.
   2. Scan the diff for secrets before pushing.
   3. When the milestone is done, open a PR into `main`, review it, and merge with a merge commit once CI is green.
-- **CI** (`.github/workflows/ci.yml`) runs on every PR and every push to `main`: `pnpm check`, then it builds the image, starts the stack, and runs the e2e suite against it.
+- **CI** (`.github/workflows/ci.yml`) runs on every PR and every push to `main`: `pnpm check`, then it builds and tags the images, starts the stack from them with `compose.prod.yaml`, runs the e2e suite against it, and backs it up and restores the backup in a drill.
 
 ## Windows notes
 - A dev server started in the background can outlive its shell. If port 4111 stays busy, stop the leftover `node` process.

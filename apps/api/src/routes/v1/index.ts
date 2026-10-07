@@ -18,6 +18,7 @@ import { registerScheduleRoutes } from './schedules';
 import { registerSettingsRoutes } from './settings';
 import { registerTaskRoutes } from './tasks';
 import { registerTokenRoutes } from './tokens';
+import { registerUsageRoutes } from './usage';
 import { registerWorkspaceRoutes } from './workspace';
 
 export const V1_PREFIX = '/v1';
@@ -52,6 +53,7 @@ export function createV1Router(deps: AppDeps, upgradeWebSocket: UpgradeWebSocket
   registerWorkspaceRoutes(v1, deps);
   registerBrowserRoutes(v1, deps, upgradeWebSocket);
   registerCapabilityRoutes(v1, deps);
+  registerUsageRoutes(v1, deps);
 
   v1.openAPIRegistry.registerComponent('securitySchemes', 'bearer', { type: 'http', scheme: 'bearer' });
   v1.doc31('/openapi.json', {

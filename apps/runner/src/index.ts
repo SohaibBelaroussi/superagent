@@ -5,6 +5,7 @@ import { createRunnerApp } from './app';
 import { BrowserContainers } from './browsers';
 import type { RunnerConfig } from './config';
 import { dockerMessage } from './docker';
+import { DaemonLimits, limitedDocker } from './limits';
 import { McpPackages } from './mcp';
 import { type Logger, SandboxManager } from './sandboxes';
 
@@ -43,11 +44,12 @@ export function createRunner(
   options: { docker?: Docker; logger?: Logger } = {},
 ): Runner {
   const logger = options.logger ?? consoleLogger(config.LOG_LEVEL);
-  const docker = options.docker ?? new Docker();
+  const limits = new DaemonLimits(options.docker ?? new Docker(), config.RUNNER_ALLOW_NO_LIMITS);
+  const docker = limitedDocker(options.docker ?? new Docker(), limits);
   const manager = new SandboxManager(docker, config, logger);
   const browsers = new BrowserContainers(docker, config, logger);
   const mcp = new McpPackages(docker, config, logger);
-  const app = createRunnerApp(manager, browsers, mcp, config, logger);
+  const app = createRunnerApp(manager, browsers, mcp, limits, config, logger);
   let timer: NodeJS.Timeout | undefined;
   let reaping: Promise<void> | undefined;
   return {

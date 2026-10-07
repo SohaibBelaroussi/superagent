@@ -2,6 +2,8 @@ import type { Server } from 'node:http';
 import type { Agent } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
+import { SpanType } from '@mastra/core/observability';
+import { MastraStorageExporter, Observability } from '@mastra/observability';
 import { PostgresStore } from '@mastra/pg';
 import type { McpGrant, ToolGrant } from '@superagent/shared';
 import type { Hono } from 'hono';
@@ -50,6 +52,9 @@ import { createScheduleTools } from './modules/schedules/tools';
 import { SettingsService } from './modules/settings/service';
 import { ToolCatalog } from './modules/tools/catalog';
 import type { ResolveHost } from './modules/tools/web';
+import { UsageExporter } from './modules/usage/exporter';
+import { TracePruner } from './modules/usage/retention';
+import { UsageService } from './modules/usage/service';
 import { RunnerClient } from './modules/workspace/runner-client';
 import { WorkspaceService } from './modules/workspace/service';
 
@@ -75,6 +80,7 @@ export interface System {
   mcp: McpService;
   skills: SkillStore;
   plugins: PluginService;
+  usage: UsageService;
   mastra: Mastra;
   app: Hono<AppEnv>;
   /** Serves live views (WebSockets) on the server that serves `app`. */
@@ -181,7 +187,21 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       browsers,
     });
 
-    const storage = new PostgresStore({ id: 'superagent-mastra', pool, schemaName: 'mastra' });
+    const storage = new PostgresStore({
+      id: 'superagent-mastra',
+      pool,
+      schemaName: 'mastra',
+      ...(config.TRACE_RETENTION_DAYS > 0
+        ? { retention: { observability: { spans: { maxAge: `${config.TRACE_RETENTION_DAYS}d` } } } }
+        : {}),
+    });
+    // Every run is traced (decision D39); each model call becomes a usage row, priced (decision D40).
+    const usage = new UsageService({
+      db,
+      priceOf: (provider, model) => registry.priceOf(provider, model),
+      timezone: () => settings.get().timezone,
+      logger,
+    });
     const mastra = createMastra({
       storage,
       logger,
@@ -189,8 +209,19 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       studioToken: config.STUDIO_TOKEN,
       gateways: { [GATEWAY_ID]: new ProviderGateway(registry) },
       agents: { scratch: createScratchAgent(settings), ...options.agents },
+      observability: new Observability({
+        configs: {
+          default: {
+            serviceName: 'superagent',
+            exporters: [new MastraStorageExporter(), new UsageExporter(usage)],
+            excludeSpanTypes: [SpanType.MODEL_CHUNK],
+          },
+        },
+      }),
     });
     await storage.init();
+    const pruner = new TracePruner(storage, logger);
+    if (config.TRACE_RETENTION_DAYS > 0) pruner.start();
 
     // A thread per task (resource dept:<slug>) and the owner's thread with the chief (resource owner).
     // Long threads are compressed with the fast model, or the default one while the fast one can't be
@@ -342,6 +373,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       mcp,
       skills,
       plugins,
+      usage,
     });
     return {
       config,
@@ -365,6 +397,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       mcp,
       skills,
       plugins,
+      usage,
       mastra,
       app: http.app,
       injectWebSocket: http.injectWebSocket,
@@ -377,6 +410,10 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         await plugins.settled();
         await reconciled;
         await mcp.close();
+        await pruner.close();
+        // Mastra closes its storage before its tracing: spans and usage rows are written first.
+        await mastra.observability.flush().catch(() => {});
+        await usage.flush();
         await mastra.shutdown({ drainTimeout: drainTimeoutMs });
         // Observational memory may still be writing in the background.
         await Promise.all([memory.chief.settled(), memory.lead.settled(), memory.specialist.settled()]);

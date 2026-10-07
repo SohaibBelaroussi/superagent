@@ -7,3 +7,5 @@
 .env
 .env.*
 docs
+backups
+release

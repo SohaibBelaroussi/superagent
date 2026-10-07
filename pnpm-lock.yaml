@@ -50,6 +50,9 @@ importers:
       '@mastra/memory':
         specifier: 1.35.0
         version: 1.35.0(@mastra/core@1.74.0(@grpc/grpc-js@1.14.5)(ai@7.0.130(zod@4.6.5))(zod@4.6.5))
+      '@mastra/observability':
+        specifier: 1.18.3
+        version: 1.18.3(@mastra/core@1.74.0(@grpc/grpc-js@1.14.5)(ai@7.0.130(zod@4.6.5))(zod@4.6.5))(zod@4.6.5)
       '@mastra/pg':
         specifier: 1.29.0
         version: 1.29.0(@mastra/core@1.74.0(@grpc/grpc-js@1.14.5)(ai@7.0.130(zod@4.6.5))(zod@4.6.5))
@@ -1051,6 +1054,13 @@ packages:
     engines: {node: '>=22.13.0'}
     peerDependencies:
       '@mastra/core': '>=1.4.1-0 <2.0.0-0'
+
+  '@mastra/observability@1.18.3':
+    resolution: {integrity: sha512-WYw3gouK3c1U3dvpi6M56duRUyVlx94vE1Qs1OfETOgGXiFdW9AyO64YIchQmD+mqKpVxIq1ASvEssRHMag45Q==}
+    engines: {node: '>=22.13.0'}
+    peerDependencies:
+      '@mastra/core': '>=1.16.0-0 <2.0.0-0'
+      zod: ^3.25.0 || ^4.0.0
 
   '@mastra/pg@1.29.0':
     resolution: {integrity: sha512-gF8XFCGgcj9FYGxVRk5irnS0q+BBj/pk0un0rsobGV4/Wjgwddjg3pT2gq4XtYNsPkw1ywJxbnlBLDVwjdDZSA==}
@@ -4680,6 +4690,11 @@ snapshots:
       zod: 4.6.5
     transitivePeerDependencies:
       - supports-color
+
+  '@mastra/observability@1.18.3(@mastra/core@1.74.0(@grpc/grpc-js@1.14.5)(ai@7.0.130(zod@4.6.5))(zod@4.6.5))(zod@4.6.5)':
+    dependencies:
+      '@mastra/core': 1.74.0(@grpc/grpc-js@1.14.5)(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
+      zod: 4.6.5
 
   '@mastra/pg@1.29.0(@mastra/core@1.74.0(@grpc/grpc-js@1.14.5)(ai@7.0.130(zod@4.6.5))(zod@4.6.5))':
     dependencies:

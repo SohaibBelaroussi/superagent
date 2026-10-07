@@ -455,10 +455,17 @@ export class DispatchService {
     const task =
       approval.task ?? (approval.threadId ? await this.deps.tasks.getByThread(approval.threadId) : undefined);
     if (task) this.announceWork(task.id);
+    // A resumed run is a new root span: it carries the task again, or its calls lose it.
+    const tracing = task ? { tracingOptions: this.tracing(task) } : {};
     const output =
       decision === 'approve'
-        ? await agent.approveToolCall({ runId: approval.runId, toolCallId: approval.toolCallId })
-        : await agent.declineToolCall({ runId: approval.runId, toolCallId: approval.toolCallId, reason });
+        ? await agent.approveToolCall({ runId: approval.runId, toolCallId: approval.toolCallId, ...tracing })
+        : await agent.declineToolCall({
+            runId: approval.runId,
+            toolCallId: approval.toolCallId,
+            reason,
+            ...tracing,
+          });
     this.holding.add(approval.runId);
     if (!task) {
       const release = () => this.holding.delete(approval.runId);
@@ -585,6 +592,7 @@ export class DispatchService {
         toolCallId: approval.toolCallId,
         reason: CANCELLED_REASON,
         abortSignal: stop.signal,
+        tracingOptions: this.tracing(task),
       });
       this.holding.add(approval.runId);
       const release = () => this.holding.delete(approval.runId);
@@ -646,12 +654,29 @@ export class DispatchService {
     try {
       const output = await this.agent(lead.key).stream(contents, {
         memory: { thread: task.threadId, resource: task.resourceId },
+        tracingOptions: this.tracing(task),
       });
       this.watchOutput(task, supervision, output, lead.key);
     } catch (error) {
       supervision.problem = `The lead's run could not start: ${errorMessage(error)}`;
       this.deps.logger.warn('A lead run could not start', { taskId: task.id, error });
     }
+  }
+
+  /**
+   * What a task's runs are traced with (decision D39). Every span of a run inherits the metadata
+   * (its specialists' and memory's too), which is how model calls are counted to the task.
+   */
+  private tracing(task: TaskRow): { tags: string[]; metadata: Record<string, string> } {
+    const department = this.deps.directory.department(task.departmentId);
+    return {
+      tags: [`task:${task.id}`, ...(department ? [`dept:${department.slug}`] : [])],
+      metadata: {
+        taskId: task.id,
+        departmentId: task.departmentId,
+        ...(department ? { department: department.slug } : {}),
+      },
+    };
   }
 
   /** How a run we hold ends: a problem for the supervisor, or a stop for the owner's approval. */

@@ -9,12 +9,13 @@ import {
   ProviderSchema,
   ProviderTestInputSchema,
   ProviderTestResultSchema,
+  SetModelPriceInputSchema,
   UpdateProviderInputSchema,
 } from '@superagent/shared';
 import { ApiError, problemResponse } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 import { routerId } from '../../modules/providers/model-ref';
-import type { ResolvedModel, ResolvedProvider } from '../../modules/providers/registry';
+import type { ResolvedProvider } from '../../modules/providers/registry';
 import { runProviderTest } from '../../modules/providers/testing';
 
 function toProvider(p: ResolvedProvider): Provider {
@@ -33,14 +34,15 @@ function toProvider(p: ResolvedProvider): Provider {
   };
 }
 
-function toModels(slug: string, models: ResolvedModel[]): ProviderModel[] {
-  return models.map((m) => ({
+function toModels(provider: ResolvedProvider): ProviderModel[] {
+  return provider.models.map((m) => ({
     modelId: m.modelId,
     kind: m.kind,
     source: m.source,
     enabled: m.enabled,
     discoveredAt: m.discoveredAt?.toISOString() ?? null,
-    ref: routerId({ provider: slug, model: m.modelId }),
+    ref: routerId({ provider: provider.slug, model: m.modelId }),
+    price: provider.prices.get(m.modelId) ?? null,
   }));
 }
 
@@ -154,6 +156,30 @@ const removeModel = createRoute({
   responses: { 204: { description: 'Removed' }, 404: problemResponse('No such provider or model') },
 });
 
+const setPrice = createRoute({
+  method: 'put',
+  path: '/providers/{id}/prices',
+  tags,
+  summary: "Set what one of the provider's models costs",
+  description:
+    'USD per million tokens. Calls are priced as they happen, at the price of the day: setting one does ' +
+    'not reprice earlier calls. Without a price, calls count tokens but cost nothing.',
+  request: { params, ...body(SetModelPriceInputSchema) },
+  responses: {
+    200: json(ProviderModelListSchema, 'Known models'),
+    404: problemResponse('No such provider or model'),
+  },
+});
+
+const removePrice = createRoute({
+  method: 'delete',
+  path: '/providers/{id}/prices',
+  tags,
+  summary: "Remove a model's price",
+  request: { params, query: z.object({ modelId: z.string().min(1) }) },
+  responses: { 204: { description: 'Removed' }, 404: problemResponse('No such provider or price') },
+});
+
 const testProvider = createRoute({
   method: 'post',
   path: '/providers/{id}/test',
@@ -207,19 +233,29 @@ export function registerProviderRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): 
 
   v1.openapi(listModels, (c) => {
     const provider = deps.providers.get(c.req.valid('param').id);
-    return c.json({ items: toModels(provider.slug, provider.models) }, 200);
+    return c.json({ items: toModels(provider) }, 200);
   });
 
   v1.openapi(refreshModels, async (c) => {
     const { id } = c.req.valid('param');
-    const models = await deps.providers.refreshModels(id);
-    return c.json({ items: toModels(deps.providers.get(id).slug, models) }, 200);
+    await deps.providers.refreshModels(id);
+    return c.json({ items: toModels(deps.providers.get(id)) }, 200);
   });
 
   v1.openapi(addModel, async (c) => {
     const { id } = c.req.valid('param');
-    const models = await deps.providers.addModel(id, c.req.valid('json'));
-    return c.json({ items: toModels(deps.providers.get(id).slug, models) }, 200);
+    await deps.providers.addModel(id, c.req.valid('json'));
+    return c.json({ items: toModels(deps.providers.get(id)) }, 200);
+  });
+
+  v1.openapi(setPrice, async (c) => {
+    const provider = await deps.providers.setPrice(c.req.valid('param').id, c.req.valid('json'));
+    return c.json({ items: toModels(provider) }, 200);
+  });
+
+  v1.openapi(removePrice, async (c) => {
+    await deps.providers.removePrice(c.req.valid('param').id, c.req.valid('query').modelId);
+    return c.body(null, 204);
   });
 
   v1.openapi(removeModel, async (c) => {

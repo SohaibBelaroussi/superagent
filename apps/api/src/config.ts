@@ -68,6 +68,8 @@ const configSchema = z.object({
     .min(0)
     .default(10 * 60_000),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15_000),
+  // Traces (decision D39) older than this many days are pruned; 0 keeps them forever.
+  TRACE_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
 });
 
 export type Config = z.infer<typeof configSchema>;

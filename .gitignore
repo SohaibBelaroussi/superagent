@@ -10,3 +10,5 @@ coverage/
 data/
 .DS_Store
 .idea/
+backups/
+release/

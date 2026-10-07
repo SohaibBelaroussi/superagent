@@ -132,6 +132,25 @@ services:
     image: superagent-sandbox-dev:1
     scale: 0
 
+  # Backups (decision D41): scripts/backup.sh runs it to mirror the documents bucket into $BACKUP_DIR/s3.
+  # Never started on its own. As root in the container, which is the server's user under rootless Docker;
+  # with rootful Docker set BACKUP_USER to your uid:gid, or the mirror ends up owned by root.
+  rclone:
+    profiles: [backup]
+    image: rclone/rclone:1.75.1
+    user: ${BACKUP_USER:-0:0}
+    environment:
+      # Remotes come from the variables below: no config file.
+      RCLONE_CONFIG: /dev/null
+      RCLONE_CONFIG_LIVE_TYPE: s3
+      RCLONE_CONFIG_LIVE_PROVIDER: SeaweedFS
+      RCLONE_CONFIG_LIVE_ENDPOINT: http://seaweedfs:8333
+      RCLONE_CONFIG_LIVE_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-}
+      RCLONE_CONFIG_LIVE_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-}
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backup
+    networks: [storage]
+
   # The image stdio MCP servers run in (Node, Python, uv). Built with the stack, never started here: the
   # runner creates one container per plugin from it, on the MCP network.
   mcp:

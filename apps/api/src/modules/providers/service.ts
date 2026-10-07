@@ -4,6 +4,7 @@ import type {
   CreateProviderInput,
   ModelKind,
   ModelRef,
+  SetModelPriceInput,
   UpdateProviderInput,
 } from '@superagent/shared';
 import { and, eq, notInArray } from 'drizzle-orm';
@@ -11,7 +12,7 @@ import { v7 as uuidv7 } from 'uuid';
 import type { SecretBox } from '../../crypto/secret-box';
 import type { Db } from '../../db/client';
 import { isUniqueViolation } from '../../db/errors';
-import { providerModels, providers } from '../../db/schema';
+import { modelPrices, providerModels, providers } from '../../db/schema';
 import { ApiError } from '../../http/problem';
 import { redactSecrets } from '../../util/text';
 import { DiscoveryError, discoverModels } from './discovery';
@@ -153,6 +154,38 @@ export class ProviderService {
       });
     await this.registry.reload();
     return this.get(id).models;
+  }
+
+  /** What one of the provider's models costs (decision D40): calls are priced from then on. */
+  async setPrice(id: string, input: SetModelPriceInput): Promise<ResolvedProvider> {
+    const provider = this.get(id);
+    if (!provider.models.some((m) => m.modelId === input.modelId)) {
+      throw new ApiError(404, 'model_not_found', `Provider has no model "${input.modelId}"`);
+    }
+    const price = {
+      inputUsd: input.inputUsd,
+      cachedInputUsd: input.cachedInputUsd ?? null,
+      outputUsd: input.outputUsd,
+    };
+    await this.db
+      .insert(modelPrices)
+      .values({ providerId: id, modelId: input.modelId, ...price })
+      .onConflictDoUpdate({
+        target: [modelPrices.providerId, modelPrices.modelId],
+        set: { ...price, updatedAt: new Date() },
+      });
+    await this.registry.reload();
+    return this.get(id);
+  }
+
+  async removePrice(id: string, modelId: string): Promise<void> {
+    this.get(id);
+    const deleted = await this.db
+      .delete(modelPrices)
+      .where(and(eq(modelPrices.providerId, id), eq(modelPrices.modelId, modelId)))
+      .returning({ modelId: modelPrices.modelId });
+    if (deleted.length === 0) throw new ApiError(404, 'price_not_found', `Model "${modelId}" has no price`);
+    await this.registry.reload();
   }
 
   async removeModel(id: string, modelId: string): Promise<void> {

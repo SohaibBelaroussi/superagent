@@ -22,6 +22,7 @@ import type { ProviderService } from '../modules/providers/service';
 import type { ScheduleService } from '../modules/schedules/service';
 import type { SettingsService } from '../modules/settings/service';
 import type { ToolCatalog } from '../modules/tools/catalog';
+import type { UsageService } from '../modules/usage/service';
 import type { WorkspaceService } from '../modules/workspace/service';
 
 /** Hono environment shared by Mastra's adapter and our routes (requestContext, mastra, ...). */
@@ -53,4 +54,5 @@ export interface AppDeps {
   mcp: McpService;
   skills: SkillStore;
   plugins: PluginService;
+  usage: UsageService;
 }

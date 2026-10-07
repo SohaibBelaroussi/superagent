@@ -120,6 +120,19 @@ export type UpdateProviderInput = z.infer<typeof UpdateProviderInputSchema>;
 export const ModelKindSchema = z.enum(['chat', 'embedding']);
 export type ModelKind = z.infer<typeof ModelKindSchema>;
 
+/** What a model costs, in USD per million tokens. */
+export const ModelPriceSchema = z.object({
+  inputUsd: z.number().min(0).max(100_000).describe('USD per million input tokens'),
+  cachedInputUsd: z
+    .number()
+    .min(0)
+    .max(100_000)
+    .nullable()
+    .describe('USD per million input tokens read from the cache (the input price when null)'),
+  outputUsd: z.number().min(0).max(100_000).describe('USD per million output tokens'),
+});
+export type ModelPrice = z.infer<typeof ModelPriceSchema>;
+
 export const ProviderModelSchema = z.object({
   modelId: z.string(),
   kind: ModelKindSchema,
@@ -127,10 +140,64 @@ export const ProviderModelSchema = z.object({
   enabled: z.boolean(),
   discoveredAt: z.string().nullable(),
   ref: z.string().describe('Model reference for agents and settings: sa/<provider>/<model>'),
+  price: ModelPriceSchema.nullable().describe(
+    'Set with PUT /v1/providers/{id}/prices; calls cost nothing without',
+  ),
 });
 export type ProviderModel = z.infer<typeof ProviderModelSchema>;
 
 export const ProviderModelListSchema = z.object({ items: z.array(ProviderModelSchema) });
+
+export const SetModelPriceInputSchema = ModelPriceSchema.extend({
+  modelId: z.string().trim().min(1).max(200),
+  cachedInputUsd: ModelPriceSchema.shape.cachedInputUsd.optional(),
+});
+export type SetModelPriceInput = z.input<typeof SetModelPriceInputSchema>;
+
+// --- Usage and cost (M9) ---
+
+/** Token and cost totals of a set of model calls. */
+export const UsageTotalsSchema = z.object({
+  calls: z.number().int().describe('Model calls'),
+  inputTokens: z.number().int(),
+  cachedInputTokens: z.number().int().describe('Part of the input tokens'),
+  outputTokens: z.number().int(),
+  reasoningTokens: z.number().int().describe('Part of the output tokens'),
+  totalTokens: z.number().int().describe('Input plus output'),
+  costUsd: z.number().describe('USD, at the prices of the day of each call'),
+  unpricedCalls: z.number().int().describe('Calls to models that had no price: not in costUsd'),
+});
+export type UsageTotals = z.infer<typeof UsageTotalsSchema>;
+
+export const UsageGroupSchema = z.enum(['department', 'task', 'agent', 'model', 'day']);
+export type UsageGroup = z.infer<typeof UsageGroupSchema>;
+
+export const UsageQuerySchema = z.object({
+  group: UsageGroupSchema.default('department'),
+  from: z.iso.datetime({ offset: true }).optional().describe('Calls at or after this time'),
+  to: z.iso.datetime({ offset: true }).optional().describe('Calls before this time'),
+  departmentId: z.uuid().optional().describe("Only this department's tasks"),
+});
+export type UsageQuery = z.infer<typeof UsageQuerySchema>;
+
+export const UsageReportSchema = z.object({
+  group: UsageGroupSchema,
+  from: z.string().nullable(),
+  to: z.string().nullable(),
+  items: z.array(
+    UsageTotalsSchema.extend({
+      key: z
+        .string()
+        .nullable()
+        .describe(
+          "A department or task id, an agent, provider/model, or a day (owner's timezone); null: none",
+        ),
+      label: z.string(),
+    }),
+  ),
+  total: UsageTotalsSchema,
+});
+export type UsageReport = z.infer<typeof UsageReportSchema>;
 
 export const AddModelInputSchema = z.object({
   modelId: z.string().trim().min(1).max(200),
@@ -428,6 +495,7 @@ export const TaskSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   closedAt: z.string().nullable(),
+  usage: UsageTotalsSchema.describe("Every model call made for it: the lead's, its specialists', memory's"),
 });
 export type Task = z.infer<typeof TaskSchema>;
 

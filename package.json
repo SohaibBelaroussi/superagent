@@ -26,6 +26,9 @@
     "db:generate": "pnpm --filter @superagent/api db:generate",
     "stack:up": "docker compose --profile app build && docker compose --profile app up -d",
     "stack:down": "docker compose --profile app down",
+    "release": "bash scripts/release.sh",
+    "backup": "bash scripts/backup.sh",
+    "backup:drill": "bash scripts/restore-drill.sh",
     "studio": "pnpm dlx mastra@1.32.1 studio --server-port 4111"
   },
   "devDependencies": {
