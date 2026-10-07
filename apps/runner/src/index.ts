@@ -45,7 +45,9 @@ export function createRunner(
     start() {
       if (timer) return;
       timer = setInterval(() => {
-        reaping ??= manager
+        // One pass at a time: a slow pass (Docker busy) is not overlapped by the next.
+        if (reaping) return;
+        reaping = manager
           .reap()
           .catch((error: unknown) => logger.warn('Reaper failed', { error: dockerMessage(error) }))
           .finally(() => {
