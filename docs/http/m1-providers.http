@@ -1,0 +1,64 @@
+# M1 walkthrough: model providers, model discovery, connectivity checks, model roles.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Paste your SUPERAGENT_ADMIN_TOKEN and your provider's details below. Don't commit them.
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+@providerUrl = https://your-provider.example/v1
+@providerKey = paste-your-provider-key-here
+@chatModel = your-chat-model
+
+### Add an OpenAI-compatible provider. The key is stored encrypted and never returned.
+# @name provider
+POST {{baseUrl}}/v1/providers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "slug": "home", "name": "Home server", "baseUrl": "{{providerUrl}}", "apiKey": "{{providerKey}}" }
+
+### List providers
+GET {{baseUrl}}/v1/providers
+Authorization: Bearer {{token}}
+
+### Discover its models (GET {providerUrl}/models)
+POST {{baseUrl}}/v1/providers/{{provider.response.body.id}}/refresh-models
+Authorization: Bearer {{token}}
+
+### Add a model by hand (servers without /models, or to mark an embedding model)
+POST {{baseUrl}}/v1/providers/{{provider.response.body.id}}/models
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "modelId": "{{chatModel}}", "kind": "chat" }
+
+### Run connectivity checks: chat, streaming with usage, tool calling (and embeddings if you pass embeddingModel)
+POST {{baseUrl}}/v1/providers/{{provider.response.body.id}}/test
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "model": "{{chatModel}}" }
+
+### Point the default model role at it
+PATCH {{baseUrl}}/v1/settings
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "models": { "default": { "provider": "home", "model": "{{chatModel}}" } } }
+
+### Settings now
+GET {{baseUrl}}/v1/settings
+Authorization: Bearer {{token}}
+
+### Chat with the scratch agent through Mastra's routes (uses the default role)
+POST {{baseUrl}}/api/agents/scratch/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "messages": [{ "role": "user", "content": "In one sentence, what can you do?" }] }
+
+### Rotate the key: applies to the next call, no restart
+PATCH {{baseUrl}}/v1/providers/{{provider.response.body.id}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "apiKey": "{{providerKey}}" }

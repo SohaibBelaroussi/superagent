@@ -2,7 +2,10 @@
 
 **Status:** approved 2026-10-07. Targets `@mastra/core` 1.74.0.
 
-**Progress:** M0 (foundation) is done on branch `m0-foundation`, with a PR into `main`. Next is M1 (providers and models).
+**Progress:**
+- M0 (foundation): merged in PR #1.
+- M1 (providers and models): done on branch `m1-providers`, PR #2. Verified live against the owner's provider (chat, streaming usage, tool calls).
+- Next: M2 (agents, departments, tool catalog).
 
 **Related docs:**
 - [decisions.md](decisions.md): what is settled and why.

@@ -17,6 +17,7 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 - `pnpm db:up`, then `pnpm dev`: the API on http://127.0.0.1:4111 with reload. Docs UI at `/v1/docs`.
 - `pnpm check`: EE-import guard, lint, typecheck, unit and integration tests. Integration needs Docker running.
 - `pnpm test` / `pnpm test:int` / `pnpm test:e2e`. e2e needs `pnpm stack:up` (packaged API on :4112).
+- `pnpm test:live`: checks against the owner's real provider (`LIVE_LLM_*` in `.env`). Not part of CI.
 - `pnpm db:generate`: new Drizzle migration after editing `apps/api/src/db/schema.ts`.
 - `pnpm stack:up` / `pnpm stack:down`: packaged API plus Postgres in Docker.
 - `pnpm studio`: Mastra Studio on :3000 against the dev server. Log in with `STUDIO_TOKEN`.
@@ -26,7 +27,8 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 - **No EE code.** Never import `@mastra/*/ee` (paid license). `pnpm check:ee` enforces this.
 - **Experimental APIs.** Mastra's signals, notifications and `subscribeToThread` are called only from dedicated modules (the dispatch module from M3 on).
 - **Agent definitions are ours.** They live in our tables and compile into Mastra `Agent`s. Swap with `removeAgent` + `addAgent`; `addAgent` silently ignores duplicate ids.
-- **Models.** Set every internal model explicitly. Observational memory defaults to a Google model.
+- **Models.** Agents reference models as `sa/<provider-slug>/<model-id>`, resolved by our gateway from the providers table, or through a settings role (`settings.modelRouterId(role)`). Set every internal model explicitly; observational memory defaults to a Google model.
+- **Secrets.** Provider keys and headers are sealed with `SecretBox` (AES-256-GCM, context-bound) using `SUPERAGENT_ENCRYPTION_KEY`. Never return or log them.
 - **Errors.** `/v1` errors are problem+json: throw `ApiError`, or return `problem()`.
 - **Schemas.** zod 4 everywhere. Request and response schemas go in `packages/shared`.
 - **Tests.** Agent flows use the scripted mock model (`apps/api/test/support/mock-model.ts`). Database tests use `startTestSystem()` from `apps/api/test/int/helpers.ts` (Testcontainers, one database per file).

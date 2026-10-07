@@ -395,7 +395,30 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 
 **Tests:** the integration suite (Testcontainers pgvector, 16 tests) takes about 11 s on Docker Desktop.
 
-## 12. From earlier research, needed in later milestones
+## 12. Learned while building M1 (2026-10-07)
+
+**Throwaway agents for checks:**
+- `new Agent({ ..., model: 'sa/<slug>/<model>', mastra })` resolves our gateway without being registered, so it never shows up in `/api/agents`. The provider test runner uses this.
+- Set `maxRetries: 0` on such agents so failures come back in seconds instead of after retries with backoff.
+
+**Unset model roles:**
+- Dynamic `model` functions also run when Studio lists agents, so they must not throw.
+- Unset roles therefore resolve to `sa/unconfigured/<role>`, and the gateway rejects that id at call time with instructions.
+- Mastra's generate route surfaces that error message to the client.
+- The slug `unconfigured` is reserved.
+
+**Gateway:**
+- `ProviderGateway` reads an in-memory registry rebuilt after every provider write.
+- It builds `createOpenAICompatible({ includeUsage: true, supportsStructuredOutputs: strictJson })` from `@ai-sdk/openai-compatible` 2.x.
+- `resolveAuth` returns `{ apiKey, source: 'gateway' }`.
+
+**Embeddings:** `ModelRouterEmbeddingModel({ providerId, modelId, url, apiKey, headers })` works for the connectivity check against an OpenAI-compatible `/embeddings` endpoint.
+
+**Live results with the owner's provider:**
+- Model discovery, chat, streaming with token usage, and tool calling all pass.
+- It lists no embedding model. M4 needs one: from that provider or another.
+
+## 13. From earlier research, needed in later milestones
 
 - **DockerSandbox 0.9.2:**
   - One long-lived container per sandbox, reused by label.
