@@ -443,3 +443,33 @@ export const BoardSchema = z.object({
   columns: z.array(z.object({ phase: TaskPhaseSchema, tasks: z.array(TaskSchema) })),
 });
 export type Board = z.infer<typeof BoardSchema>;
+
+// --- M4: knowledge ---
+
+export const KnowledgeDocumentSchema = z.object({
+  id: z.uuid(),
+  title: z.string(),
+  filename: z.string(),
+  contentType: z.string(),
+  size: z.number().int().describe('Bytes'),
+  departmentId: z.uuid().nullable().describe('Null: shared with every department'),
+  chunkCount: z.number().int().describe('Passages indexed for search'),
+  createdAt: z.iso.datetime(),
+});
+export type KnowledgeDocument = z.infer<typeof KnowledgeDocumentSchema>;
+
+export const KnowledgeDocumentListSchema = z.object({ items: z.array(KnowledgeDocumentSchema) });
+export type KnowledgeDocumentList = z.infer<typeof KnowledgeDocumentListSchema>;
+
+export const KnowledgeHitSchema = z.object({
+  documentId: z.uuid(),
+  title: z.string(),
+  departmentId: z.uuid().nullable(),
+  passage: z.number().int().describe('Position of the passage in the document'),
+  content: z.string(),
+  score: z.number(),
+});
+export type KnowledgeHit = z.infer<typeof KnowledgeHitSchema>;
+
+export const KnowledgeSearchResultSchema = z.object({ items: z.array(KnowledgeHitSchema) });
+export type KnowledgeSearchResult = z.infer<typeof KnowledgeSearchResultSchema>;

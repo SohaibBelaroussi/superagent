@@ -37,6 +37,7 @@ const PRIORITY: Array<(tool: string) => boolean> = [
   (t) => t === 'update_task',
   (t) => t.startsWith('agent-'),
   (t) => t === 'web_search',
+  (t) => t === 'knowledge_search',
   (t) => t === 'add_artifact',
   (t) => t === 'report_to_chief',
 ];
@@ -93,6 +94,8 @@ function argsFor(tool: string): Record<string, unknown> {
       };
     case 'web_search':
       return { query: 'mastra agent framework' };
+    case 'knowledge_search':
+      return { query: 'how long are customer records kept' };
     case 'add_artifact':
       return { title: 'Summary', kind: 'text', content: '# Mastra\n\nA TypeScript agent framework.' };
     case 'report_to_chief':

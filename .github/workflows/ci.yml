@@ -42,14 +42,16 @@ jobs:
             echo "SUPERAGENT_ADMIN_TOKEN=sa_$(openssl rand -hex 32)"
             echo "SUPERAGENT_ENCRYPTION_KEY=$(openssl rand -base64 32)"
             echo "STUDIO_TOKEN=sa_$(openssl rand -hex 32)"
+            echo "S3_ACCESS_KEY=$(openssl rand -hex 12)"
+            echo "S3_SECRET_KEY=$(openssl rand -hex 24)"
             echo "LOG_LEVEL=info"
             echo "MASTRA_TELEMETRY_DISABLED=true"
             echo "API_PORT=4112"
           } > .env
 
       - name: Build and start the packaged stack
-        # Only the API and its database: the web-tool services are exercised with fakes in tests.
-        run: docker compose --profile app up -d --build --wait --wait-timeout 180 postgres api
+        # The API with its database and document storage: the web-tool services are exercised with fakes in tests.
+        run: docker compose --profile app up -d --build --wait --wait-timeout 180 postgres seaweedfs api
 
       - name: End-to-end tests against the container
         run: pnpm test:e2e

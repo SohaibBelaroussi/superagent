@@ -60,6 +60,7 @@ describe('departments and agents', () => {
       'core/current_time',
       'web/web_search',
       'web/fetch_page',
+      'knowledge/knowledge_search',
     ]);
   });
 

@@ -7,6 +7,7 @@ import { createErrorHandler, notFound, problem } from './http/problem';
 import { requestLog } from './http/request-log';
 import type { AppDeps, AppEnv } from './http/types';
 import { createV1Router, V1_PREFIX } from './routes/v1';
+import { isUpload, MAX_UPLOAD_BYTES } from './routes/v1/knowledge';
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
@@ -27,13 +28,16 @@ export async function createApp(deps: AppDeps): Promise<Hono<AppEnv>> {
 
   // Before MastraServer.init(): Mastra's context middleware parses every JSON body before auth,
   // so without a global cap an unauthenticated client could make the server buffer huge payloads.
-  app.use(
-    '*',
-    bodyLimit({
-      maxSize: MAX_BODY_BYTES,
-      onError: (c) => problem(c, 413, { code: 'payload_too_large', detail: 'Request body exceeds 4 MiB' }),
-    }),
-  );
+  // Document uploads are multipart, which Mastra doesn't parse; they are read only after auth.
+  const defaultLimit = bodyLimit({
+    maxSize: MAX_BODY_BYTES,
+    onError: (c) => problem(c, 413, { code: 'payload_too_large', detail: 'Request body exceeds 4 MiB' }),
+  });
+  const uploadLimit = bodyLimit({
+    maxSize: MAX_UPLOAD_BYTES,
+    onError: (c) => problem(c, 413, { code: 'payload_too_large', detail: 'Uploads are limited to 20 MiB' }),
+  });
+  app.use('*', (c, next) => (isUpload(c) ? uploadLimit(c, next) : defaultLimit(c, next)));
 
   app.get('/health', (c) => c.json({ status: 'ok' }));
   app.get('/ready', async (c) => {

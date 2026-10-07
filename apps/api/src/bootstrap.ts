@@ -18,6 +18,8 @@ import { createMastra } from './mastra';
 import { createChiefAgent } from './mastra/agents/chief';
 import { createScratchAgent } from './mastra/agents/scratch';
 import { DispatchService } from './modules/dispatch/service';
+import { type BlobStore, S3BlobStore } from './modules/knowledge/blobs';
+import { KnowledgeService } from './modules/knowledge/service';
 import { EventBus } from './modules/ledger/events';
 import { TaskService } from './modules/ledger/service';
 import { createChiefTools, createLeadTools } from './modules/ledger/tools';
@@ -42,6 +44,7 @@ export interface System {
   org: OrgService;
   tasks: TaskService;
   dispatch: DispatchService;
+  knowledge: KnowledgeService;
   mastra: Mastra;
   app: Hono<AppEnv>;
   /** Drains Mastra and closes the database pool. Does not touch the HTTP server. */
@@ -52,6 +55,8 @@ export interface BootstrapOptions {
   logger?: IMastraLogger;
   /** Extra agents to register (tests use scripted mock agents). */
   agents?: Record<string, Agent>;
+  /** Replaces S3 object storage (tests use an in-memory store). */
+  blobs?: BlobStore;
 }
 
 /** Builds the whole server without listening: migrations, providers, Mastra storage, auth, routes. */
@@ -74,6 +79,19 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     await settings.load();
     const directory = new OrgDirectory(db);
     await directory.reload();
+    const blobs =
+      options.blobs ??
+      (config.S3_ACCESS_KEY && config.S3_SECRET_KEY
+        ? new S3BlobStore({
+            endpoint: config.S3_ENDPOINT,
+            bucket: config.S3_BUCKET,
+            region: config.S3_REGION,
+            accessKey: config.S3_ACCESS_KEY,
+            secretKey: config.S3_SECRET_KEY,
+          })
+        : undefined);
+    if (!blobs) logger.warn('Document storage is off: set S3_ACCESS_KEY and S3_SECRET_KEY to enable uploads');
+    const knowledge = new KnowledgeService(db, directory, blobs, logger);
     const catalog = new ToolCatalog({
       settings,
       web: {
@@ -81,6 +99,8 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         crawl4aiUrl: config.CRAWL4AI_URL,
         crawl4aiToken: config.CRAWL4AI_API_TOKEN,
       },
+      knowledge,
+      directory,
     });
 
     const storage = new PostgresStore({ id: 'superagent-mastra', pool, schemaName: 'mastra' });
@@ -130,6 +150,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       tasks,
       dispatch,
       bus,
+      knowledge,
     });
     return {
       config,
@@ -142,11 +163,13 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       org,
       tasks,
       dispatch,
+      knowledge,
       mastra,
       app,
       async close(drainTimeoutMs = 5_000) {
         await dispatch.close(drainTimeoutMs);
         await mastra.shutdown({ drainTimeout: drainTimeoutMs });
+        blobs?.close?.();
         await pool.end();
       },
     };

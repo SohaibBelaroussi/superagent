@@ -36,6 +36,12 @@ const configSchema = z.object({
   SEARXNG_URL: z.url().default('http://127.0.0.1:8888'),
   CRAWL4AI_URL: z.url().default('http://127.0.0.1:11235'),
   CRAWL4AI_API_TOKEN: z.string().min(16).optional(),
+  // Object storage (SeaweedFS via S3) for uploaded documents. Without keys, uploads are turned off.
+  S3_ENDPOINT: z.url().default('http://127.0.0.1:8333'),
+  S3_BUCKET: z.string().min(3).default('knowledge'),
+  S3_REGION: z.string().min(1).default('us-east-1'),
+  S3_ACCESS_KEY: z.string().min(8).optional(),
+  S3_SECRET_KEY: z.string().min(16).optional(),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15_000),
 });
 
