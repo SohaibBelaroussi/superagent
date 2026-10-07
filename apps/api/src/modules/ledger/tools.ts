@@ -42,28 +42,11 @@ async function currentTask(deps: LedgerToolDeps, context: ToolAgentContext): Pro
 }
 
 /**
- * Errors come back to the model as results instead of throwing: a thrown tool error ends the whole
- * Mastra run, while a returned one lets the agent read it and recover (e.g. pick another department).
+ * Tools every department lead gets, on top of the tools its definition grants. Errors are thrown:
+ * Mastra hands the message to the model as the tool result, so the agent can read it and adapt.
  */
-function returnErrors(tools: ToolsInput): ToolsInput {
-  for (const tool of Object.values(tools)) {
-    const target = tool as { execute?: (...args: unknown[]) => Promise<unknown> };
-    const original = target.execute;
-    if (!original) continue;
-    target.execute = async (...args: unknown[]) => {
-      try {
-        return await original.apply(tool, args);
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
-      }
-    };
-  }
-  return tools;
-}
-
-/** Tools every department lead gets, on top of the tools its definition grants. */
 export function createLeadTools(deps: LedgerToolDeps): ToolsInput {
-  return returnErrors({
+  return {
     update_task: createTool({
       id: 'update_task',
       description:
@@ -120,12 +103,12 @@ export function createLeadTools(deps: LedgerToolDeps): ToolsInput {
         return { ...summary(updated), reported: true };
       },
     }),
-  });
+  };
 }
 
 /** Tools the chief of staff uses to run the organization. */
 export function createChiefTools(deps: LedgerToolDeps): ToolsInput {
-  return returnErrors({
+  return {
     create_task: createTool({
       id: 'create_task',
       description:
@@ -230,5 +213,5 @@ export function createChiefTools(deps: LedgerToolDeps): ToolsInput {
         return summary(await deps.dispatch.cancel(task, reason, 'chief'));
       },
     }),
-  });
+  };
 }
