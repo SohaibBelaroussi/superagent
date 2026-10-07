@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1.7
+# Build context: repository root (see compose.yaml).
+ARG NODE_VERSION=24.21.0
+
+FROM node:${NODE_VERSION}-bookworm-slim AS base
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN corepack enable
+
+# --- build: install the workspace, bundle the API, assemble production node_modules ---
+FROM base AS build
+WORKDIR /repo
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY apps/api/package.json apps/api/
+COPY packages/shared/package.json packages/shared/
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --frozen-lockfile
+COPY tsconfig.base.json ./
+COPY packages/shared packages/shared
+COPY apps/api apps/api
+RUN pnpm --filter @superagent/api build
+# --legacy: deploy without injectWorkspacePackages; workspace code is already bundled into dist/.
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm --filter @superagent/api deploy --prod --legacy /out
+
+# --- runtime: bundle + migrations + production dependencies, running as the node user ---
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+ENV NODE_ENV=production \
+    MASTRA_TELEMETRY_DISABLED=true \
+    HOST=0.0.0.0 \
+    PORT=4111
+WORKDIR /app
+COPY --from=build --chown=node:node /out ./
+USER node
+EXPOSE 4111
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||4111)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+# Exec form: node is PID 1's child under `init: true` and receives SIGTERM directly.
+CMD ["node", "--enable-source-maps", "dist/main.mjs"]

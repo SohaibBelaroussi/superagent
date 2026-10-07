@@ -1,0 +1,12 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 10 blocks dependency build scripts by default. esbuild (used by tsx) needs its script;
+# the others are optional native addons (ssh2/cpu-features via testcontainers) or banners.
+onlyBuiltDependencies:
+  - esbuild
+ignoredBuiltDependencies:
+  - cpu-features
+  - protobufjs
+  - ssh2

@@ -361,7 +361,41 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - **Compose:** `init: true`, and `stop_grace_period` longer than the drain timeout.
 - **tsconfig:** ES2022, `moduleResolution: bundler`, `noEmit`, used for typechecking only. tsdown bundles.
 
-## 11. From earlier research, needed in later milestones
+## 11. Learned while building M0 (2026-10-07)
+
+**Dependencies:**
+- `@mastra/hono` 1.7.16 depends on `@hono/node-ws`, whose peer is `@hono/node-server ^1.19`. Pin `@hono/node-server` 1.19.x, not 2.x.
+- pnpm 10 blocks dependency build scripts. Only `esbuild` needs approval (`onlyBuiltDependencies`). `ssh2`, `cpu-features` and `protobufjs` are ignored safely.
+
+**`createAuthMiddleware`** (`@mastra/hono`):
+- It marks the wrapped path as an auth-required custom route, so it enforces auth even outside the provider's `protected` patterns.
+- Token comes from `Authorization` (with `"Bearer "` stripped) or `?apiKey=`.
+- **With no `server.auth` configured it lets everything through.** `createMastra()` refuses to boot without a provider.
+
+**Startup warning** `[mastra/auth] server.auth is configured without mapUserToResourceId`: expected and harmless with a single owner (decision D20).
+
+**From the M0 review:**
+- **`MastraServer.init()` registers a global context middleware that parses every JSON request body before auth** (`c.req.raw.clone().json()`). Without a global limit, an unauthenticated client can make the server buffer huge bodies. `app.ts` mounts Hono's `bodyLimit` (4 MiB) before `init()`.
+- **A `pg.Pool` passed to `PostgresStore({ pool })` gets no `'error'` listener** (Mastra only adds one to pools it creates). An idle client dying (e.g. Postgres restart) then crashes the process. `bootstrap()` attaches the listener.
+- **Mastra's `coreAuthMiddleware` turns exceptions from `authenticateToken` into 401.** `TokenService` therefore keeps recently verified tokens working through short database outages instead of returning 401 for every request.
+
+**Mastra's generate route:**
+- `POST /api/agents/:id/generate` accepts `{ messages: [{ role: 'user', content }] }` and returns JSON with `text`.
+- Thread ids containing colons (`task:<id>`, `dept:<slug>`) work.
+
+**Toolchain:**
+- TypeScript 7.0 (native) typechecks Mastra 1.74 types with no issues.
+- tsdown 0.23 emits `dist/main.mjs` for ESM node builds.
+- **Biome 2.5 `biome migrate` rewrites `"recommended": true` to `"preset": "none"`, which turns the rules off.** Use `"preset": "recommended"`.
+
+**Packaging:**
+- `pnpm deploy --prod --legacy` assembles the runtime folder without `injectWorkspacePackages`.
+- Image is about 650 MB: node:24 slim plus about 260 MB of production `node_modules`.
+- SIGTERM stop takes about 0.8 s, exit code 0.
+
+**Tests:** the integration suite (Testcontainers pgvector, 16 tests) takes about 11 s on Docker Desktop.
+
+## 12. From earlier research, needed in later milestones
 
 - **DockerSandbox 0.9.2:**
   - One long-lived container per sandbox, reused by label.

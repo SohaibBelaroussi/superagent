@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check, test and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      # pnpm version comes from "packageManager" in package.json.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # EE-import guard, lint, typecheck, unit tests, integration tests (Testcontainers Postgres).
+      - name: pnpm check
+        run: pnpm check
+
+      - name: Create a throwaway .env for the packaged stack
+        run: |
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "SUPERAGENT_ADMIN_TOKEN=sa_$(openssl rand -hex 32)"
+            echo "STUDIO_TOKEN=sa_$(openssl rand -hex 32)"
+            echo "LOG_LEVEL=info"
+            echo "MASTRA_TELEMETRY_DISABLED=true"
+            echo "API_PORT=4112"
+          } > .env
+
+      - name: Build and start the packaged stack
+        run: docker compose --profile app up -d --build --wait --wait-timeout 180
+
+      - name: End-to-end tests against the container
+        run: pnpm test:e2e
+
+      - name: Container logs
+        if: failure()
+        run: docker compose --profile app logs --no-color
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose --profile app down -v

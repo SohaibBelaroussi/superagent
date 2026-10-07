@@ -1,0 +1,31 @@
+{
+  "name": "superagent",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.18.0",
+  "engines": {
+    "node": ">=22.22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @superagent/api dev",
+    "build": "pnpm --filter @superagent/api build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "pnpm -r test",
+    "test:int": "pnpm --filter @superagent/api test:int",
+    "test:e2e": "pnpm --filter @superagent/api test:e2e",
+    "check:ee": "node scripts/check-ee-imports.mjs",
+    "check": "pnpm check:ee && pnpm lint && pnpm typecheck && pnpm test && pnpm test:int",
+    "db:up": "docker compose up -d postgres",
+    "db:generate": "pnpm --filter @superagent/api db:generate",
+    "stack:up": "docker compose --profile app up -d --build",
+    "stack:down": "docker compose --profile app down",
+    "studio": "pnpm dlx mastra@1.32.1 studio --server-port 4111"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "typescript": "7.0.2"
+  }
+}

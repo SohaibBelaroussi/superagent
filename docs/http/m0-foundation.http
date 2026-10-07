@@ -1,0 +1,59 @@
+# M0 walkthrough: health, auth and device tokens.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Paste your SUPERAGENT_ADMIN_TOKEN from .env below. Don't commit it.
+# Dev server: http://127.0.0.1:4111. Packaged stack (pnpm stack:up): http://127.0.0.1:4112.
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+
+### Liveness (public)
+GET {{baseUrl}}/health
+
+### Readiness (public, checks Postgres)
+GET {{baseUrl}}/ready
+
+### No token: 401 problem+json
+GET {{baseUrl}}/v1/me
+
+### Who am I
+GET {{baseUrl}}/v1/me
+Authorization: Bearer {{token}}
+
+### Create a device token. The secret appears only in this response.
+# @name created
+POST {{baseUrl}}/v1/tokens
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "name": "laptop" }
+
+### List tokens (prefixes only, never secrets)
+GET {{baseUrl}}/v1/tokens
+Authorization: Bearer {{token}}
+
+### Use the new token
+GET {{baseUrl}}/v1/me
+Authorization: Bearer {{created.response.body.token}}
+
+### Tokens also work as ?apiKey= (for EventSource clients)
+GET {{baseUrl}}/v1/me?apiKey={{created.response.body.token}}
+
+### Revoke it (204). Using it again returns 401.
+DELETE {{baseUrl}}/v1/tokens/{{created.response.body.record.id}}
+Authorization: Bearer {{token}}
+
+### Validation errors are problem+json with field details (400)
+POST {{baseUrl}}/v1/tokens
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{}
+
+### Mastra runtime routes live under /api. The agent list stays empty until M2.
+GET {{baseUrl}}/api/agents
+Authorization: Bearer {{token}}
+
+### OpenAPI document (public in dev, token required in production)
+GET {{baseUrl}}/v1/openapi.json
+
+# Interactive docs (dev only): open {{baseUrl}}/v1/docs in a browser.
