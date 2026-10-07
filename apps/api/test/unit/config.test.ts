@@ -4,6 +4,7 @@ import { ConfigError, loadConfig } from '../../src/config';
 const base = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/superagent',
   SUPERAGENT_ADMIN_TOKEN: 'x'.repeat(32),
+  SUPERAGENT_ENCRYPTION_KEY: Buffer.alloc(32, 3).toString('base64'),
 };
 
 describe('loadConfig', () => {
@@ -29,6 +30,12 @@ describe('loadConfig', () => {
     const run = () => loadConfig({ DATABASE_URL: 'mysql://nope', SUPERAGENT_ADMIN_TOKEN: 'short' });
     expect(run).toThrow(ConfigError);
     expect(run).toThrow(/DATABASE_URL[\s\S]*SUPERAGENT_ADMIN_TOKEN/);
+  });
+
+  it('requires a 32-byte encryption key', () => {
+    expect(() =>
+      loadConfig({ ...base, SUPERAGENT_ENCRYPTION_KEY: Buffer.alloc(16).toString('base64') }),
+    ).toThrow(/SUPERAGENT_ENCRYPTION_KEY/);
   });
 
   it('rejects connection strings that are not valid URLs', () => {
