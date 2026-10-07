@@ -32,6 +32,37 @@ export const RunnerConfigSchema = z.object({
         return z.NEVER;
       }
     }),
+  /** The browser image (decision D34): Chromium, one container per task for agents granted the browser. */
+  RUNNER_BROWSER_IMAGE: z.string().regex(IMAGE_REF).default('superagent-browser:1'),
+  /** The internal network browsers join: its only way out is the egress proxy. */
+  RUNNER_BROWSER_NETWORK: z
+    .string()
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/)
+    .default('superagent-browsers'),
+  /** The egress proxy browsers go out through. Empty: no proxy (only for a closed test network). */
+  RUNNER_BROWSER_PROXY: z.string().default('http://egress:3128'),
+  /** Hosts browsers reach without the proxy, ;-separated (tests only). */
+  RUNNER_BROWSER_BYPASS: z
+    .string()
+    .regex(/^[a-zA-Z0-9.;:*-]*$/)
+    .default(''),
+  /**
+   * The seccomp profile that lets Chromium sandbox its renderers (`auto`: the one shipped with the
+   * runner). `none`: Docker's default profile, and Chromium runs without its own sandbox.
+   */
+  RUNNER_BROWSER_SECCOMP: z.string().default('auto'),
+  RUNNER_BROWSER_MEMORY_MB: z.coerce.number().int().min(256).default(2048),
+  /** Chromium runs a few hundred threads; each counts against this. */
+  RUNNER_BROWSER_PIDS_LIMIT: z.coerce.number().int().min(256).default(1024),
+  /** Browsers running at once; at the limit, the least recently used idle one is stopped first. */
+  RUNNER_MAX_BROWSERS: z.coerce.number().int().min(1).default(4),
+  /** A browser nobody is connected to for this long is stopped (its identity's cookies are saved). */
+  RUNNER_BROWSER_IDLE_STOP_MS: duration(10 * 60_000, 100),
+  /** Identity profiles are volumes named <this>-<identity id>. */
+  RUNNER_IDENTITY_VOLUME_PREFIX: z
+    .string()
+    .regex(/^[a-z][a-z0-9-]{0,30}$/)
+    .default('superagent-identity'),
   /** Labels this runner's containers, so two runners (say, tests) never touch each other's. */
   RUNNER_NAME_PREFIX: z
     .string()

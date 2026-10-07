@@ -1,0 +1,87 @@
+# M7 walkthrough: a researcher with a browser, its live view, and a signed-in identity.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Prerequisites: a default model (m1-providers.http), the runner (`pnpm stack:up`, or `pnpm dev:runner`
+# next to `pnpm dev`), and `pnpm browsers:up` (the browser image and the egress proxy).
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+@departmentId = paste-a-department-id
+@taskId = paste-a-task-id
+@identityId = paste-an-identity-id
+
+### A researcher with a browser of its task's own. It reaches public sites only, through the egress proxy.
+POST {{baseUrl}}/v1/agents
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "key": "researcher",
+  "name": "Researcher",
+  "role": "specialist",
+  "departmentId": "{{departmentId}}",
+  "description": "Reads websites with a real browser, including pages built by JavaScript.",
+  "instructions": "Use the browser: open the page, take snapshots to read it and find refs, click to move on.",
+  "tools": [{ "key": "browser" }]
+}
+
+### A task for it (the department's lead delegates to the researcher).
+POST {{baseUrl}}/v1/tasks
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "departmentId": "{{departmentId}}",
+  "title": "Quotes on a JavaScript site",
+  "brief": "Open https://quotes.toscrape.com/js/ and report the author of its first quote."
+}
+
+### The task's browser, while it is open: what page it is on.
+GET {{baseUrl}}/v1/tasks/{{taskId}}/browser
+Authorization: Bearer {{token}}
+
+### The live view is a WebSocket (not something this client opens): connect a WebSocket client to
+###   ws://127.0.0.1:4111/v1/tasks/{taskId}/browser/stream?apiKey=<token>
+### It sends JPEG frames (base64 text) and JSON events ({"status": ...}, {"url": ...}, {"viewport": ...}).
+### Send {"type":"takeover","on":true} to take over (agents' browser calls wait), then mouse and keyboard
+### events or {"type":"navigate","url":"https://..."}; {"type":"takeover","on":false} gives it back.
+
+### Every open browser: tasks', sign-in sessions and the page reader.
+GET {{baseUrl}}/v1/browsers
+Authorization: Bearer {{token}}
+
+### Close a task's browser (an agent's next browser call opens a new one).
+DELETE {{baseUrl}}/v1/tasks/{{taskId}}/browser
+Authorization: Bearer {{token}}
+
+### An identity: a browser profile you sign in to sites with, for agents to browse as you.
+POST {{baseUrl}}/v1/browser-identities
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "name": "owner-news", "description": "Signed in to my news subscription" }
+
+### Sign it in yourself: open its sign-in session, then drive it from its live view
+###   ws://127.0.0.1:4111/v1/browser-identities/{identityId}/stream?apiKey=<token>
+### (no takeover needed: {"type":"navigate","url":"https://..."}, then click and type).
+POST {{baseUrl}}/v1/browser-identities/{{identityId}}/session
+Authorization: Bearer {{token}}
+
+### Close the sign-in session: its cookies are saved in the identity's profile.
+DELETE {{baseUrl}}/v1/browser-identities/{{identityId}}/session
+Authorization: Bearer {{token}}
+
+### Give an agent the identity: its browser is signed in wherever you signed in. One browser uses an
+### identity at a time; another task that needs it waits (GET /v1/attention says so).
+PATCH {{baseUrl}}/v1/agents/paste-the-researcher-id
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "tools": [{ "key": "browser", "identity": "owner-news" }] }
+
+### Identities, and who uses each right now.
+GET {{baseUrl}}/v1/browser-identities
+Authorization: Bearer {{token}}
+
+### Delete an identity and its profile (refused while a browser or an agent's grant uses it).
+DELETE {{baseUrl}}/v1/browser-identities/{{identityId}}
+Authorization: Bearer {{token}}

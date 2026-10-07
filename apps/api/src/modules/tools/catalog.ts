@@ -3,24 +3,29 @@ import { createTool } from '@mastra/core/tools';
 import type { CatalogTool, ToolGrant } from '@superagent/shared';
 import { z } from 'zod';
 import { isValidTimezone, truncate } from '../../util/text';
+import type { BrowserService } from '../browser/service';
 import type { KnowledgeService } from '../knowledge/service';
 import type { OrgDirectory } from '../org/directory';
 import type { SettingsService } from '../settings/service';
-import { fetchPage, searchWeb, type WebToolsConfig } from './web';
+import { BlockedUrlError, fetchPage, searchWeb, type WebToolsConfig } from './web';
 
 export interface ToolContext {
   settings: SettingsService;
   web: WebToolsConfig;
   knowledge: KnowledgeService;
   directory: OrgDirectory;
+  /** Agents' browsers (decision D34); fetch_page also falls back to its reader. */
+  browsers: BrowserService;
 }
 
 interface CatalogEntry {
   key: string;
-  pack: 'core' | 'web' | 'knowledge' | 'workspace';
+  pack: 'core' | 'web' | 'knowledge' | 'workspace' | 'browser';
   description: string;
   /** Absent for workspace grants: they give the agent Mastra's workspace tools instead (decision D33). */
   create?(ctx: ToolContext, options: { requireApproval: boolean }): ToolsInput[string];
+  /** A grant that gives several tools (the browser's), named by the record's keys. */
+  createMany?(ctx: ToolContext, grant: ToolGrant): ToolsInput;
 }
 
 /** Every tool an agent definition can be granted. New tools ship in code; definitions reference keys. */
@@ -86,8 +91,19 @@ const ENTRIES: CatalogEntry[] = [
           maxChars: z.number().int().min(1000).max(50_000).optional(),
         }),
         requireApproval,
-        execute: async ({ url, maxChars }, context) =>
-          fetchPage(ctx.web, url, { maxChars: maxChars ?? 20_000, signal: context?.abortSignal }),
+        execute: async ({ url, maxChars }, context) => {
+          const limit = maxChars ?? 20_000;
+          const signal = context?.abortSignal;
+          try {
+            return await fetchPage(ctx.web, url, { maxChars: limit, signal });
+          } catch (error) {
+            // The page service couldn't read it (or is down): a real browser may.
+            if (error instanceof BlockedUrlError || signal?.aborted || !ctx.browsers.enabled) throw error;
+            const page = await ctx.browsers.read(url, { maxChars: limit, signal }).catch(() => undefined);
+            if (!page?.text) throw error;
+            return { url: page.url, markdown: page.text, truncated: page.truncated };
+          }
+        },
       }),
   },
   {
@@ -124,6 +140,15 @@ const ENTRIES: CatalogEntry[] = [
       }),
   },
   {
+    key: 'browser',
+    pack: 'browser',
+    description:
+      "A web browser (Chromium) of the task's own: open pages, read them as snapshots, click, type, fill " +
+      'forms, use tabs. Reaches public sites only. With an identity, it is signed in where the owner signed that identity in.',
+    createMany: (ctx, grant) =>
+      ctx.browsers.toolsFor({ identity: grant.identity, requireApproval: grant.requireApproval }),
+  },
+  {
     key: 'files',
     pack: 'workspace',
     description:
@@ -150,6 +175,11 @@ export class ToolCatalog {
     return this.byKey.has(key);
   }
 
+  /** Whether a grant of this tool may name a browser identity. */
+  takesIdentity(key: string): boolean {
+    return key === 'browser';
+  }
+
   /** Builds a fresh tool record for an agent. Record keys are the names the model sees. */
   build(grants: ToolGrant[]): ToolsInput {
     const tools: ToolsInput = {};
@@ -157,6 +187,7 @@ export class ToolCatalog {
       const entry = this.byKey.get(grant.key);
       if (entry?.create)
         tools[grant.key] = entry.create(this.ctx, { requireApproval: grant.requireApproval });
+      if (entry?.createMany) Object.assign(tools, entry.createMany(this.ctx, grant));
     }
     return tools;
   }

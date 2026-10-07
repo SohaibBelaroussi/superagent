@@ -1,4 +1,5 @@
 import type {
+  EnsureBrowserResult,
   EnsureSandboxResult,
   ExecInput,
   ExecResult,
@@ -6,6 +7,7 @@ import type {
   FsResult,
   ProcessInfo,
   ProcessStatus,
+  RunnerBrowser,
   RunnerReady,
   RunnerSandbox,
 } from '@superagent/shared/runner';
@@ -95,6 +97,48 @@ export class RunnerClient {
   ): Promise<FsResult> {
     const query = new URLSearchParams({ profile: options.profile, ...(options.peek ? { peek: '1' } : {}) });
     return this.request('POST', `/sandboxes/${taskId}/fs?${query}`, request, signal);
+  }
+
+  /**
+   * Starts the task's browser (decision D34), or finds it running, with a single-use ticket for its
+   * DevTools connection (`cdpUrl`). `key` is a task id, or an identity's for its sign-in session.
+   */
+  ensureBrowser(key: string, identityId?: string, signal?: AbortSignal): Promise<EnsureBrowserResult> {
+    return this.request('POST', `/browsers/${key}`, identityId ? { identityId } : {}, signal);
+  }
+
+  /** The WebSocket URL a ticket opens: the runner relays it into the browser's DevTools. */
+  cdpUrl(key: string, ticket: string): string {
+    const url = new URL(`${this.base}/browsers/${key}/cdp`);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.searchParams.set('ticket', ticket);
+    return url.toString();
+  }
+
+  async browsers(): Promise<RunnerBrowser[]> {
+    return (await this.request<{ items: RunnerBrowser[] }>('GET', '/browsers')).items;
+  }
+
+  /** Stops and removes the browser (cookies are saved first). False if there was none. */
+  async removeBrowser(key: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/browsers/${key}`);
+      return true;
+    } catch (error) {
+      if (error instanceof RunnerRequestError && error.status === 404) return false;
+      throw error;
+    }
+  }
+
+  /** Deletes an identity's profile volume. False if it had none. */
+  async removeIdentity(identityId: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/identities/${identityId}`);
+      return true;
+    } catch (error) {
+      if (error instanceof RunnerRequestError && error.status === 404) return false;
+      throw error;
+    }
   }
 
   /** Whether the runner can run sandboxes (Docker reachable, images built); undefined if it's down. */

@@ -31,6 +31,7 @@ const { logger, mastra } = system;
 server = serve({ fetch: system.app.fetch, hostname: config.HOST, port: config.PORT }, (info) => {
   logger.info(`superagent ${APP_VERSION} listening on http://${info.address}:${info.port}`);
 }) as Server;
+system.injectWebSocket(server);
 
 // Workers (scheduler, background tasks) only run when started explicitly with the Hono adapter.
 await mastra.startWorkers();

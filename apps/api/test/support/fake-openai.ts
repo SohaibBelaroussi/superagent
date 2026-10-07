@@ -33,7 +33,10 @@ type ToolDef = { function: { name: string } };
  * answers and "[slow-report]" only the answer that calls report_to_chief. "[fixed-ids]" reuses one tool-call id.
  * "[remember]" makes the chief update the owner profile and a lead save a department note; "[schedule]"
  * makes the chief set up a weekday schedule. "[code]" makes a lead pass the directive on when it
- * delegates, and a coder write hello.js in its workspace and run it.
+ * delegates, and a coder write hello.js in its workspace and run it. "[browse:<url>]" makes a lead pass
+ * it on, and an agent with a browser open the page, find the "Load quotes" button in a snapshot, click
+ * it and read the page; "[visit:<url>]" just opens and reads the page. The final answer quotes the last
+ * tool result (the page).
  * Observational memory's observer and reflector get valid observations back.
  */
 const PRIORITY: Array<(tool: string) => boolean> = [
@@ -93,12 +96,49 @@ function pickTool(tools: string[], messages: ChatMessage[]): string | undefined 
       t.startsWith('mastra_workspace_') &&
       !(directives.includes('[code]') && (t === CODE.write || t === CODE.run))
     ) &&
-    !(t === 'report_to_chief' && directives.includes('[no-report]'));
+    !(t === 'report_to_chief' && directives.includes('[no-report]')) &&
+    !t.startsWith('browser_');
   for (const matches of PRIORITY) {
     const tool = tools.find((t) => matches(t) && allowed(t));
     if (tool) return tool;
   }
   return tools.find(allowed);
+}
+
+/** The button a "[browse:<url>]" agent clicks. */
+export const BROWSE_BUTTON = 'Load quotes';
+const BROWSE = /\[(browse|visit):([^\]\s"\\]+)\]/;
+
+/** The next browser call of a "[browse:<url>]" or "[visit:<url>]" agent, until it has read the page. */
+function browseStep(
+  tools: string[],
+  messages: ChatMessage[],
+): { tool: string; args: Record<string, unknown> } | undefined {
+  const turnStart = messages.findLastIndex((m) => m.role === 'user');
+  const match = BROWSE.exec(JSON.stringify(messages[turnStart]?.content ?? ''));
+  if (!match || !tools.includes('browser_goto')) return undefined;
+  const [, mode, url] = match;
+  const done = messages
+    .slice(turnStart + 1)
+    .flatMap((m) => (m.role === 'assistant' ? (m.tool_calls ?? []).map((c) => c.function?.name ?? '') : []))
+    .filter((name) => name.startsWith('browser_')).length;
+  const steps = mode === 'visit' ? ['goto', 'read'] : ['goto', 'look', 'click', 'read'];
+  const last = String([...messages].reverse().find((m) => m.role === 'tool')?.content ?? '');
+  switch (steps[done]) {
+    case 'goto':
+      return { tool: 'browser_goto', args: { url, waitUntil: 'load' } };
+    case 'look':
+      return { tool: 'browser_snapshot', args: { interactiveOnly: true } };
+    case 'click': {
+      // Snapshots name elements by ref ("- button \"Load quotes\" @e3"): the model reads it from there.
+      const ref = new RegExp(`${BROWSE_BUTTON}[^@]*?(@e\\d+)`).exec(last)?.[1] ?? '@e0';
+      return { tool: 'browser_click', args: { ref } };
+    }
+    case 'read':
+      return { tool: 'browser_snapshot', args: { interactiveOnly: false } };
+    default:
+      return undefined;
+  }
 }
 
 /** What a "[remember]" saves: a profile preference (the chief) or a department note (a lead). */
@@ -109,6 +149,8 @@ export const REMEMBERED = {
 
 function argsFor(tool: string, directives: string): Record<string, unknown> {
   if (tool.startsWith('agent-')) {
+    const browse = BROWSE.exec(directives);
+    if (browse) return { prompt: `Use the browser and tell me what the page says. ${browse[0]}` };
     return directives.includes('[code]')
       ? { prompt: 'Write hello.js that prints 6 * 7, run it, and tell me the output. [code]' }
       : { prompt: 'Find out what Mastra is and return two sources.' };
@@ -225,13 +267,14 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
       let delta: Record<string, unknown>;
       let finish: string;
       if (JSON.stringify(messages).includes('[slow]')) await new Promise((r) => setTimeout(r, SLOW_MS));
-      const tool = pickTool(tools, messages);
+      const browsing = browseStep(tools, messages);
+      const tool = browsing?.tool ?? pickTool(tools, messages);
       if (tool === 'report_to_chief' && JSON.stringify(messages).includes('[slow-report]')) {
         await new Promise((r) => setTimeout(r, SLOW_MS * 2));
       }
       if (tool) {
         const turn = messages.findLastIndex((m) => m.role === 'user');
-        const args = argsFor(tool, JSON.stringify(messages[turn]?.content ?? ''));
+        const args = browsing?.args ?? argsFor(tool, JSON.stringify(messages[turn]?.content ?? ''));
         delta = {
           role: 'assistant',
           content: null,

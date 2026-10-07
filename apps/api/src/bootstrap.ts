@@ -1,7 +1,9 @@
+import type { Server } from 'node:http';
 import type { Agent } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
 import { PostgresStore } from '@mastra/pg';
+import type { ToolGrant } from '@superagent/shared';
 import type { Hono } from 'hono';
 import type pg from 'pg';
 import { createApp } from './app';
@@ -11,6 +13,7 @@ import type { Config } from './config';
 import { SecretBox } from './crypto/secret-box';
 import { createDb, createPool, type Db } from './db/client';
 import { runMigrations } from './db/migrate';
+import { ApiError } from './http/problem';
 import type { AppEnv } from './http/types';
 import { createLogger } from './logger';
 import { createMastra } from './mastra';
@@ -18,6 +21,8 @@ import { createChiefAgent } from './mastra/agents/chief';
 import { createScratchAgent } from './mastra/agents/scratch';
 import { DecisionService } from './modules/attention/decisions';
 import { AttentionService } from './modules/attention/service';
+import { IdentityService } from './modules/browser/identities';
+import { BrowserService } from './modules/browser/service';
 import { DecisionLog } from './modules/dispatch/decisions';
 import { DispatchService } from './modules/dispatch/service';
 import { type BlobStore, S3BlobStore } from './modules/knowledge/blobs';
@@ -39,6 +44,7 @@ import { ScheduleService } from './modules/schedules/service';
 import { createScheduleTools } from './modules/schedules/tools';
 import { SettingsService } from './modules/settings/service';
 import { ToolCatalog } from './modules/tools/catalog';
+import type { ResolveHost } from './modules/tools/web';
 import { RunnerClient } from './modules/workspace/runner-client';
 import { WorkspaceService } from './modules/workspace/service';
 
@@ -58,8 +64,12 @@ export interface System {
   schedules: ScheduleService;
   attention: AttentionService;
   workspaces: WorkspaceService;
+  browsers: BrowserService;
+  identities: IdentityService;
   mastra: Mastra;
   app: Hono<AppEnv>;
+  /** Serves live views (WebSockets) on the server that serves `app`. */
+  injectWebSocket(server: Server): void;
   /** Drains Mastra and closes the database pool. Does not touch the HTTP server. */
   close(drainTimeoutMs?: number): Promise<void>;
 }
@@ -70,6 +80,8 @@ export interface BootstrapOptions {
   agents?: Record<string, Agent>;
   /** Replaces S3 object storage (tests use an in-memory store). */
   blobs?: BlobStore;
+  /** How web tools and browsers resolve names to check they are public (tests use fixed answers). */
+  resolveHost?: ResolveHost;
 }
 
 /** Builds the whole server without listening: migrations, providers, Mastra storage, auth, routes. */
@@ -105,15 +117,43 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
         : undefined);
     if (!blobs) logger.warn('Document storage is off: set S3_ACCESS_KEY and S3_SECRET_KEY to enable uploads');
     const knowledge = new KnowledgeService(db, directory, blobs, logger);
+    const bus = new EventBus();
+    const tasks = new TaskService(db, directory, bus);
+    // The runner (decision D10) runs tasks' sandboxes and browsers.
+    const runner =
+      config.RUNNER_URL && config.RUNNER_TOKEN
+        ? new RunnerClient(config.RUNNER_URL, config.RUNNER_TOKEN)
+        : undefined;
+    // Agents' browsers and their signed-in identities (decision D34).
+    const identities = new IdentityService(db, tasks, runner, (name) =>
+      directory
+        .agents()
+        .filter((agent) =>
+          agent.current.tools.some((grant) => grant.key === 'browser' && grant.identity === name),
+        )
+        .map((agent) => agent.key),
+    );
+    const browsers = new BrowserService({
+      client: runner,
+      identities,
+      tasks,
+      bus,
+      logger,
+      idleCloseMs: config.BROWSER_IDLE_CLOSE_MS,
+      identityWaitMs: config.BROWSER_IDENTITY_WAIT_MS,
+      resolveHost: options.resolveHost,
+    });
     const catalog = new ToolCatalog({
       settings,
       web: {
         searxngUrl: config.SEARXNG_URL,
         crawl4aiUrl: config.CRAWL4AI_URL,
         crawl4aiToken: config.CRAWL4AI_API_TOKEN,
+        resolveHost: options.resolveHost,
       },
       knowledge,
       directory,
+      browsers,
     });
 
     const storage = new PostgresStore({ id: 'superagent-mastra', pool, schemaName: 'mastra' });
@@ -141,14 +181,9 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     });
     const memoryService = new MemoryService(db, directory, logger);
     const memoryTools = createMemoryTools(memoryService, directory);
-    const bus = new EventBus();
-    const tasks = new TaskService(db, directory, bus);
     // Sandboxes for agents granted files or shell (decision D33), when a runner is configured.
     const workspaces = new WorkspaceService({
-      client:
-        config.RUNNER_URL && config.RUNNER_TOKEN
-          ? new RunnerClient(config.RUNNER_URL, config.RUNNER_TOKEN)
-          : undefined,
+      client: runner,
       profile: config.SANDBOX_PROFILE,
       tasks,
       logger,
@@ -205,6 +240,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     const org = new OrgService(db, directory, runtime, providers, catalog, logger, settings.lock, {
       archiveBlocker: (agent) => dispatch.archiveBlocker(agent),
       departmentArchived: (departmentId) => schedules.pauseDepartment(departmentId),
+      checkGrants: (grants) => checkIdentities(grants, identities),
     });
 
     await dispatch.ensureChiefThread();
@@ -212,6 +248,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
     if (interrupted > 0) logger.warn('Flagged tasks interrupted by a restart', { count: interrupted });
     // The first tick also catches up on fires missed while the server was down.
     schedules.start();
+    await browsers.start();
     const attention = new AttentionService({
       dispatch,
       directory,
@@ -221,10 +258,11 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       providers,
       storageEnabled: knowledge.enabled,
       workspaces,
+      browsers,
     });
     const decisions = new DecisionService(decisionLog, attention, dispatch, logger);
 
-    const app = await createApp({
+    const http = await createApp({
       config,
       logger,
       mastra,
@@ -243,6 +281,8 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       attention,
       decisions,
       workspaces,
+      browsers,
+      identities,
     });
     return {
       config,
@@ -260,11 +300,17 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       schedules,
       attention,
       workspaces,
+      browsers,
+      identities,
       mastra,
-      app,
+      app: http.app,
+      injectWebSocket: http.injectWebSocket,
       async close(drainTimeoutMs = 5_000) {
+        http.closeWebSockets();
         await schedules.stop();
         await dispatch.close(drainTimeoutMs);
+        // Saves identities' cookies and frees their locks.
+        await browsers.stop();
         await mastra.shutdown({ drainTimeout: drainTimeoutMs });
         // Observational memory may still be writing in the background.
         await Promise.all([memory.chief.settled(), memory.lead.settled(), memory.specialist.settled()]);
@@ -275,5 +321,18 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
   } catch (error) {
     await pool.end().catch(() => {});
     throw error;
+  }
+}
+
+/** A browser grant's identity must exist (agents name identities, the owner creates them). */
+async function checkIdentities(grants: ToolGrant[], identities: IdentityService): Promise<void> {
+  for (const grant of grants) {
+    if (grant.identity && !(await identities.byName(grant.identity))) {
+      throw new ApiError(
+        400,
+        'unknown_identity',
+        `No browser identity named "${grant.identity}" (GET /v1/browser-identities)`,
+      );
+    }
   }
 }

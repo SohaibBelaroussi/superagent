@@ -1,3 +1,5 @@
+import type { Server } from 'node:http';
+import { createNodeWebSocket } from '@hono/node-ws';
 import { MastraServer } from '@mastra/hono';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -11,14 +13,28 @@ import { isUpload, isUploadBeforeAuth, MAX_UPLOAD_BYTES } from './routes/v1/know
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
+/** The HTTP app, and its WebSocket upgrades (live views) to attach to the server that serves it. */
+export interface HttpApp {
+  app: Hono<AppEnv>;
+  injectWebSocket(server: Server): void;
+  /** Closes open WebSockets (shutdown). */
+  closeWebSockets(): void;
+}
+
+/** Live-view messages are small: mouse and keyboard events, a URL. */
+const MAX_WS_MESSAGE_BYTES = 64 * 1024;
+
 /**
  * Route map:
  *   /health, /ready  public liveness and readiness
  *   /api/*           Mastra's built-in routes (agents, threads, memory, schedules...), token auth per route
  *   /v1/*            our control plane, token auth via requireAuth
  */
-export async function createApp(deps: AppDeps): Promise<Hono<AppEnv>> {
+export async function createApp(deps: AppDeps): Promise<HttpApp> {
   const app = new Hono<AppEnv>();
+  // Upgrades run through the whole app (auth included) before they become WebSockets.
+  const websockets = createNodeWebSocket({ app });
+  websockets.wss.options.maxPayload = MAX_WS_MESSAGE_BYTES;
   app.onError(createErrorHandler(deps.logger));
   app.notFound(notFound);
   app.use('*', requestLog(deps.logger));
@@ -72,6 +88,12 @@ export async function createApp(deps: AppDeps): Promise<Hono<AppEnv>> {
     },
   }).init();
 
-  app.route(V1_PREFIX, createV1Router(deps));
-  return app;
+  app.route(V1_PREFIX, createV1Router(deps, websockets.upgradeWebSocket));
+  return {
+    app,
+    injectWebSocket: (server) => websockets.injectWebSocket(server),
+    closeWebSockets: () => {
+      for (const client of websockets.wss.clients) client.close(1001, 'Server shutting down');
+    },
+  };
 }

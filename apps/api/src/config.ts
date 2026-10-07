@@ -55,6 +55,18 @@ const configSchema = z.object({
     .string()
     .regex(/^[a-z][a-z0-9-]{0,31}$/)
     .default('dev'),
+  // Browsers (decision D34), run by the runner too. One per task, closed after this long unused.
+  BROWSER_IDLE_CLOSE_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .default(10 * 60_000),
+  // How long a task waits for an identity another browser is using before its tool call gives up.
+  BROWSER_IDENTITY_WAIT_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .default(10 * 60_000),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15_000),
 });
 

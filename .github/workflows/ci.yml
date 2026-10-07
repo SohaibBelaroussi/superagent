@@ -16,7 +16,7 @@ jobs:
   check:
     name: Check, test and package
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
 
@@ -30,6 +30,14 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      # Chromium sandboxes its renderers in user namespaces, which Ubuntu 24.04 restricts by default.
+      - name: Allow user namespaces (Chromium's sandbox)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      # The integration tests start real browsers from it.
+      - name: Build the browser image
+        run: docker compose --profile browser build browser
 
       # EE-import guard, lint, typecheck, unit tests, integration tests (Testcontainers Postgres).
       - name: pnpm check
@@ -52,12 +60,13 @@ jobs:
           } > .env
 
       - name: Build the images
-        # The API, the runner and the sandbox image the runner starts sandboxes from.
+        # The API, the runner, the egress proxy, and the sandbox and browser images the runner starts.
         run: docker compose --profile app build
 
       - name: Start the packaged stack
-        # The API with its database, document storage and runner: the web-tool services are exercised with fakes in tests.
-        run: docker compose --profile app up -d --wait --wait-timeout 180 postgres seaweedfs runner api
+        # The API with its database, document storage, runner and egress proxy (it creates the browsers
+        # network): the web-tool services are exercised with fakes in tests.
+        run: docker compose --profile app up -d --wait --wait-timeout 180 postgres seaweedfs egress runner api
 
       - name: End-to-end tests against the container
         run: pnpm test:e2e

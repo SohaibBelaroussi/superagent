@@ -13,6 +13,7 @@ WORKDIR /repo
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/runner/package.json apps/runner/
+COPY apps/egress/package.json apps/egress/
 COPY packages/shared/package.json packages/shared/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --filter @superagent/runner...
@@ -30,6 +31,8 @@ ENV NODE_ENV=production \
     RUNNER_PORT=8080
 WORKDIR /app
 COPY --from=build --chown=node:node /out ./
+# The seccomp profile browsers run under (loaded by BrowserContainers, RUNNER_BROWSER_SECCOMP=auto).
+COPY --chown=node:node infra/browser/seccomp.json ./seccomp/chromium.json
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \

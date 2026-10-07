@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import type { Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { createRunner, loadRunnerConfig, RunnerConfigError } from './index';
@@ -38,9 +39,11 @@ const server = serve(
   (info) =>
     console.log(JSON.stringify({ level: 'info', msg: `runner listening on ${info.address}:${info.port}` })),
 );
+// Plain HTTP (no TLS or HTTP/2): DevTools connections arrive as upgrades on the same server.
+runner.attach(server as Server);
 runner.start();
 
-// Sandboxes outlive the runner: stopping it just stops serving.
+// Sandboxes and browsers outlive the runner: stopping it just stops serving.
 const shutdown = () => {
   runner.stop();
   server.close(() => process.exit(0));

@@ -32,6 +32,8 @@ export interface OrgHooks {
   archiveBlocker?: (agent: AgentEntry) => Promise<{ code: string; message: string } | undefined>;
   /** A department was archived (its schedules pause). */
   departmentArchived?: (departmentId: string) => Promise<void>;
+  /** Checks what grants refer to elsewhere (a browser grant's identity must exist). */
+  checkGrants?: (grants: ToolGrant[]) => Promise<void>;
 }
 
 /** Departments and agent definitions: validation, versioning, and keeping the live agents in sync. */
@@ -145,7 +147,7 @@ export class OrgService {
     if (input.role === 'lead' && this.directory.leadOf(input.departmentId)) {
       throw new ApiError(409, 'lead_exists', 'This department already has a lead');
     }
-    this.assertTools(input.tools);
+    await this.assertTools(input.tools);
     this.assertModel(input.model);
 
     const id = uuidv7();
@@ -191,7 +193,7 @@ export class OrgService {
       input.instructions !== undefined ||
       input.model !== undefined ||
       input.tools !== undefined;
-    if (input.tools) this.assertTools(input.tools);
+    if (input.tools) await this.assertTools(input.tools);
     if (input.model !== undefined) this.assertModel(input.model);
 
     await this.db.transaction(async (tx) => {
@@ -234,7 +236,7 @@ export class OrgService {
       .where(and(eq(agentVersions.agentId, id), eq(agentVersions.version, version)))
       .limit(1);
     if (!row) throw new ApiError(404, 'version_not_found', `Agent has no version ${version}`);
-    this.assertTools(row.tools);
+    await this.assertTools(row.tools);
     this.assertModel(row.model);
     await this.db
       .update(agentDefinitions)
@@ -285,7 +287,7 @@ export class OrgService {
     return agent;
   }
 
-  private assertTools(grants: ToolGrant[]): void {
+  private async assertTools(grants: ToolGrant[]): Promise<void> {
     const seen = new Set<string>();
     for (const grant of grants) {
       if (!this.catalog.has(grant.key)) {
@@ -297,8 +299,12 @@ export class OrgService {
       }
       if (seen.has(grant.key))
         throw new ApiError(400, 'duplicate_tool', `Tool "${grant.key}" is listed twice`);
+      if (grant.identity && !this.catalog.takesIdentity(grant.key)) {
+        throw new ApiError(400, 'identity_not_applicable', `Only the browser grant takes an identity`);
+      }
       seen.add(grant.key);
     }
+    await this.hooks.checkGrants?.(grants);
   }
 
   private assertModel(model: ModelRef | null): void {
