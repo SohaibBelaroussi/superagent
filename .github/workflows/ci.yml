@@ -82,12 +82,14 @@ jobs:
         env:
           COMPOSE_FILES: -f compose.yaml -f compose.prod.yaml
         run: |
-          # One document stays, so the drill restores and compares a real file too. The token goes in a
-          # header file, never on a command line.
+          # A document and a secret stay, so the drill compares a real file and proves the key opens the
+          # restored secrets. The token goes in a header file, never on a command line.
           printf 'Authorization: Bearer %s\n' "$(sed -n 's/^SUPERAGENT_ADMIN_TOKEN=//p' .env)" > "$RUNNER_TEMP/auth"
           printf 'Backups are proven by restoring them.\n' > "$RUNNER_TEMP/drill.txt"
           curl -fsS -o /dev/null -H @"$RUNNER_TEMP/auth" -F "file=@$RUNNER_TEMP/drill.txt;type=text/plain" \
             -F title=Drill http://127.0.0.1:4112/v1/knowledge
+          curl -fsS -o /dev/null -H @"$RUNNER_TEMP/auth" -H 'content-type: application/json' -X PUT \
+            --data '{"value":"drill"}' http://127.0.0.1:4112/v1/secrets/DRILL_KEY
           scripts/backup.sh
           scripts/restore-drill.sh
 
