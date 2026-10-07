@@ -1,6 +1,8 @@
 # Superagent API: development plan
 
-**Status:** draft for your review, 2026-10-07. Targets `@mastra/core` 1.74.0.
+**Status:** approved 2026-10-07. Targets `@mastra/core` 1.74.0.
+
+**Progress:** M0 (foundation) is done on branch `m0-foundation`, with a PR into `main`. Next is M1 (providers and models).
 
 **Related docs:**
 - [decisions.md](decisions.md): what is settled and why.
@@ -73,9 +75,8 @@ superagent/
 │  │  └─ Dockerfile
 │  └─ runner/                   # the only Docker client (M6)
 ├─ packages/shared/             # zod schemas + types for /v1
-├─ infra/
-│  ├─ compose.yaml              # postgres; later seaweedfs, searxng, crawl4ai, runner
-│  └─ searxng/                  # settings (JSON on, limiter off)
+├─ compose.yaml                # postgres + `app` profile; later seaweedfs, searxng, crawl4ai, runner
+├─ infra/                      # service configs as they arrive (e.g. searxng settings)
 ├─ docs/                        # this plan, decisions, notes, http walkthroughs, vision
 ├─ .env.example
 └─ package.json · pnpm-workspace.yaml · tsconfig.base.json · biome.json
@@ -230,7 +231,7 @@ Sizes are relative: S, M, L.
   - tsconfig, Biome, Vitest projects (unit, int), `pnpm check` with the EE-import ban
   - `CLAUDE.md`
   - exclude `docs/spikes/` from lint, typecheck and tests
-- **Infra:** `infra/compose.yaml` with Postgres (named volume, healthcheck). `.env.example`.
+- **Infra:** `compose.yaml` at the repo root with Postgres (named volume, healthcheck). `.env.example`.
 - **Server core:**
   - config schema
   - pool and Drizzle migrations (schemas, extension, `api_tokens`)
@@ -454,12 +455,13 @@ Two resilience checks:
   - When clients arrive, expose it with `tailscale serve --bg 4111`.
   - Containers reach your LLM server by its Tailscale IP. MagicDNS names may not resolve inside Docker Desktop containers; M1 checks this.
 
-**`.env` keys:**
-- `DATABASE_URL`
+**`.env` keys** (see `.env.example`):
+- `POSTGRES_PASSWORD`, `POSTGRES_PORT`, `DATABASE_URL`
+- `HOST`, `PORT` (dev server 4111), `API_PORT` (packaged container 4112)
 - `SUPERAGENT_ADMIN_TOKEN`
-- `SUPERAGENT_ENCRYPTION_KEY`
+- `SUPERAGENT_ENCRYPTION_KEY` (from M1)
 - `STUDIO_TOKEN`
-- `PORT`
+- `CORS_ORIGINS`
 - `LOG_LEVEL`
 - `DEFAULT_TIMEZONE`
 - `MASTRA_TELEMETRY_DISABLED=true`
