@@ -44,6 +44,17 @@ export interface Logger {
   error(message: string, data?: Record<string, unknown>): void;
 }
 
+/** The sandbox couldn't start a process: restart it (its files stay) and try again. */
+class NoRoomError extends RunnerError {
+  constructor() {
+    super(503, 'docker_error', 'The sandbox could not start a process');
+  }
+}
+
+function couldNotStart(outcome: ExecOutcome): boolean {
+  return outcome.exitCode !== 0 && EXEC_FAILED.test(`${text(outcome.stdout)}${text(outcome.stderr)}`);
+}
+
 export interface ExecRequest {
   profile: string;
   command: string;
@@ -83,6 +94,8 @@ const text = (buffer: Buffer) => buffer.toString('utf8');
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** What setsid --wait says about a child we killed: noise next to timedOut/killed. */
 const SETSID_NOISE = /^setsid: child \d+ did not exit normally.*\n?/gm;
+/** docker exec couldn't start a process at all: every slot is taken (or the runtime failed). */
+const EXEC_FAILED = /OCI runtime exec failed|unable to start container process/;
 /** Docker refuses a volume subpath that isn't there: the task never had a workspace. */
 const MISSING_SUBPATH = /no such file or directory|cannot access path|not a directory/i;
 
@@ -209,14 +222,16 @@ export class SandboxManager {
       const env = [...BASE_ENV, ...Object.entries(input.env ?? {}).map(([key, value]) => `${key}=${value}`)];
       if (input.background) {
         const seconds = input.timeoutMs ? String(Math.ceil(input.timeoutMs / 1000)) : '';
-        const outcome = await execIn(this.docker, container, {
-          cmd: ['sh', '-c', scripts.BACKGROUND, 'sa', execId, cwd, input.command, seconds],
-          user: SANDBOX_USER,
-          workingDir: WORKSPACE_DIR,
-          env,
-          maxOutputBytes: 64 * 1024,
-          deadlineMs: 30_000,
-        });
+        const outcome = await this.withRoom(taskId, input.profile, container, () =>
+          execIn(this.docker, container, {
+            cmd: ['sh', '-c', scripts.BACKGROUND, 'sa', execId, cwd, input.command, seconds],
+            user: SANDBOX_USER,
+            workingDir: WORKSPACE_DIR,
+            env,
+            maxOutputBytes: 64 * 1024,
+            deadlineMs: 30_000,
+          }),
+        );
         if (outcome.abandoned) {
           throw new RunnerError(503, 'docker_error', 'The sandbox did not start the command in time');
         }
@@ -241,14 +256,16 @@ export class SandboxManager {
       };
       signal?.addEventListener('abort', onAbort, { once: true });
       try {
-        const outcome = await execIn(this.docker, container, {
-          cmd: ['sh', '-c', scripts.FOREGROUND, 'sa', execId, cwd, input.command],
-          user: SANDBOX_USER,
-          workingDir: WORKSPACE_DIR,
-          env,
-          maxOutputBytes: this.config.RUNNER_MAX_OUTPUT_BYTES,
-          deadlineMs: timeoutMs + KILL_GRACE_MS,
-        });
+        const outcome = await this.withRoom(taskId, input.profile, container, () =>
+          execIn(this.docker, container, {
+            cmd: ['sh', '-c', scripts.FOREGROUND, 'sa', execId, cwd, input.command],
+            user: SANDBOX_USER,
+            workingDir: WORKSPACE_DIR,
+            env,
+            maxOutputBytes: this.config.RUNNER_MAX_OUTPUT_BYTES,
+            deadlineMs: timeoutMs + KILL_GRACE_MS,
+          }),
+        );
         if (outcome.abandoned) {
           // Nothing could kill it: everything in the sandbox goes, files stay.
           timedOut = true;
@@ -355,7 +372,14 @@ export class SandboxManager {
         await this.ensure(taskId, options.profile);
         const container = this.docker.getContainer(containerName(this.config, taskId));
         if (WRITE_OPS.has(request.op)) await this.requireDiskSpace(taskId, container);
-        return this.fsOp(container, request, false);
+        try {
+          return await this.fsOp(container, request, false);
+        } catch (error) {
+          if (!(error instanceof NoRoomError)) throw error;
+          await this.killContainer(taskId, container);
+          await this.ensure(taskId, options.profile);
+          return this.fsOp(container, request, false);
+        }
       }
       const name = containerName(this.config, taskId);
       const existing = await this.inspect(name);
@@ -542,6 +566,7 @@ export class SandboxManager {
       throw new RunnerError(504, 'fs_timeout', 'The file operation took too long');
     }
     if (outcome.exitCode === 0) return outcome;
+    if (couldNotStart(outcome)) throw new NoRoomError();
     const known = outcome.exitCode === null ? undefined : FS_EXIT[outcome.exitCode];
     if (known) throw new RunnerError(known[0], known[1], known[2]);
     throw new RunnerError(
@@ -594,6 +619,23 @@ export class SandboxManager {
       await sleep(200);
     }
     if (!finished()) await this.killContainer(taskId, container);
+  }
+
+  /**
+   * Runs an exec; if the sandbox has no room to start it (its processes take every slot, even after
+   * a kill, until they are reaped), restarts the sandbox (files stay) and runs it once more.
+   */
+  private async withRoom(
+    taskId: string,
+    profile: string,
+    container: Docker.Container,
+    exec: () => Promise<ExecOutcome>,
+  ): Promise<ExecOutcome> {
+    const outcome = await exec();
+    if (!couldNotStart(outcome)) return outcome;
+    await this.killContainer(taskId, container);
+    await this.ensure(taskId, profile);
+    return exec();
   }
 
   private async killContainer(taskId: string, container: Docker.Container): Promise<void> {
