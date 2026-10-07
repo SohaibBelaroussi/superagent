@@ -15,9 +15,10 @@ import {
 } from '@superagent/shared';
 import { streamSSE } from 'hono/streaming';
 import type { ArtifactRow, TaskRow } from '../../db/schema';
-import { problemResponse } from '../../http/problem';
+import { ApiError, problem, problemResponse } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 import { matchesFilter } from '../../modules/ledger/events';
+import { canTransition } from '../../modules/ledger/phases';
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
 
@@ -141,13 +142,8 @@ const cancelTask = createRoute({
   path: '/tasks/{id}/cancel',
   tags,
   summary: 'Cancel a task',
-  request: {
-    params,
-    body: {
-      required: false,
-      content: { 'application/json': { schema: z.object({ reason: z.string().max(500).optional() }) } },
-    },
-  },
+  description: 'Optional JSON body: `{ "reason": "..." }` (up to 500 characters).',
+  request: { params },
   responses: {
     200: json(TaskSchema, 'Cancelled task'),
     404: notFound,
@@ -188,6 +184,9 @@ const getBoard = createRoute({
   responses: { 200: json(BoardSchema, 'Columns by phase') },
 });
 
+const CancelBodySchema = z.object({ reason: z.string().max(500).optional() });
+const EventFilterSchema = z.object({ departmentId: z.uuid().optional(), taskId: z.uuid().optional() });
+
 const HEARTBEAT_MS = 25_000;
 const REPLAY_PAGE = 500;
 /** Past this many missed events a client is better off reloading the board (it gets a `reset` event). */
@@ -226,6 +225,18 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
   v1.openapi(updateTask, async (c) => {
     const { id } = c.req.valid('param');
     const { phase, ...fields } = c.req.valid('json');
+    if (phase) {
+      // Check the move first, so a refused phase change doesn't leave the field edits behind.
+      const current = await tasks.get(id);
+      if (!canTransition('owner', current.phase, phase)) {
+        throw new ApiError(
+          409,
+          'invalid_transition',
+          `Task #${current.number} can't move from ${current.phase} to ${phase}`,
+        );
+      }
+      if (phase === 'queued') dispatch.requireLead(current.departmentId);
+    }
     let task = await tasks.updateFields(
       id,
       {
@@ -247,7 +258,20 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
   });
 
   v1.openapi(cancelTask, async (c) => {
-    const reason = (c.req.valid('json') as { reason?: string } | undefined)?.reason;
+    const raw = (await c.req.text()).trim();
+    let reason: string | undefined;
+    if (raw) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new ApiError(400, 'validation_failed', 'The body must be JSON like { "reason": "..." }');
+      }
+      const body = CancelBodySchema.safeParse(parsed);
+      if (!body.success)
+        throw new ApiError(400, 'validation_failed', 'reason must be text, up to 500 characters');
+      reason = body.data.reason;
+    }
     const task = await tasks.get(c.req.valid('param').id);
     return c.json(toTask(await dispatch.cancel(task, reason, 'owner')), 200);
   });
@@ -275,16 +299,30 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
   v1.get('/events', (c) => {
     const cursor = (c.req.header('last-event-id') ?? c.req.query('lastEventId'))?.trim();
     const lastEventId = cursor && /^\d+$/.test(cursor) ? Number(cursor) : undefined;
-    const filter = { departmentId: c.req.query('departmentId'), taskId: c.req.query('taskId') };
+    const parsed = EventFilterSchema.safeParse({
+      departmentId: c.req.query('departmentId'),
+      taskId: c.req.query('taskId'),
+    });
+    if (!parsed.success) {
+      return problem(c, 400, {
+        title: 'Invalid request',
+        code: 'validation_failed',
+        errors: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+      });
+    }
+    const filter = parsed.data;
     return streamSSE(c, async (stream) => {
-      let lastSent = lastEventId ?? 0; // highest seq sent: where the replay continues from
+      // Events at or below the floor are not sent: the client has them (Last-Event-ID) or, for a fresh
+      // client, they predate the moment it connected.
+      let floor = lastEventId ?? 0;
+      let lastSent = floor; // highest seq sent: where the replay continues from
       const sent = new Set<number>(); // replayed and live events overlap; send each once
       let replaying = true;
       const buffered: TaskEvent[] = [];
       let queue = Promise.resolve();
       const send = (event: TaskEvent) => {
         queue = queue.then(async () => {
-          if (sent.has(event.seq) || (lastEventId !== undefined && event.seq <= lastEventId)) return;
+          if (sent.has(event.seq) || event.seq <= floor) return;
           sent.add(event.seq);
           if (sent.size > SENT_MEMORY) sent.delete(sent.values().next().value as number);
           lastSent = Math.max(lastSent, event.seq);
@@ -292,44 +330,56 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
         });
         return queue;
       };
-      // Subscribe before replaying so nothing committed in between is lost; duplicates are skipped by seq.
+      // Subscribe before reading the log, so nothing committed in between is lost.
       const unsubscribe = deps.bus.subscribe((event) => {
         if (!matchesFilter(event, filter)) return;
         if (replaying) buffered.push(event);
         else void send(event);
       });
       const heartbeat = setInterval(() => void stream.write(': keep-alive\n\n'), HEARTBEAT_MS);
-      const closed = new Promise<void>((resolve) =>
-        stream.onAbort(() => {
-          clearInterval(heartbeat);
-          unsubscribe();
-          resolve();
-        }),
-      );
-      if (lastEventId !== undefined) {
-        let replayed = 0;
-        for (;;) {
-          const page = await tasks.eventsSince(lastSent, filter, REPLAY_PAGE);
-          for (const event of page) await send(event);
-          await queue;
-          replayed += page.length;
-          if (page.length < REPLAY_PAGE) break;
-          if (replayed >= REPLAY_MAX) {
-            await stream.writeSSE({
-              event: 'reset',
-              data: JSON.stringify({ reason: 'Too many missed events' }),
-            });
-            break;
+      const closed = new Promise<void>((resolve) => stream.onAbort(resolve));
+      try {
+        if (lastEventId === undefined) {
+          // Events commit in seq order (see TaskService), so everything after this one is still to come.
+          floor = await tasks.latestSeq();
+          lastSent = floor;
+        } else {
+          let replayed = 0;
+          for (;;) {
+            const page = await tasks.eventsSince(lastSent, filter, REPLAY_PAGE);
+            for (const event of page) await send(event);
+            await queue;
+            replayed += page.length;
+            if (page.length < REPLAY_PAGE) break;
+            if (replayed >= REPLAY_MAX) {
+              // Too much to catch up on: continue from now; the client reloads the board.
+              floor = await tasks.latestSeq();
+              lastSent = floor;
+              await stream.writeSSE({
+                id: String(floor),
+                event: 'reset',
+                data: JSON.stringify({ reason: 'Too many missed events; reload the board' }),
+              });
+              break;
+            }
           }
         }
+        // Flush what arrived meanwhile before going live, so live events can't overtake it.
+        while (buffered.length > 0) {
+          for (const event of buffered.splice(0)) await send(event);
+        }
+        replaying = false;
+        await queue;
+        await stream.writeSSE({
+          id: String(lastSent),
+          event: 'ready',
+          data: JSON.stringify({ lastEventId: lastSent }),
+        });
+        await closed;
+      } finally {
+        clearInterval(heartbeat);
+        unsubscribe();
       }
-      // Flush what arrived during the replay before going live, so live events can't overtake it.
-      while (buffered.length > 0) {
-        for (const event of buffered.splice(0)) await send(event);
-      }
-      replaying = false;
-      await stream.writeSSE({ event: 'ready', data: JSON.stringify({ lastEventId: lastSent }) });
-      await closed;
     });
   });
 
@@ -339,9 +389,10 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
     tags,
     summary: 'Live task events (Server-Sent Events)',
     description:
-      'Streams `task` events (data: TaskEvent, id: seq) and a `ready` event once caught up. Send Last-Event-ID ' +
-      '(or ?lastEventId=) to replay what you missed; after more than 5000 missed events you get a `reset` event ' +
-      'instead, so reload the board. Filters: ?departmentId=, ?taskId=. Heartbeat comments every 25 s.',
+      'Streams `task` events (data: TaskEvent, id: seq), then a `ready` event (with an id to resume from) once ' +
+      'caught up. Send Last-Event-ID (or ?lastEventId=) to replay what you missed; after more than 5000 missed ' +
+      'events you get a `reset` event instead, so reload the board. Filters: ?departmentId=, ?taskId= (UUIDs). ' +
+      'Heartbeat comments every 25 s.',
     responses: { 200: { description: 'text/event-stream' } },
   });
 }

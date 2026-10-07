@@ -470,6 +470,13 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - `listActiveThreadRuns()` and `abortRunStream(runId)` cover every agent (the thread runtime is shared). Use them at shutdown before closing the pool. [src]
 - Models see a message signal as a user message `<user from="…" task="…">…</user>` (attributes become XML attributes) and a notification as `<notification source="…" kind="…" priority="…">summary</notification>`. [spike]
 
+**Supervising a lead (from the M3 review):**
+- Decide "did the lead stall?" when the task's thread has been idle for a moment (`getActiveThreadRunId` polled), not when one run's output settles: steered messages and Mastra's own follow-up runs extend a turn beyond the run you started. [spike]
+- `sendMessage(msg, { ifActive: { behavior: 'deliver' }, ifIdle: { behavior: 'discard' } })` reaches a running turn and never wakes an idle thread (it returns `discard`), which keeps clear of the wake race. [src]
+- `cancelQueuedMessages({ resourceId, threadId, signalIds })` returns the ids it actually cancelled. Called once the thread is idle, it tells you which delivered messages no run picked up, and removes them so they can't surface in a later run. [src]
+- A message can reach a lead just after it reported (it is drained at the next step). Let the lead take its task back from review while such a message is outstanding. [spike]
+- Tools get `context.runId` and `context.agent.{agentId, threadId, resourceId, toolCallId}`. Some providers reuse tool-call ids across conversations (Kimi-style `functions.create_task:0`), so idempotency keys need the run id too. [src]
+
 **Notifications:** the default delivery policy delivers `urgent` at once. `high` and `medium` are delivered to an idle thread (which wakes it) and summarized for an active one. `low` is always summarized. [src]
 
 **Testing:**

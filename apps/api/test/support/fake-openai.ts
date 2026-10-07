@@ -29,8 +29,8 @@ type ToolDef = { function: { name: string } };
  * A cooperative model: in each turn (everything after the last user message) it calls tools in this
  * order, each at most once, then answers. Directives in that user message steer it: "[assign]" lets the
  * chief create a task, "[artifact]" makes a lead attach a deliverable, "[no-report]" makes a lead stop
- * without reporting, "[slow]" delays every answer in the conversation and "[linger]" only the final
- * (text) answers.
+ * without reporting, "[slow]" delays every answer in the conversation, "[linger]" only the final (text)
+ * answers and "[slow-report]" only the answer that calls report_to_chief. "[fixed-ids]" reuses one tool-call id.
  */
 const PRIORITY: Array<(tool: string) => boolean> = [
   (t) => t === 'create_task',
@@ -84,7 +84,6 @@ function argsFor(tool: string): Record<string, unknown> {
       };
     case 'update_task':
       return {
-        phase: 'working',
         progress: 10,
         checklist: [
           { text: 'Search the web', done: false },
@@ -166,6 +165,9 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
       let finish: string;
       if (JSON.stringify(messages).includes('[slow]')) await new Promise((r) => setTimeout(r, SLOW_MS));
       const tool = pickTool(tools, messages);
+      if (tool === 'report_to_chief' && JSON.stringify(messages).includes('[slow-report]')) {
+        await new Promise((r) => setTimeout(r, SLOW_MS * 2));
+      }
       if (tool) {
         const args = argsFor(tool);
         delta = {
@@ -174,7 +176,8 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
           tool_calls: [
             {
               index: 0,
-              id: `call_${++callCounter}`,
+              // "[fixed-ids]" mimics providers that reuse tool-call ids across conversations.
+              id: JSON.stringify(messages).includes('[fixed-ids]') ? 'call_fixed' : `call_${++callCounter}`,
               type: 'function',
               function: { name: tool, arguments: JSON.stringify(args) },
             },

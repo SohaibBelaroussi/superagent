@@ -83,10 +83,16 @@ describe('tasks, board and dispatch', () => {
       () => getTask(id),
       (t) => t.phase === phase,
     );
-  const waitForEvents = (id: string, type: string, count = 1) =>
+  const waitForEvents = (id: string, type: string, count = 1, timeoutMs = 15_000) =>
     waitFor(
       () => eventsOf(id),
       (list) => list.filter((e) => e.type === type).length >= count,
+      timeoutMs,
+    );
+  /** The lead's model calls for one task (its brief names the task). */
+  const leadCallsFor = (title: string) =>
+    chatRequests().filter(
+      (r) => systemPrompt(r).includes('lead of the Research') && conversation(r).includes(title),
     );
 
   /** Opens the SSE stream and reads it frame by frame. */
@@ -122,12 +128,19 @@ describe('tasks, board and dispatch', () => {
         buffer += value;
       }
     };
+    let ready: SseFrame | undefined;
     const untilReady = async () => {
       const frames: SseFrame[] = [];
-      for (let frame = await next(); frame.event !== 'ready'; frame = await next()) frames.push(frame);
-      return frames;
+      for (;;) {
+        const frame = await next();
+        if (frame.event === 'ready') {
+          ready = frame;
+          return frames;
+        }
+        frames.push(frame);
+      }
     };
-    return { next, untilReady, close: () => reader.cancel() };
+    return { next, untilReady, ready: () => ready, close: () => reader.cancel() };
   }
 
   beforeAll(async () => {
@@ -367,6 +380,160 @@ describe('tasks, board and dispatch', () => {
     expect(again.status).toBe(409);
   });
 
+  it('refuses to re-send a task in progress at once, and still catches its stall', async () => {
+    const task = await createTask({ title: 'Busy lead', brief: 'Keep going. [slow] [no-report]' });
+    await waitForPhase(task.id, 'working');
+    const started = Date.now();
+    const res = await send('PATCH', `/v1/tasks/${task.id}`, { phase: 'queued' });
+    expect(res.status).toBe(409);
+    expect(Date.now() - started).toBeLessThan(1000);
+    const events = await waitForEvents(task.id, 'chief_notified');
+    expect(events.find((e) => e.type === 'chief_notified')?.data).toMatchObject({ kind: 'task-stalled' });
+    expect((await getTask(task.id)).phase).toBe('waiting');
+  });
+
+  it('keeps watching the lead after a double dispatch', async () => {
+    const task = await createTask({ title: 'Double click', brief: 'Look into it. [no-report]' });
+    await waitForEvents(task.id, 'chief_notified');
+    const [a, b] = await Promise.all([
+      send('PATCH', `/v1/tasks/${task.id}`, { phase: 'queued' }),
+      send('PATCH', `/v1/tasks/${task.id}`, { phase: 'queued' }),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    // The run the winning dispatch started stalls too, and is caught.
+    const events = await waitForEvents(task.id, 'chief_notified', 2);
+    expect(events.filter((e) => e.type === 'chief_notified').map((e) => e.data.kind)).toEqual([
+      'task-stalled',
+      'task-stalled',
+    ]);
+  });
+
+  it('runs a queued message as the lead’s next turn', async () => {
+    const task = await createTask({ title: 'Queue it', brief: 'Find out what Mastra is. [slow]' });
+    await waitForPhase(task.id, 'working');
+    const res = await send('POST', `/v1/tasks/${task.id}/messages`, {
+      message: 'Afterwards, list two alternatives.',
+      mode: 'queue',
+    });
+    expect(res.status).toBe(200);
+    const events = await waitForEvents(task.id, 'reported', 2, 30_000);
+    expect(events.find((e) => e.type === 'message')?.data).toMatchObject({ mode: 'queue', action: 'queued' });
+    const turn = leadCallsFor('Queue it').find((r) => {
+      const users = messagesOf(r).filter((m) => m.role === 'user');
+      return JSON.stringify(users.at(-1)?.content).includes('Afterwards, list two alternatives.');
+    });
+    expect(turn, 'the queued message started a turn of its own').toBeDefined();
+    expect((await getTask(task.id)).phase).toBe('review');
+  });
+
+  it('lets the lead act on a message that reaches it just after it reported', async () => {
+    // [slow-report] holds the model call that reports; the owner writes during it.
+    const task = await createTask({ title: 'Last word', brief: 'Find out what Mastra is. [slow-report]' });
+    await waitFor(
+      async () => leadCallsFor('Last word').length,
+      (calls) => calls >= 3,
+    );
+    const res = await send('POST', `/v1/tasks/${task.id}/messages`, { message: 'Also name the license.' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as Task).phase).toBe('working');
+    const events = await waitForEvents(task.id, 'reported', 2, 30_000);
+    expect(events.find((e) => e.type === 'message')?.data).toMatchObject({ action: 'deliver' });
+    expect(events.find((e) => e.type === 'phase_changed' && e.data.from === 'review')?.data).toMatchObject({
+      to: 'working',
+      reason: 'A message reached the lead after its report',
+    });
+    expect((await getTask(task.id)).phase).toBe('review');
+  });
+
+  it('hands open tasks to the department’s new lead', async () => {
+    const support = (await (
+      await send('POST', '/v1/departments', { slug: 'support', name: 'Support', description: 'Helps.' })
+    ).json()) as Department;
+    const firstLead = (await (
+      await send('POST', '/v1/agents', {
+        key: 'support-lead',
+        name: 'Support lead',
+        role: 'lead',
+        departmentId: support.id,
+        description: 'Answers questions.',
+        instructions: 'Be kind.',
+      })
+    ).json()) as AgentDefinition;
+    const open = async (title: string) => {
+      const res = await send('POST', '/v1/tasks', {
+        departmentId: support.id,
+        title,
+        brief: 'Help. [no-report]',
+      });
+      const task = (await res.json()) as Task;
+      await waitForEvents(task.id, 'chief_notified');
+      return task;
+    };
+    const toMessage = await open('Reply to a customer');
+    const toCancel = await open('Old request');
+    expect((await send('DELETE', `/v1/agents/${firstLead.id}`)).status).toBe(204);
+    const nextLead = (await (
+      await send('POST', '/v1/agents', {
+        key: 'support-lead-2',
+        name: 'New support lead',
+        role: 'lead',
+        departmentId: support.id,
+        description: 'Answers questions.',
+        instructions: 'Be kind.',
+      })
+    ).json()) as AgentDefinition;
+
+    const messaged = await send('POST', `/v1/tasks/${toMessage.id}/messages`, {
+      message: 'Please finish this.',
+    });
+    expect(messaged.status).toBe(200);
+    expect(await messaged.json()).toMatchObject({ leadAgentId: nextLead.id });
+    const events = await waitForEvents(toMessage.id, 'reported');
+    expect(events.find((e) => e.type === 'reassigned')?.data).toMatchObject({ lead: 'support-lead-2' });
+    expect(events.find((e) => e.type === 'reported')?.actor).toBe('agent:support-lead-2');
+
+    const cancelled = await send('POST', `/v1/tasks/${toCancel.id}/cancel`);
+    expect(cancelled.status).toBe(200);
+    expect(((await cancelled.json()) as Task).phase).toBe('cancelled');
+  });
+
+  it('keys chief assignments by run, so reused tool-call ids create separate tasks', async () => {
+    const assign = (thread: string) =>
+      send('POST', '/api/agents/chief/generate', {
+        messages: [{ role: 'user', content: '[assign] [fixed-ids] Please look into Mastra.' }],
+        memory: { thread, resource: 'owner' },
+      });
+    const before = ((await (await send('GET', '/v1/tasks?limit=200')).json()) as TaskPage).items.length;
+    expect((await assign('chief:ids-1')).status).toBe(200);
+    expect((await assign('chief:ids-2')).status).toBe(200);
+    const after = ((await (await send('GET', '/v1/tasks?limit=200')).json()) as TaskPage).items;
+    expect(after.length - before).toBe(2);
+    for (const task of after.slice(0, 2)) await waitForEvents(task.id, 'reported');
+  });
+
+  it('keeps PATCH all-or-nothing, accepts an empty cancel body, and shows recent events', async () => {
+    const task = await createTask({ title: 'Contract', brief: 'Fine print.', dispatch: false });
+    const refused = await send('PATCH', `/v1/tasks/${task.id}`, { title: 'Changed', phase: 'done' });
+    expect(refused.status).toBe(409);
+    expect((await getTask(task.id)).title).toBe('Contract');
+
+    for (const n of [1, 2, 3, 4, 5]) await send('PATCH', `/v1/tasks/${task.id}`, { title: `Contract v${n}` });
+    const recent = await system.tasks.recentEvents(task.id, 3);
+    expect(recent.map((e) => e.type)).toEqual(['updated', 'updated', 'updated']);
+    expect(recent.map((e) => e.seq)).toEqual([...recent.map((e) => e.seq)].sort((a, b) => a - b));
+    expect(recent.at(-1)?.seq).toBe((await eventsOf(task.id)).at(-1)?.seq);
+
+    // jsonHeaders() sends Content-Type: application/json; there is no body.
+    const cancelled = await send('POST', `/v1/tasks/${task.id}/cancel`);
+    expect(cancelled.status).toBe(200);
+    const garbled = await system.app.request(`/v1/tasks/${task.id}/cancel`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: '{not json',
+    });
+    expect(garbled.status).toBe(400);
+  });
+
   it('streams task events live and replays what a client missed', async () => {
     const unauthenticated = await system.app.request('/v1/events');
     expect(unauthenticated.status).toBe(401);
@@ -396,13 +563,21 @@ describe('tasks, board and dispatch', () => {
       await stream.close();
     }
 
-    // A fresh client without Last-Event-ID gets no replay, just the ready marker.
+    // A fresh client gets no replay, just the ready marker, whose id is a cursor it can resume from.
+    const newest = (await eventsOf(first.id)).at(-1)?.seq ?? 0;
     const fresh = await openEvents();
     try {
       expect(await fresh.untilReady()).toEqual([]);
+      const ready = fresh.ready();
+      expect(Number(ready?.id)).toBeGreaterThanOrEqual(newest);
+      expect(JSON.parse(ready?.data ?? '{}')).toEqual({ lastEventId: Number(ready?.id) });
     } finally {
       await fresh.close();
     }
+
+    const invalid = await system.app.request('/v1/events?taskId=not-a-uuid', { headers: authHeader() });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ code: 'validation_failed' });
   });
 
   it('streams concurrent changes in commit order, and replays from the very start', async () => {
@@ -575,7 +750,10 @@ describe('tasks, board and dispatch', () => {
     expect(page2.items[0]?.number).toBe((b?.number ?? 0) - 1);
 
     const cancelled = (await (await send('GET', '/v1/tasks?phase=cancelled')).json()) as TaskPage;
-    expect(cancelled.items.map((t) => t.title)).toEqual(['Slow job']);
+    expect(cancelled.items.map((t) => t.title)).toEqual(
+      expect.arrayContaining(['Slow job', 'Old request', 'Contract v5']),
+    );
+    expect(cancelled.items.every((t) => t.phase === 'cancelled')).toBe(true);
 
     const board = (await (await send('GET', `/v1/board?departmentId=${research.id}`)).json()) as Board;
     expect(board.columns.map((c) => c.phase)).toEqual([
@@ -590,9 +768,9 @@ describe('tasks, board and dispatch', () => {
     ]);
     const column = (phase: string) =>
       board.columns.find((c) => c.phase === phase)?.tasks.map((t) => t.title) ?? [];
-    expect(column('cancelled')).toEqual(['Slow job']);
+    expect(column('cancelled').sort()).toEqual(['Contract v5', 'Slow job']);
     expect(column('review')).toEqual(expect.arrayContaining(['Research Mastra (v2)', 'Compare frameworks']));
-    expect(column('waiting')).toEqual(['Interrupted']);
+    expect(column('waiting').sort()).toEqual(['Busy lead', 'Double click', 'Interrupted']);
     expect(board.columns.flatMap((c) => c.tasks).every((t) => t.departmentId === research.id)).toBe(true);
   });
 });

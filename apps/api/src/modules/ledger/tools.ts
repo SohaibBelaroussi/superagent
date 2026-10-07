@@ -14,7 +14,9 @@ export interface LedgerToolDeps {
   directory: OrgDirectory;
 }
 
-type ToolAgentContext = { agent?: { agentId?: string; threadId?: string; toolCallId?: string } } | undefined;
+type ToolAgentContext =
+  | { runId?: string; agent?: { agentId?: string; threadId?: string; toolCallId?: string } }
+  | undefined;
 
 function summary(task: TaskRow) {
   return {
@@ -28,18 +30,35 @@ function summary(task: TaskRow) {
 
 /**
  * The task a lead is working on is the one whose thread the run is in (task:<id>), so these tools also
- * work for runs started by a schedule. A lead can only touch tasks assigned to it.
+ * work for runs started by a schedule. A lead can only touch its own department's tasks assigned to it.
  */
 async function currentTask(deps: LedgerToolDeps, context: ToolAgentContext): Promise<TaskRow> {
   const threadId = context?.agent?.threadId;
   const task = threadId ? await deps.tasks.getByThread(threadId) : undefined;
   if (!task) throw new Error('This conversation is not a task thread, so there is no task to update.');
   const caller = context?.agent?.agentId ? deps.directory.agentByKey(context.agent.agentId) : undefined;
-  if (task.leadAgentId && caller && task.leadAgentId !== caller.id) {
+  if (
+    caller &&
+    (caller.departmentId !== task.departmentId || (task.leadAgentId && task.leadAgentId !== caller.id))
+  ) {
     throw new Error(`Task #${task.number} is assigned to another lead.`);
   }
   return task;
 }
+
+/**
+ * The current task, taken back from review or waiting when the owner's message reached the lead after
+ * it reported (the lead is acting on that message now).
+ */
+async function activeTask(deps: LedgerToolDeps, context: ToolAgentContext): Promise<TaskRow> {
+  const task = await currentTask(deps, context);
+  if ((task.phase === 'review' || task.phase === 'waiting') && deps.dispatch.mayResume(task.id)) {
+    return deps.tasks.resume(task.id, actorOf(context));
+  }
+  return task;
+}
+
+const actorOf = (context: ToolAgentContext) => `agent:${context?.agent?.agentId ?? 'lead'}`;
 
 /**
  * Tools every department lead gets, on top of the tools its definition grants. Errors are thrown:
@@ -50,21 +69,16 @@ export function createLeadTools(deps: LedgerToolDeps): ToolsInput {
     update_task: createTool({
       id: 'update_task',
       description:
-        'Update the task you are working on: phase ("working", or "waiting" when you need the owner), ' +
-        'progress (0-100), a checklist of steps, and a short note.',
+        'Record progress on the task you are working on: progress (0-100), a checklist of steps, and a ' +
+        'short note. To ask the owner something, use report_to_chief with outcome "blocked".',
       inputSchema: z.object({
-        phase: z.enum(['working', 'waiting']).optional(),
         progress: z.number().int().min(0).max(100).optional(),
         checklist: z.array(ChecklistItemSchema).max(30).optional(),
         note: z.string().max(1000).optional(),
       }),
       execute: async (input, context) => {
-        const task = await currentTask(deps, context as ToolAgentContext);
-        const updated = await deps.tasks.recordProgress(
-          task.id,
-          `agent:${context?.agent?.agentId ?? 'lead'}`,
-          input,
-        );
+        const task = await activeTask(deps, context as ToolAgentContext);
+        const updated = await deps.tasks.recordProgress(task.id, actorOf(context as ToolAgentContext), input);
         return summary(updated);
       },
     }),
@@ -78,12 +92,8 @@ export function createLeadTools(deps: LedgerToolDeps): ToolsInput {
         url: z.url().optional().describe('For kind "link"'),
       }),
       execute: async (input, context) => {
-        const task = await currentTask(deps, context as ToolAgentContext);
-        const artifact = await deps.tasks.addArtifact(
-          task.id,
-          `agent:${context?.agent?.agentId ?? 'lead'}`,
-          input,
-        );
+        const task = await activeTask(deps, context as ToolAgentContext);
+        const artifact = await deps.tasks.addArtifact(task.id, actorOf(context as ToolAgentContext), input);
         return { artifactId: artifact.id, task: `#${task.number}` };
       },
     }),
@@ -91,14 +101,14 @@ export function createLeadTools(deps: LedgerToolDeps): ToolsInput {
       id: 'report_to_chief',
       description:
         'Finish your work on the task and report to the chief of staff. outcome "done" with the result, ' +
-        '"blocked" when you need the owner, "failed" when it cannot be done.',
+        '"blocked" with your question when you need the owner, "failed" when it cannot be done.',
       inputSchema: z.object({
         outcome: z.enum(['done', 'blocked', 'failed']),
         summary: z.string().min(1).max(1000).describe('One or two sentences for the chief'),
         result: z.string().max(50_000).optional().describe('The full result or deliverable, if any'),
       }),
       execute: async (input, context) => {
-        const task = await currentTask(deps, context as ToolAgentContext);
+        const task = await activeTask(deps, context as ToolAgentContext);
         const updated = await deps.dispatch.report(task, context?.agent?.agentId ?? 'lead', input);
         return { ...summary(updated), reported: true };
       },
@@ -131,6 +141,8 @@ export function createChiefTools(deps: LedgerToolDeps): ToolsInput {
           throw new Error(`No department "${input.department}". Departments: ${known}.`);
         }
         deps.dispatch.requireLead(department.id);
+        // Some providers reuse tool-call ids across conversations, so the key includes the run.
+        const runId = (context as ToolAgentContext)?.runId;
         const toolCallId = (context as ToolAgentContext)?.agent?.toolCallId;
         const task = await deps.tasks.create(
           {
@@ -139,7 +151,7 @@ export function createChiefTools(deps: LedgerToolDeps): ToolsInput {
             brief: input.brief,
             priority: input.priority ?? 'normal',
             source: 'chief',
-            ...(toolCallId ? { idempotencyKey: `chief:${toolCallId}` } : {}),
+            ...(runId && toolCallId ? { idempotencyKey: `chief:${runId}:${toolCallId}` } : {}),
           },
           'chief',
         );
@@ -175,16 +187,14 @@ export function createChiefTools(deps: LedgerToolDeps): ToolsInput {
       inputSchema: z.object({ task: z.string().describe('Task number like "#12", or its id') }),
       execute: async ({ task: ref }) => {
         const task = await deps.tasks.resolve(ref);
-        const events = await deps.tasks.events(task.id, { limit: 200 });
+        const events = await deps.tasks.recentEvents(task.id, 12);
         return {
           ...summary(task),
           department: deps.directory.department(task.departmentId)?.slug,
           brief: truncate(task.brief, 2000),
           checklist: task.checklist,
           result: task.result ? truncate(task.result, 4000) : null,
-          recentEvents: events
-            .slice(-12)
-            .map((e) => ({ type: e.type, actor: e.actor, at: e.createdAt, data: e.data })),
+          recentEvents: events.map((e) => ({ type: e.type, actor: e.actor, at: e.createdAt, data: e.data })),
         };
       },
     }),

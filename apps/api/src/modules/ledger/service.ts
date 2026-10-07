@@ -238,11 +238,11 @@ export class TaskService {
     });
   }
 
-  /** Progress from the lead: optional phase move, progress percentage, checklist and a note. */
+  /** Progress from the lead: percentage, checklist and a note. Any progress puts the task in working. */
   recordProgress(
     id: string,
     actorLabel: string,
-    update: { phase?: 'working' | 'waiting'; progress?: number; checklist?: ChecklistItem[]; note?: string },
+    update: { progress?: number; checklist?: ChecklistItem[]; note?: string },
   ): Promise<TaskRow> {
     return this.mutate(id, actorLabel, (task) => {
       if (TERMINAL_PHASES.has(task.phase) || task.phase === 'review' || task.phase === 'inbox') {
@@ -252,14 +252,7 @@ export class TaskService {
           `Task #${task.number} is ${task.phase}; it isn't being worked on`,
         );
       }
-      const phase = update.phase ?? (task.phase === 'queued' ? 'working' : task.phase);
-      if (phase !== task.phase && !canTransition('lead', task.phase, phase)) {
-        throw new ApiError(
-          409,
-          'invalid_transition',
-          `Task #${task.number} can't move from ${task.phase} to ${phase}`,
-        );
-      }
+      const phase = 'working';
       return {
         patch: {
           phase,
@@ -303,6 +296,39 @@ export class TaskService {
         ],
       };
     });
+  }
+
+  /** Hands a task to another lead (the department's lead changed). */
+  reassign(id: string, lead: { id: string; key: string }, actorLabel: string): Promise<TaskRow> {
+    return this.mutate(id, actorLabel, (task) =>
+      task.leadAgentId === lead.id
+        ? null
+        : { patch: { leadAgentId: lead.id }, events: [{ type: 'reassigned', data: { lead: lead.key } }] },
+    );
+  }
+
+  /**
+   * The lead takes its task back from review or waiting, because a message the owner sent into its
+   * running turn arrived after it reported. Other phases are left alone.
+   */
+  resume(id: string, actorLabel: string): Promise<TaskRow> {
+    return this.mutate(id, actorLabel, (task) =>
+      task.phase === 'review' || task.phase === 'waiting'
+        ? {
+            patch: { phase: 'working' },
+            events: [
+              {
+                type: 'phase_changed',
+                data: {
+                  from: task.phase,
+                  to: 'working',
+                  reason: 'A message reached the lead after its report',
+                },
+              },
+            ],
+          }
+        : null,
+    );
   }
 
   /** An event that doesn't change the task (dispatches, messages, notifications). */
@@ -356,6 +382,28 @@ export class TaskService {
       .orderBy(asc(taskEvents.seq))
       .limit(options.limit);
     return rows.map((row) => toEvent(row, task));
+  }
+
+  /** The newest events of a task, oldest first. */
+  async recentEvents(taskId: string, limit: number): Promise<TaskEvent[]> {
+    const task = await this.get(taskId);
+    const rows = await this.db
+      .select()
+      .from(taskEvents)
+      .where(eq(taskEvents.taskId, taskId))
+      .orderBy(desc(taskEvents.seq))
+      .limit(limit);
+    return rows.reverse().map((row) => toEvent(row, task));
+  }
+
+  /** The newest event seq overall (0 when there are none): where a fresh live stream starts. */
+  async latestSeq(): Promise<number> {
+    const [row] = await this.db
+      .select({ seq: taskEvents.seq })
+      .from(taskEvents)
+      .orderBy(desc(taskEvents.seq))
+      .limit(1);
+    return row?.seq ?? 0;
   }
 
   /** Events after `seq`, oldest first, for SSE replay. */

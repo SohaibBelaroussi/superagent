@@ -6,7 +6,7 @@
 - M0 (foundation): merged in PR #1.
 - M1 (providers and models): merged in PR #2. Verified live against the owner's provider (chat, streaming usage, tool calls).
 - M2 (agents, departments, tool catalog): merged in PR #3, with its review fixes. Verified live: a real model leading a research department delegated to a specialist that searched the web.
-- M3 (ledger, board and dispatch): done on branch `m3-ledger`, PR #4. Verified live: an owner task and a task the chief assigned both ran from dispatch to a report in `review`. Changes from the plan: `set_checklist` is part of `update_task`; new work starts a fresh lead run instead of waking the thread with a signal (D27); the background-task bridge moves to a later milestone, since specialists run inline through delegation.
+- M3 (ledger, board and dispatch): done on branch `m3-ledger`, PR #4. Verified live: an owner task and a task the chief assigned both ran from dispatch to a report in `review`. The PR review found 13 issues, mostly ways a lead could stop without anyone noticing; dispatch now supervises each task's thread instead (D27). Changes from the plan: `set_checklist` is part of `update_task`; new work starts a fresh lead run instead of waking the thread with a signal (D27); the background-task bridge moves to a later milestone, since specialists run inline through delegation.
 - Next: M4 (memory and knowledge). It needs an embedding model, and the owner's provider lists none yet.
 
 **Related docs:**
