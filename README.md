@@ -1,5 +1,7 @@
 # superagent
 
+[![CI](https://github.com/SohaibBelaroussi/superagent/actions/workflows/ci.yml/badge.svg)](https://github.com/SohaibBelaroussi/superagent/actions/workflows/ci.yml)
+
 A self-hosted personal assistant organized like a company, built on [Mastra](https://mastra.ai).
 
 - A **chief of staff** you talk to.
@@ -68,3 +70,9 @@ This runs the EE-import guard, lint, typecheck, unit tests and integration tests
 Other commands:
 - `pnpm test:e2e` runs against a running stack (`pnpm stack:up` first).
 - `pnpm studio` opens Mastra Studio against the dev server. Log in with `STUDIO_TOKEN`.
+
+CI runs the same checks on every pull request. It also builds the Docker image and runs the e2e suite against it.
+
+## License
+
+[MIT](LICENSE)

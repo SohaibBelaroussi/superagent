@@ -33,8 +33,13 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 
 ## Public repository
 - Never commit `.env`, keys, or the owner's provider endpoints. `.env.example` keeps placeholders.
-- Work on one branch per milestone (`m0-foundation`, ...) and commit as you go. Open a PR into `main` when the milestone is done. Scan the diff for secrets before pushing.
+- **Commits use the owner's git identity.** Add no `Co-Authored-By` trailers to commits and no "Generated with" footers to PRs or merge commits.
+- **Workflow:**
+  1. Work on one branch per milestone (`m0-foundation`, `m1-providers`, ...) and commit as you go.
+  2. Scan the diff for secrets before pushing.
+  3. When the milestone is done, open a PR into `main`, review it, and merge with a merge commit once CI is green.
+- **CI** (`.github/workflows/ci.yml`) runs on every PR and every push to `main`: `pnpm check`, then it builds the image, starts the stack, and runs the e2e suite against it.
 
 ## Windows notes
 - A dev server started in the background can outlive its shell. If port 4111 stays busy, stop the leftover `node` process.
-- Node comes from nvm-windows. On 22.20, pnpm shows an engine warning (a Mastra dependency wants ≥22.22). The Docker image uses Node 24.21.
+- Node 24.21 comes from nvm-windows (`.nvmrc`). nvm keeps global tools per Node version, so pnpm comes from `corepack enable`. The Docker image and CI use the same Node version.
