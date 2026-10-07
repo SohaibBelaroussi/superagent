@@ -55,6 +55,14 @@ Agents granted `files` or `shell` work in a sandbox container per task, run by t
 
 Agents granted `browser` get a Chromium of their task's own, also run by the runner, with no way out but the egress proxy (public sites only). Build the browser image and start the proxy with `pnpm browsers:up`. Watch a task's browser, or take it over, from the live view (`/v1/tasks/{id}/browser/stream`, a WebSocket). To let agents browse signed in, create a browser identity, sign it in yourself through its sign-in session and live view, and name it in the agent's browser grant. On Ubuntu 24.04 hosts, Chromium's sandbox needs `sysctl kernel.apparmor_restrict_unprivileged_userns=0`.
 
+Agents can be given more than the built-in tools (`GET /v1/capabilities` lists everything):
+- **Plugins** bring skills and MCP servers. Preview one from GitHub (`POST /v1/plugins/preview` with `{ "source": { "kind": "github", "repo": "owner/repo", "ref": "v1.2.3" } }`), then install it. Agent Plugins 1.0, Claude Code and Codex plugins, and plain skill folders work.
+- **Skills** attach to departments or agents (`"skills": ["plugin"]` or `["plugin/skill"]`).
+- **MCP servers** too (`"mcp": [{ "server": "slug", "tools": [...], "requireApproval": true }]`). Add remote ones by hand with `POST /v1/mcp-servers`.
+- **Secrets** they need go in the vault (`PUT /v1/secrets/{NAME}`). A `GITHUB_TOKEN` secret raises GitHub's rate limits for plugin installs.
+
+Plugins' stdio MCP servers run in containers of their own: build their image and start the egress proxy with `pnpm mcp:up`.
+
 For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS Code (REST Client) or a JetBrains IDE.
 
 ## API layout
@@ -63,7 +71,7 @@ For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS 
 |---|---|
 | `/health`, `/ready` | Liveness and readiness. Public |
 | `/api/*` | Mastra's built-in routes: agents, threads, memory, schedules. Token required |
-| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your profile, department notes, knowledge documents, schedules, the attention inbox, task files and sandboxes, browsers, browser identities and live views (WebSockets: a bearer header, or `?apiKey=` from a browser). Token required |
+| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your profile, department notes, knowledge documents, schedules, the attention inbox, task files and sandboxes, browsers, browser identities and live views (WebSockets: a bearer header, or `?apiKey=` from a browser), capabilities, secrets, MCP servers, skills and plugins. Token required |
 
 ## Development
 

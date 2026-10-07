@@ -220,6 +220,38 @@ export const BrowserIdentityNameSchema = z
   .string()
   .regex(/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/, 'lowercase letters, digits and dashes (max 40)');
 
+/** A plugin's name (Agent Plugins names may contain dots); grants and skill references use it. */
+export const PluginNameSchema = z
+  .string()
+  .regex(/^[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$/, 'lowercase letters, digits, dots and dashes (max 64)');
+
+/** A skill to attach: a plugin's name (all its skills) or "<plugin>/<skill>". */
+export const SkillRefSchema = z
+  .string()
+  .regex(
+    /^[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)?$/,
+    'a plugin name, or "<plugin>/<skill>"',
+  );
+
+/** An MCP server's slug: the prefix of its tools' names. */
+export const McpServerSlugSchema = z
+  .string()
+  .regex(/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/, 'lowercase letters, digits and dashes (max 32)');
+
+export const McpGrantSchema = z.object({
+  server: McpServerSlugSchema.describe('An MCP server (GET /v1/mcp-servers)'),
+  tools: z
+    .array(z.string().min(1).max(128))
+    .max(200)
+    .optional()
+    .describe("Only these of the server's tools, by their MCP names (default: all)"),
+  requireApproval: z
+    .boolean()
+    .default(false)
+    .describe('Pause before each call until the owner approves it (GET /v1/attention)'),
+});
+export type McpGrant = z.infer<typeof McpGrantSchema>;
+
 export const ToolGrantSchema = z.object({
   key: z.string().min(1).describe('Tool key from GET /v1/catalog/tools'),
   requireApproval: z
@@ -238,6 +270,8 @@ export const AgentVersionSchema = z.object({
   instructions: z.string(),
   model: ModelRefSchema.nullable().describe('null: use the default model role'),
   tools: z.array(ToolGrantSchema),
+  skills: z.array(SkillRefSchema).describe("Skills it can use, besides its department's"),
+  mcp: z.array(McpGrantSchema).describe("MCP servers' tools it can use, besides its department's"),
   createdAt: z.string(),
 });
 export type AgentVersion = z.infer<typeof AgentVersionSchema>;
@@ -282,16 +316,20 @@ export const CreateAgentInputSchema = z.object({
   instructions: InstructionsSchema,
   model: ModelRefSchema.nullable().default(null),
   tools: z.array(ToolGrantSchema).max(50).default([]),
+  skills: z.array(SkillRefSchema).max(50).default([]),
+  mcp: z.array(McpGrantSchema).max(20).default([]),
 });
 export type CreateAgentInput = z.infer<typeof CreateAgentInputSchema>;
 
-/** Changing description, instructions, model or tools creates and activates a new version. */
+/** Changing description, instructions, model, tools, skills or MCP grants creates and activates a new version. */
 export const UpdateAgentInputSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   description: DescriptionSchema.optional(),
   instructions: InstructionsSchema.optional(),
   model: ModelRefSchema.nullable().optional(),
   tools: z.array(ToolGrantSchema).max(50).optional(),
+  skills: z.array(SkillRefSchema).max(50).optional(),
+  mcp: z.array(McpGrantSchema).max(20).optional(),
 });
 export type UpdateAgentInput = z.infer<typeof UpdateAgentInputSchema>;
 
@@ -303,6 +341,8 @@ export const DepartmentSchema = z.object({
   autoClose: z.boolean().describe('Close finished tasks without owner review (used from M3)'),
   lead: AgentSummarySchema.nullable(),
   members: z.array(AgentSummarySchema).describe('Active specialists'),
+  skills: z.array(SkillRefSchema).describe('Skills every agent of the department can use'),
+  mcp: z.array(McpGrantSchema).describe("MCP servers' tools every agent of the department can use"),
   createdAt: z.string(),
   updatedAt: z.string(),
   archivedAt: z.string().nullable(),
@@ -316,6 +356,8 @@ export const CreateDepartmentInputSchema = z.object({
   name: z.string().trim().min(1).max(100),
   description: z.string().trim().max(1000).default(''),
   autoClose: z.boolean().default(false),
+  skills: z.array(SkillRefSchema).max(50).default([]),
+  mcp: z.array(McpGrantSchema).max(20).default([]),
 });
 export type CreateDepartmentInput = z.infer<typeof CreateDepartmentInputSchema>;
 
@@ -323,6 +365,8 @@ export const UpdateDepartmentInputSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   description: z.string().trim().max(1000).optional(),
   autoClose: z.boolean().optional(),
+  skills: z.array(SkillRefSchema).max(50).optional(),
+  mcp: z.array(McpGrantSchema).max(20).optional(),
 });
 export type UpdateDepartmentInput = z.infer<typeof UpdateDepartmentInputSchema>;
 
@@ -743,3 +787,278 @@ export const BrowserViewerEventSchema = z.union([
   z.object({ error: z.string(), message: z.string() }),
 ]);
 export type BrowserViewerEvent = z.infer<typeof BrowserViewerEventSchema>;
+
+// --- Capabilities: secrets, MCP servers, skills, plugins (M8) ---
+
+export const SecretNameSchema = z
+  .string()
+  .regex(
+    /^[A-Z][A-Z0-9_]{0,63}$/,
+    'upper-case letters, digits and underscores, starting with a letter (max 64)',
+  );
+
+export const SecretSchema = z.object({
+  name: SecretNameSchema,
+  description: z.string(),
+  plugin: PluginNameSchema.nullable().describe(
+    'The plugin that created it (it goes when the plugin is uninstalled)',
+  ),
+  usedBy: z.array(McpServerSlugSchema).describe('MCP servers whose headers or environment use it'),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type Secret = z.infer<typeof SecretSchema>;
+
+export const SecretListSchema = z.object({ items: z.array(SecretSchema) });
+export type SecretList = z.infer<typeof SecretListSchema>;
+
+export const PutSecretInputSchema = z.object({
+  value: z.string().min(1).max(16_384).describe('Stored encrypted; never returned'),
+  description: z.string().trim().max(500).optional(),
+});
+export type PutSecretInput = z.infer<typeof PutSecretInputSchema>;
+
+/** A header or environment value: given as is, or taken from the secrets vault. */
+export const ConfigValueSchema = z.union([
+  z.object({ value: z.string().max(4096) }),
+  z.object({ secret: SecretNameSchema }),
+]);
+export type ConfigValue = z.infer<typeof ConfigValueSchema>;
+
+const HeaderNameSchema = z.string().regex(/^[A-Za-z0-9-]{1,64}$/, 'a header name');
+const EnvNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/, 'an environment variable name');
+
+export const McpToolSchema = z.object({
+  name: z.string().describe("The tool's name on its server (grants list these)"),
+  key: z.string().describe('The name agents see: <server slug>_<tool>'),
+  description: z.string(),
+  annotations: z.record(z.string(), z.unknown()).optional().describe("The server's hints: not trusted"),
+});
+export type McpTool = z.infer<typeof McpToolSchema>;
+
+export const McpServerSchema = z.object({
+  id: z.uuid(),
+  slug: McpServerSlugSchema,
+  name: z.string(),
+  description: z.string(),
+  plugin: PluginNameSchema.nullable().describe('The plugin it came with; null when added by hand'),
+  transport: z.enum(['http', 'stdio']),
+  url: z.string().nullable().describe('HTTP servers: its Streamable HTTP endpoint'),
+  headers: z.record(HeaderNameSchema, ConfigValueSchema).describe('Secret values show only their names'),
+  allowPrivateNetwork: z
+    .boolean()
+    .describe('HTTP servers: may be on a private address (the LAN, the tailnet)'),
+  command: z.array(z.string()).nullable().describe('stdio servers: what runs in the container'),
+  package: z.string().nullable().describe('stdio servers from npm or PyPI: the pinned package'),
+  env: z.record(EnvNameSchema, ConfigValueSchema),
+  enabled: z.boolean(),
+  status: z.enum(['pending', 'ready', 'failed']).describe('ready: its tools are known'),
+  statusDetail: z.string().nullable(),
+  tools: z.array(McpToolSchema),
+  toolsRefreshedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type McpServer = z.infer<typeof McpServerSchema>;
+
+export const McpServerListSchema = z.object({ items: z.array(McpServerSchema) });
+export type McpServerList = z.infer<typeof McpServerListSchema>;
+
+export const CreateMcpServerInputSchema = z.object({
+  slug: McpServerSlugSchema,
+  name: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(1000).default(''),
+  url: z.url().describe('Its Streamable HTTP endpoint (https, unless on a private network)'),
+  headers: z.record(HeaderNameSchema, ConfigValueSchema).default({}),
+  allowPrivateNetwork: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Allow a private address (a server on the LAN or the tailnet). Public addresses only otherwise',
+    ),
+  timeoutMs: z.number().int().min(1000).max(600_000).default(60_000),
+});
+export type CreateMcpServerInput = z.input<typeof CreateMcpServerInputSchema>;
+
+export const UpdateMcpServerInputSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  description: z.string().trim().max(1000).optional(),
+  url: z.url().optional(),
+  headers: z.record(HeaderNameSchema, ConfigValueSchema).optional(),
+  env: z.record(EnvNameSchema, ConfigValueSchema).optional().describe('stdio servers only'),
+  allowPrivateNetwork: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  timeoutMs: z.number().int().min(1000).max(600_000).optional(),
+});
+export type UpdateMcpServerInput = z.infer<typeof UpdateMcpServerInputSchema>;
+
+export const SkillSchema = z.object({
+  id: z.uuid(),
+  ref: SkillRefSchema.describe('How grants refer to it: "<plugin>/<skill>"'),
+  plugin: PluginNameSchema,
+  name: z.string(),
+  description: z.string(),
+  license: z.string().nullable(),
+  compatibility: z.string().nullable().describe('What it says it needs (tools, network)'),
+  files: z.array(z.string()).describe('Its files, relative to its folder'),
+  bytes: z.number().int(),
+  createdAt: z.iso.datetime(),
+});
+export type Skill = z.infer<typeof SkillSchema>;
+
+export const SkillListSchema = z.object({ items: z.array(SkillSchema.omit({ files: true })) });
+export type SkillList = z.infer<typeof SkillListSchema>;
+
+/**
+ * Where a plugin comes from. GitHub: a repository (optionally a folder in it) at a ref, pinned to its
+ * commit when previewed; a marketplace repository needs the entry's name. URL: a .tar.gz with its sha256.
+ */
+export const PluginSourceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('github'),
+    repo: z.string().regex(/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/, 'owner/repo'),
+    path: z
+      .string()
+      .regex(/^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/, 'a folder in the repository')
+      .optional(),
+    ref: z.string().min(1).max(200).default('HEAD').describe('A branch, tag or commit'),
+  }),
+  z.object({
+    kind: z.literal('url'),
+    url: z.url().describe('A .tar.gz of the plugin (its root, or one folder holding it)'),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/, "the archive's sha256 (hex)"),
+    allowPrivateNetwork: z.boolean().default(false),
+  }),
+]);
+export type PluginSource = z.input<typeof PluginSourceSchema>;
+
+export const PluginFormatSchema = z.enum(['agent-plugins', 'codex', 'claude', 'skills']);
+
+export const PluginInputSchema = z.object({
+  name: z.string().describe('What to send in install inputs'),
+  description: z.string(),
+  sensitive: z
+    .boolean()
+    .describe(
+      "A credential. Values that go into a server's environment or headers are kept in the secrets vault either way",
+    ),
+  required: z.boolean(),
+  default: z.string().nullable().describe('Used when no value is given'),
+});
+export type PluginInput = z.infer<typeof PluginInputSchema>;
+
+export const PluginPreviewSchema = z.object({
+  id: z.uuid().describe('Install it with POST /v1/plugins { previewId }'),
+  expiresAt: z.iso.datetime(),
+  source: PluginSourceSchema,
+  sha: z.string().nullable().describe('The commit it is pinned to (GitHub sources)'),
+  format: PluginFormatSchema,
+  name: PluginNameSchema,
+  title: z.string(),
+  version: z.string().nullable(),
+  description: z.string(),
+  license: z.string().nullable(),
+  homepage: z.string().nullable(),
+  installed: z.boolean().describe('A plugin with this name is installed (uninstall it first)'),
+  skills: z.array(
+    z.object({ name: z.string(), description: z.string(), files: z.number().int(), bytes: z.number().int() }),
+  ),
+  mcpServers: z.array(
+    z.object({
+      key: z.string().describe('Its name in the plugin'),
+      slug: McpServerSlugSchema,
+      transport: z.enum(['http', 'stdio']),
+      command: z.array(z.string()).nullable(),
+      package: z.string().nullable(),
+      url: z.string().nullable(),
+      env: z.array(z.string()).describe('Environment variables it is given'),
+    }),
+  ),
+  inputs: z.array(PluginInputSchema).describe('Values to provide at install'),
+  skipped: z.array(z.object({ component: z.string(), reason: z.string() })),
+  warnings: z.array(z.string()),
+  files: z.number().int(),
+  bytes: z.number().int(),
+});
+export type PluginPreview = z.infer<typeof PluginPreviewSchema>;
+
+export const PreviewPluginInputSchema = z.object({ source: PluginSourceSchema });
+export type PreviewPluginInput = z.input<typeof PreviewPluginInputSchema>;
+
+export const InstallPluginInputSchema = z.object({
+  previewId: z.uuid(),
+  network: z
+    .enum(['egress', 'none'])
+    .default('egress')
+    .describe("Its stdio MCP servers' network: public addresses through the egress proxy, or none"),
+  inputs: z.record(z.string(), z.string().max(16_384)).default({}),
+  servers: z
+    .record(
+      z.string(),
+      z.object({
+        enabled: z.boolean().default(true),
+        env: z.record(EnvNameSchema, ConfigValueSchema).optional(),
+        headers: z.record(HeaderNameSchema, ConfigValueSchema).optional(),
+      }),
+    )
+    .default({})
+    .describe('Per MCP server (by its key in the plugin): turn it off, or add environment values or headers'),
+});
+export type InstallPluginInput = z.input<typeof InstallPluginInputSchema>;
+
+export const PluginSchema = z.object({
+  id: z.uuid(),
+  name: PluginNameSchema,
+  title: z.string(),
+  version: z.string().nullable(),
+  description: z.string(),
+  format: PluginFormatSchema,
+  source: PluginSourceSchema,
+  sha: z.string().nullable(),
+  license: z.string().nullable(),
+  status: z
+    .enum(['installing', 'installed', 'failed'])
+    .describe('failed: its MCP servers could not be set up (its skills still work)'),
+  statusDetail: z.string().nullable(),
+  network: z.enum(['egress', 'none']),
+  skills: z.array(SkillRefSchema),
+  mcpServers: z.array(McpServerSlugSchema),
+  warnings: z.array(z.string()),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type Plugin = z.infer<typeof PluginSchema>;
+
+export const PluginListSchema = z.object({ items: z.array(PluginSchema) });
+export type PluginList = z.infer<typeof PluginListSchema>;
+
+/** Everything an agent or a department can be given, and how to grant it. */
+export const CapabilitiesSchema = z.object({
+  tools: z.array(CatalogToolSchema).describe('Agents\' "tools": [{ key }]'),
+  skills: z
+    .array(
+      z.object({ ref: SkillRefSchema, plugin: PluginNameSchema, name: z.string(), description: z.string() }),
+    )
+    .describe("Agents' and departments' \"skills\": [ref], or a plugin's name for all its skills"),
+  mcpServers: z
+    .array(
+      z.object({
+        slug: McpServerSlugSchema,
+        name: z.string(),
+        transport: z.enum(['http', 'stdio']),
+        status: z.enum(['pending', 'ready', 'failed']),
+        enabled: z.boolean(),
+        tools: z.array(McpToolSchema),
+      }),
+    )
+    .describe('Agents\' and departments\' "mcp": [{ server, tools?, requireApproval? }]'),
+  plugins: z.array(
+    z.object({
+      name: PluginNameSchema,
+      title: z.string(),
+      version: z.string().nullable(),
+      status: z.string(),
+    }),
+  ),
+});
+export type Capabilities = z.infer<typeof CapabilitiesSchema>;

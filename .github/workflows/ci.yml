@@ -35,10 +35,12 @@ jobs:
       - name: Allow user namespaces (Chromium's sandbox)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
-      # The integration tests start real browsers from it.
-      - name: Build the browser image
+      # The integration tests start real browsers and MCP servers from them.
+      - name: Build the browser and MCP images
         # Plain docker build: compose needs the .env that is only written further down.
-        run: docker build -t superagent-browser:1 infra/browser
+        run: |
+          docker build -t superagent-browser:1 infra/browser
+          docker build -t superagent-mcp:1 infra/mcp
 
       # EE-import guard, lint, typecheck, unit tests, integration tests (Testcontainers Postgres).
       - name: pnpm check

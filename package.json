@@ -11,6 +11,7 @@
     "dev": "pnpm --filter @superagent/api dev",
     "dev:runner": "pnpm --filter @superagent/runner dev",
     "browsers:up": "docker compose --profile browser build browser && docker compose up -d egress",
+    "mcp:up": "docker compose --profile mcp build mcp && docker compose up -d egress",
     "build": "pnpm --filter @superagent/api build",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",

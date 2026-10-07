@@ -1,6 +1,11 @@
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { RequestContext } from '@mastra/core/request-context';
-import { WORKSPACE_TOOLS, Workspace, type WorkspaceToolsConfig } from '@mastra/core/workspace';
+import {
+  type SkillSource,
+  WORKSPACE_TOOLS,
+  Workspace,
+  type WorkspaceToolsConfig,
+} from '@mastra/core/workspace';
 import type { Sandbox, ToolGrant, WorkspaceEntry } from '@superagent/shared';
 import type { FsEntry } from '@superagent/shared/runner';
 import type { TaskRow } from '../../db/schema';
@@ -52,6 +57,12 @@ const FILE_WRITES = [
   WORKSPACE_TOOLS.FILESYSTEM.AST_EDIT,
 ] as const;
 
+/** An agent's skills (decision D37): read from our store, the list looked up per request. */
+export interface AgentSkills {
+  source: SkillSource;
+  paths(): string[];
+}
+
 export interface WorkspaceDeps {
   /** Unset when no runner is configured: workspace grants then give no tools. */
   client?: RunnerClient;
@@ -75,11 +86,38 @@ export class WorkspaceService {
     return Boolean(this.deps.client);
   }
 
-  /** The `workspace` option of an agent with these grants, or undefined without a workspace grant. */
+  /**
+   * The `workspace` option of an agent: inside a task, the task's workspace if it is granted files or
+   * shell; otherwise its skills alone, while it has some. Undefined when it can have neither.
+   */
   workspaceFor(
     agentKey: string,
     grants: ToolGrant[],
+    skills?: AgentSkills,
   ): ((args: { requestContext: RequestContext }) => Workspace | undefined) | undefined {
+    // Skills come from our store, never from the (sandbox-writable) task folder.
+    const skillOptions = skills ? { skillSource: skills.source, skills: () => skills.paths() } : {};
+    const skillsOnly = skills ? this.skillsWorkspace(agentKey, skillOptions) : undefined;
+    const task = this.taskWorkspace(agentKey, grants, skillOptions);
+    if (!task && !skillsOnly) return undefined;
+    return ({ requestContext }) => {
+      if (task && taskOf(requestContext)) return task;
+      return skillsOnly && (skills?.paths().length ?? 0) > 0 ? skillsOnly : undefined;
+    };
+  }
+
+  private skillsWorkspace(agentKey: string, options: object): Workspace {
+    const id = `skills-${agentKey}`;
+    let workspace = this.workspaces.get(id);
+    if (!workspace) {
+      workspace = new Workspace({ id, name: 'Skills', ...options });
+      this.workspaces.set(id, workspace);
+    }
+    return workspace;
+  }
+
+  /** The task workspace of an agent granted files or shell, built once per shape and agent. */
+  private taskWorkspace(agentKey: string, grants: ToolGrant[], skillOptions: object): Workspace | undefined {
     const files = grants.find((grant) => grant.key === 'files');
     const shell = grants.find((grant) => grant.key === 'shell');
     const client = this.deps.client;
@@ -116,12 +154,12 @@ export class WorkspaceService {
               instructions: { dynamicSandbox: 'resolve' as const },
             }
           : {}),
+        ...skillOptions,
         tools,
       });
       this.workspaces.set(id, workspace);
     }
-    const resolved = workspace;
-    return ({ requestContext }) => (taskOf(requestContext) ? resolved : undefined);
+    return workspace;
   }
 
   /** Sandboxes with their tasks, for the owner. */

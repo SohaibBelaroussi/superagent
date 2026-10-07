@@ -5,16 +5,19 @@ import { createRunnerApp } from './app';
 import { BrowserContainers } from './browsers';
 import type { RunnerConfig } from './config';
 import { dockerMessage } from './docker';
+import { McpPackages } from './mcp';
 import { type Logger, SandboxManager } from './sandboxes';
 
 export { BrowserContainers, loadBrowserSeccomp } from './browsers';
 export { loadRunnerConfig, type RunnerConfig, RunnerConfigError, RunnerConfigSchema } from './config';
+export { McpPackages } from './mcp';
 export { type Logger, RunnerError, SandboxManager } from './sandboxes';
 
 export interface Runner {
   app: Hono;
   manager: SandboxManager;
   browsers: BrowserContainers;
+  mcp: McpPackages;
   /** Serves browsers' DevTools connections (WebSocket upgrades) on the runner's HTTP server. */
   attach(server: Pick<Server, 'on'>): void;
   /** Starts the reaper. */
@@ -43,13 +46,15 @@ export function createRunner(
   const docker = options.docker ?? new Docker();
   const manager = new SandboxManager(docker, config, logger);
   const browsers = new BrowserContainers(docker, config, logger);
-  const app = createRunnerApp(manager, browsers, config, logger);
+  const mcp = new McpPackages(docker, config, logger);
+  const app = createRunnerApp(manager, browsers, mcp, config, logger);
   let timer: NodeJS.Timeout | undefined;
   let reaping: Promise<void> | undefined;
   return {
     app,
     manager,
     browsers,
+    mcp,
     attach(server) {
       server.on('upgrade', (req, socket, head) => {
         socket.on('error', () => socket.destroy());
@@ -71,6 +76,7 @@ export function createRunner(
         const pass = async () => {
           await manager.reap();
           await browsers.reap();
+          await mcp.reap();
         };
         reaping = pass()
           .catch((error: unknown) => logger.warn('Reaper failed', { error: dockerMessage(error) }))

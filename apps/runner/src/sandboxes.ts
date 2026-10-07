@@ -183,7 +183,7 @@ export class SandboxManager {
   }
 
   /** Whether Docker answers and which profiles' images are built (for the API's health checks). */
-  async ready(): Promise<Omit<RunnerReady, 'browser'>> {
+  async ready(): Promise<Omit<RunnerReady, 'browser' | 'mcp'>> {
     let docker = true;
     try {
       await this.docker.ping();

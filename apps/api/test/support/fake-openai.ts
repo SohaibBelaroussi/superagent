@@ -97,12 +97,54 @@ function pickTool(tools: string[], messages: ChatMessage[]): string | undefined 
       !(directives.includes('[code]') && (t === CODE.write || t === CODE.run))
     ) &&
     !(t === 'report_to_chief' && directives.includes('[no-report]')) &&
-    !t.startsWith('browser_');
+    !t.startsWith('browser_') &&
+    // Skills' tools and MCP tools (<slug with a dash>_<tool>) run only when a directive asks.
+    !SKILL_TOOLS.has(t) &&
+    !/^[a-z0-9]+-[a-z0-9-]*_/.test(t);
   for (const matches of PRIORITY) {
     const tool = tools.find((t) => matches(t) && allowed(t));
     if (tool) return tool;
   }
   return tools.find(allowed);
+}
+
+const SKILL_TOOLS = new Set(['skill', 'skill_read', 'skill_search']);
+const SKILL = /\[skill:([a-z0-9-]+)\]/;
+const MCP = /\[mcp:([A-Za-z0-9_-]+)(?: (\{[^\]]*\}))?\]/;
+
+/**
+ * "[skill:<name>]" makes an agent with skills activate it; "[mcp:<tool> {json}]" makes one call the
+ * MCP tool whose name ends with _<tool>, with those arguments. Each once per turn, before anything else.
+ */
+function capabilityStep(
+  tools: string[],
+  messages: ChatMessage[],
+): { tool: string; args: Record<string, unknown> } | undefined {
+  const turnStart = messages.findLastIndex((m) => m.role === 'user');
+  const content = messages[turnStart]?.content;
+  const text =
+    typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content.map((part) => (part as { text?: string }).text ?? '').join(' ')
+        : '';
+  const called = new Set(
+    messages
+      .slice(turnStart + 1)
+      .flatMap((m) =>
+        m.role === 'assistant' ? (m.tool_calls ?? []).map((c) => c.function?.name ?? '') : [],
+      ),
+  );
+  const skill = SKILL.exec(text);
+  if (skill && tools.includes('skill') && !called.has('skill')) {
+    return { tool: 'skill', args: { name: skill[1] } };
+  }
+  const mcp = MCP.exec(text);
+  const target = mcp && tools.find((t) => t.endsWith(`_${mcp[1]}`));
+  if (mcp && target && !called.has(target)) {
+    return { tool: target, args: mcp[2] ? (JSON.parse(mcp[2]) as Record<string, unknown>) : {} };
+  }
+  return undefined;
 }
 
 /** The button a "[browse:<url>]" agent clicks. */
@@ -267,7 +309,7 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
       let delta: Record<string, unknown>;
       let finish: string;
       if (JSON.stringify(messages).includes('[slow]')) await new Promise((r) => setTimeout(r, SLOW_MS));
-      const browsing = browseStep(tools, messages);
+      const browsing = browseStep(tools, messages) ?? capabilityStep(tools, messages);
       const tool = browsing?.tool ?? pickTool(tools, messages);
       if (tool === 'report_to_chief' && JSON.stringify(messages).includes('[slow-report]')) {
         await new Promise((r) => setTimeout(r, SLOW_MS * 2));

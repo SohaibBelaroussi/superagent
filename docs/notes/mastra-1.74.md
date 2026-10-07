@@ -589,8 +589,31 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - `--proxy-bypass-list=<-loopback>` sends even loopback through the proxy; `--webrtc-ip-handling-policy=disable_non_proxied_udp` keeps WebRTC from going around it.
 - Crawl4AI 0.9.4 runs its own Chromium through a built-in pinning proxy (`--proxy-server=127.0.0.1:<port>`) that resolves each name and refuses non-public addresses, and checks crawl URLs before fetching. On an internal network it can't resolve anything, so it stays on its own network.
 
-## 20. From earlier research, needed in later milestones
+## 20. Learned while building M8 (2026-10-07)
 
-- **Stored MCP config** has no headers, cwd or OAuth.
-- **Plugins:** Agent Plugins 1.0 = `plugin.json` + `skills/` + `mcp.json`.
+**MCP** (`@mastra/mcp` 2.1.2, the last for core 1.74; 2.2.0 needs 1.75) [spike]:
+- Remote servers are Streamable HTTP only (2.x dropped SSE). Headers go in `requestInit`; a custom `fetch(url, init, requestContext)` can check each request (we follow redirects by hand with it).
+- `listToolDefinitionsWithErrors()` returns JSON definitions to store; `toolFromDefinition()` rebuilds a tool from one without connecting (async, so build them before compiling an agent). The record key, not the tool's id, is the name the model sees.
+- Clients are cached by `id`: always give one (a new revision, a new id) and `disconnect()` the old one.
+- A server that lost its session answers 404. The client's own retry (`isReconnectableMCPError`) matches messages ("http 404", "fetch failed"...), and the SDK's `SdkHttpError` message is "Error POSTing to endpoint: <body>": it misses our relay's 404, so we reconnect (`reconnectServer`) and retry once on `status === 404` only. Never on `MCP_CLIENT_TOOL_EXECUTION_FAILED` (a tool's `isError` result, whose text may well say 404): that call ran.
+- The client logs failing calls with their arguments. Our redacting logger is a Proxy: methods it doesn't wrap must be bound to the real logger, and properties read with the logger as receiver (`Reflect.get(target, prop)`), or Pino's private fields throw ("Cannot read private member"). Its `child()` is wrapped too.
+- `client.disconnect()` sends DELETE with its session id. An old client's goodbye can arrive after a new client started its session: a relay must end only the session named.
+- `forwardInstructions` is off by default: servers' instructions stay out of prompts. Keep them out of anything a model reads.
+
+**Skills** (`@mastra/core` 1.74) [spike]:
+- `new Workspace({ skillSource, skills: (ctx) => paths })`: skills come from the source even when the workspace has a filesystem resolver, and a workspace may have skills only. The paths are asked per request.
+- `SkillSource` is `exists`, `stat`, `readFile`, `readdir` (and `realpath`). Mastra skips an invalid skill with only a console error (its name must match its folder, its description at most 1024 characters): `validateSkillContent` (`@mastra/core/skills`) checks it at import and returns its frontmatter.
+- With skills, agents get `skill`, `skill_read` and `skill_search` and a catalog in their system prompt on every step. Many skills cost tokens.
+
+**Plugins and containers** [spike]:
+- Agent Plugins 1.0: a closed root `plugin.json` (`$schema` required), `skills/<name>/SKILL.md` and a root `mcp.json` (`type` required). Only `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` expand; anything else stays as written, and arguments may be empty strings. Claude plugins also expand `${VAR}`, `${VAR:-default}` and `${user_config.KEY}`.
+- GitHub's `/tarball/<sha>` redirects to codeload, which streams without a length; its pax comment is the commit. A repository can be much bigger than its plugin (HyperFrames: 124 MiB for 15.8 MiB of skills): read the manifests first, then keep only the plugin's files as the archive streams.
+- Node 24 uses `HTTPS_PROXY` only with `NODE_USE_ENV_PROXY=1`, and then tunnels plain `http://` through CONNECT to port 80 (egress allows it). npm and uv read the proxy variables.
+- Mount MCP volumes with `NoCopy`, or Docker hands them to root.
+- Docker doesn't kill an exec's process when its attach stream closes, and a server may ignore the end of its input: we start servers through `sh -c 'echo $$ > "$1"; shift; exec "$@"'` and stop them by that pid (TERM, then KILL).
+- Docker's default address pools give about 30 bridge networks. A network per plugin exists only while its container (or an install) does; the reaper drops the rest.
+- Node's fetch gives up on an answer after 300 s (undici's `headersTimeout`): a request that waits for a long install must stay under it, so installs go one server per request, each under `RUNNER_MCP_INSTALL_TIMEOUT_MS` (at most 270 s).
+
+## 21. From earlier research, needed in later milestones
+
 - **Factory patterns to reuse:** phase kinds (resting, working, terminal), seats, decisions outbox with idempotency keys, change-hint SSE.

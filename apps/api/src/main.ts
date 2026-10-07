@@ -28,6 +28,11 @@ process.once('SIGINT', () => void shutdown('SIGINT'));
 system = await bootstrap(config);
 const { logger, mastra } = system;
 
+// A failure nothing awaited is a bug to fix, not a reason to drop every task, browser and session.
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled rejection', { error: reason instanceof Error ? reason.stack : String(reason) });
+});
+
 server = serve({ fetch: system.app.fetch, hostname: config.HOST, port: config.PORT }, (info) => {
   logger.info(`superagent ${APP_VERSION} listening on http://${info.address}:${info.port}`);
 }) as Server;

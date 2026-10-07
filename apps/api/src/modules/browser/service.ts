@@ -213,6 +213,11 @@ export class BrowserService {
     }));
   }
 
+  /** What the runner can run right now, or undefined when it can't be asked. */
+  async runnerReady() {
+    return this.deps.client?.ready();
+  }
+
   /** What stops browsers from working right now, if anything (for the attention inbox). */
   async problem(): Promise<string | undefined> {
     if (!this.deps.client) return 'off';

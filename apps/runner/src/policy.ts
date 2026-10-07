@@ -10,6 +10,8 @@ export const LABELS = {
   task: 'superagent.task',
   profile: 'superagent.profile',
   identity: 'superagent.identity',
+  mcpPackage: 'superagent.mcp.package',
+  mcpNetwork: 'superagent.mcp.network',
 } as const;
 /** Where an identity's profile (cookies, storage) is mounted in its browser. */
 export const PROFILE_DIR = '/profile';
@@ -190,6 +192,157 @@ export function helperSpec(
             : { NoCopy: true }) as Docker.MountSettings['VolumeOptions'],
         },
       ],
+    },
+  };
+}
+
+/** Where a plugin's files are mounted in its MCP container, read-only (`${PLUGIN_ROOT}`). */
+export const PLUGIN_ROOT = '/opt/plugin';
+/** Its servers' own writable folder (`${PLUGIN_DATA}`), kept until the plugin is uninstalled. */
+export const PLUGIN_DATA = '/data';
+
+export function mcpName(config: RunnerConfig, packageId: string): string {
+  return `${config.RUNNER_NAME_PREFIX}-mcp-${packageId}`;
+}
+
+/** A package's own internal network: its containers and the egress proxy, nothing else. */
+export function mcpNetworkName(config: RunnerConfig, packageId: string): string {
+  return `${mcpName(config, packageId)}-net`;
+}
+
+/** MCP containers carry their own runner label, like browsers. */
+export function mcpLabel(config: RunnerConfig): string {
+  return `${config.RUNNER_NAME_PREFIX}-mcp`;
+}
+
+/** A package's volumes: its files and installs (mounted at /opt), and its servers' data. */
+export function mcpVolumes(config: RunnerConfig, packageId: string): { opt: string; data: string } {
+  if (!isTaskId(packageId)) throw new Error(`Not a package id: ${packageId}`);
+  return {
+    opt: `${config.RUNNER_MCP_VOLUME_PREFIX}-${packageId}`,
+    data: `${config.RUNNER_MCP_VOLUME_PREFIX}-data-${packageId}`,
+  };
+}
+
+/** Proxy settings most runtimes read (Node's fetch with NODE_USE_ENV_PROXY, npm, uv, Python, curl). */
+export function proxyEnv(proxy: string): string[] {
+  if (!proxy) return [];
+  return [
+    `HTTP_PROXY=${proxy}`,
+    `HTTPS_PROXY=${proxy}`,
+    `http_proxy=${proxy}`,
+    `https_proxy=${proxy}`,
+    'NO_PROXY=',
+    'no_proxy=',
+    'NODE_USE_ENV_PROXY=1',
+  ];
+}
+
+const NO_COPY = { NoCopy: true } as Docker.MountSettings['VolumeOptions'];
+
+const MCP_ENV = [
+  'HOME=/tmp',
+  'LANG=C.UTF-8',
+  `PLUGIN_ROOT=${PLUGIN_ROOT}`,
+  `PLUGIN_DATA=${PLUGIN_DATA}`,
+  `CLAUDE_PLUGIN_ROOT=${PLUGIN_ROOT}`,
+  `CLAUDE_PLUGIN_DATA=${PLUGIN_DATA}`,
+  'PYTHONDONTWRITEBYTECODE=1',
+  'UV_PYTHON_DOWNLOADS=never',
+  'UV_CACHE_DIR=/tmp/uv',
+  'npm_config_cache=/tmp/.npm',
+  'npm_config_update_notifier=false',
+];
+
+function mcpMounts(config: RunnerConfig, packageId: string, readOnlyOpt: boolean): Docker.MountSettings[] {
+  const volumes = mcpVolumes(config, packageId);
+  // NoCopy: Docker would otherwise copy the image's folder in and hand the volume to root.
+  return [
+    { Type: 'volume', Source: volumes.opt, Target: '/opt', ReadOnly: readOnlyOpt, VolumeOptions: NO_COPY },
+    { Type: 'volume', Source: volumes.data, Target: PLUGIN_DATA, VolumeOptions: NO_COPY },
+  ];
+}
+
+/**
+ * A package's MCP container (decision D36): third-party servers as the sandbox user, no capabilities,
+ * a read-only root and package files, limits; on the package's own network (internal: its only way out
+ * is the egress proxy, and other packages can't be reached) or no network. It only sleeps: the runner
+ * execs each server and relays its stdio.
+ */
+export function mcpSpec(
+  config: RunnerConfig,
+  input: { packageId: string; network: 'egress' | 'none' },
+): Docker.ContainerCreateOptions {
+  const memory = config.RUNNER_MCP_MEMORY_MB * 1024 * 1024;
+  const egress = input.network === 'egress';
+  return {
+    name: mcpName(config, input.packageId),
+    Image: config.RUNNER_MCP_IMAGE,
+    Cmd: ['sleep', 'infinity'],
+    User: SANDBOX_USER,
+    WorkingDir: PLUGIN_ROOT,
+    Env: [...MCP_ENV, ...(egress ? proxyEnv(config.RUNNER_MCP_PROXY) : [])],
+    Labels: {
+      [LABELS.runner]: mcpLabel(config),
+      [LABELS.mcpPackage]: input.packageId,
+      [LABELS.mcpNetwork]: input.network,
+    },
+    NetworkDisabled: !egress,
+    HostConfig: {
+      NetworkMode: egress ? mcpNetworkName(config, input.packageId) : 'none',
+      CapDrop: ['ALL'],
+      SecurityOpt: ['no-new-privileges:true'],
+      ReadonlyRootfs: true,
+      Tmpfs: { '/tmp': 'rw,nosuid,nodev,size=256m' },
+      Memory: memory,
+      MemorySwap: memory,
+      NanoCpus: 1e9,
+      PidsLimit: config.RUNNER_MCP_PIDS_LIMIT,
+      Init: true,
+      Privileged: false,
+      Ulimits: [
+        {
+          Name: 'fsize',
+          Soft: config.RUNNER_FILE_LIMIT_MB * 1024 * 1024,
+          Hard: config.RUNNER_FILE_LIMIT_MB * 1024 * 1024,
+        },
+      ],
+      Mounts: mcpMounts(config, input.packageId, true),
+    },
+  };
+}
+
+/**
+ * A short-lived worker on a package's volumes: preparing them (root, with CHOWN only), writing the
+ * plugin's files (no network), or installing its packages (through the egress proxy, scripts off).
+ */
+export function mcpWorkerSpec(
+  config: RunnerConfig,
+  input: { packageId: string; cmd: string[]; asRoot?: boolean; install?: boolean },
+): Docker.ContainerCreateOptions {
+  const install = Boolean(input.install);
+  const memory = (install ? 1024 : 256) * 1024 * 1024;
+  return {
+    Image: config.RUNNER_MCP_IMAGE,
+    Cmd: input.cmd,
+    User: input.asRoot ? '0:0' : SANDBOX_USER,
+    WorkingDir: '/tmp',
+    Env: [...MCP_ENV, ...(install ? proxyEnv(config.RUNNER_MCP_PROXY) : [])],
+    Labels: { [LABELS.runner]: `${mcpLabel(config)}-worker`, [LABELS.mcpPackage]: input.packageId },
+    NetworkDisabled: !install,
+    HostConfig: {
+      NetworkMode: install ? mcpNetworkName(config, input.packageId) : 'none',
+      CapDrop: ['ALL'],
+      CapAdd: input.asRoot ? ['CHOWN'] : [],
+      SecurityOpt: ['no-new-privileges:true'],
+      ReadonlyRootfs: true,
+      Tmpfs: { '/tmp': `rw,nosuid,nodev,size=${install ? 1024 : 64}m` },
+      Memory: memory,
+      MemorySwap: memory,
+      PidsLimit: install ? 512 : 64,
+      Init: true,
+      Privileged: false,
+      Mounts: mcpMounts(config, input.packageId, false),
     },
   };
 }

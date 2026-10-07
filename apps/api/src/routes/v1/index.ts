@@ -8,6 +8,7 @@ import type { AppDeps, AppEnv } from '../../http/types';
 import { APP_VERSION } from '../../version';
 import { registerAttentionRoutes } from './attention';
 import { registerBrowserRoutes } from './browser';
+import { registerCapabilityRoutes } from './capabilities';
 import { isUpload, MAX_UPLOAD_BYTES, registerKnowledgeRoutes } from './knowledge';
 import { registerMeRoutes } from './me';
 import { registerMemoryRoutes } from './memory';
@@ -50,6 +51,7 @@ export function createV1Router(deps: AppDeps, upgradeWebSocket: UpgradeWebSocket
   registerAttentionRoutes(v1, deps);
   registerWorkspaceRoutes(v1, deps);
   registerBrowserRoutes(v1, deps, upgradeWebSocket);
+  registerCapabilityRoutes(v1, deps);
 
   v1.openAPIRegistry.registerComponent('securitySchemes', 'bearer', { type: 'http', scheme: 'bearer' });
   v1.doc31('/openapi.json', {

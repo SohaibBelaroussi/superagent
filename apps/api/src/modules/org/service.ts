@@ -2,6 +2,7 @@ import type { IMastraLogger } from '@mastra/core/logger';
 import type {
   CreateAgentInput,
   CreateDepartmentInput,
+  McpGrant,
   ModelRef,
   ToolGrant,
   UpdateAgentInput,
@@ -10,6 +11,7 @@ import type {
 import { and, desc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { Db } from '../../db/client';
+import { isUniqueViolation } from '../../db/errors';
 import { type AgentVersionRow, agentDefinitions, agentVersions, departments } from '../../db/schema';
 import { ApiError } from '../../http/problem';
 import type { Mutex } from '../../util/mutex';
@@ -21,19 +23,16 @@ import type { AgentRuntime } from './runtime';
 /** Keys of agents defined in code. Definitions can't take them. */
 export const RESERVED_AGENT_KEYS = new Set(['chief', 'scratch', 'provider-test', 'provider-test-tools']);
 
-function isUniqueViolation(error: unknown): boolean {
-  const e = error as { code?: string; cause?: { code?: string } };
-  return e?.code === '23505' || e?.cause?.code === '23505';
-}
-
 /** What other modules need to know or say about organization changes. */
 export interface OrgHooks {
   /** Why an agent can't be archived right now, if it can't (dispatch knows about its runs). */
   archiveBlocker?: (agent: AgentEntry) => Promise<{ code: string; message: string } | undefined>;
   /** A department was archived (its schedules pause). */
   departmentArchived?: (departmentId: string) => Promise<void>;
-  /** Checks what grants refer to elsewhere (a browser grant's identity must exist). */
-  checkGrants?: (grants: ToolGrant[]) => Promise<void>;
+  /** Checks what grants refer to elsewhere: browser identities, skills, MCP servers and their tools. */
+  checkGrants?: (grants: { tools?: ToolGrant[]; skills?: string[]; mcp?: McpGrant[] }) => Promise<void>;
+  /** A department's MCP grants changed: its agents' tools must be rebuilt. */
+  departmentChanged?: (departmentId: string) => void;
 }
 
 /** Departments and agent definitions: validation, versioning, and keeping the live agents in sync. */
@@ -63,6 +62,7 @@ export class OrgService {
   }
 
   private async createDepartmentLocked(input: CreateDepartmentInput): Promise<DepartmentEntry> {
+    await this.hooks.checkGrants?.({ skills: input.skills, mcp: input.mcp });
     const id = uuidv7();
     try {
       await this.db.insert(departments).values({ id, ...input });
@@ -87,11 +87,13 @@ export class OrgService {
 
   private async updateDepartmentLocked(id: string, input: UpdateDepartmentInput): Promise<DepartmentEntry> {
     this.activeDepartment(id);
+    await this.hooks.checkGrants?.({ skills: input.skills, mcp: input.mcp });
     await this.db
       .update(departments)
       .set({ ...input, updatedAt: new Date() })
       .where(eq(departments.id, id));
     await this.directory.reload();
+    if (input.mcp) this.hooks.departmentChanged?.(id);
     return this.getDepartment(id);
   }
 
@@ -148,6 +150,7 @@ export class OrgService {
       throw new ApiError(409, 'lead_exists', 'This department already has a lead');
     }
     await this.assertTools(input.tools);
+    await this.hooks.checkGrants?.({ skills: input.skills, mcp: input.mcp });
     this.assertModel(input.model);
 
     const id = uuidv7();
@@ -168,6 +171,8 @@ export class OrgService {
           instructions: input.instructions,
           model: input.model,
           tools: input.tools,
+          skills: input.skills,
+          mcp: input.mcp,
         });
       });
     } catch (error) {
@@ -192,8 +197,11 @@ export class OrgService {
       input.description !== undefined ||
       input.instructions !== undefined ||
       input.model !== undefined ||
-      input.tools !== undefined;
+      input.tools !== undefined ||
+      input.skills !== undefined ||
+      input.mcp !== undefined;
     if (input.tools) await this.assertTools(input.tools);
+    await this.hooks.checkGrants?.({ skills: input.skills, mcp: input.mcp });
     if (input.model !== undefined) this.assertModel(input.model);
 
     await this.db.transaction(async (tx) => {
@@ -213,6 +221,8 @@ export class OrgService {
           instructions: input.instructions ?? agent.current.instructions,
           model: input.model !== undefined ? input.model : agent.current.model,
           tools: input.tools ?? agent.current.tools,
+          skills: input.skills ?? agent.current.skills,
+          mcp: input.mcp ?? agent.current.mcp,
         });
       }
       await tx
@@ -237,12 +247,45 @@ export class OrgService {
       .limit(1);
     if (!row) throw new ApiError(404, 'version_not_found', `Agent has no version ${version}`);
     await this.assertTools(row.tools);
+    await this.hooks.checkGrants?.({ skills: row.skills, mcp: row.mcp });
     this.assertModel(row.model);
     await this.db
       .update(agentDefinitions)
       .set({ activeVersion: version, updatedAt: new Date() })
       .where(eq(agentDefinitions.id, id));
     return this.refresh(id, 'Agent version activated');
+  }
+
+  /**
+   * Takes a plugin's skills and MCP servers away from everyone (its uninstall): departments lose the
+   * references, and agents that had them get a new version without them (old versions keep history).
+   */
+  detachCapabilities(plugin: string, slugs: string[]): Promise<void> {
+    return this.configLock.run(async () => {
+      const dropSkill = (ref: string) => ref.split('/')[0] === plugin;
+      const dropMcp = (grant: McpGrant) => slugs.includes(grant.server);
+      for (const department of this.directory.departments({ includeArchived: true })) {
+        if (!department.skills.some(dropSkill) && !department.mcp.some(dropMcp)) continue;
+        await this.db
+          .update(departments)
+          .set({
+            skills: department.skills.filter((ref) => !dropSkill(ref)),
+            mcp: department.mcp.filter((grant) => !dropMcp(grant)),
+            updatedAt: new Date(),
+          })
+          .where(eq(departments.id, department.id));
+      }
+      await this.directory.reload();
+      for (const agent of this.directory.agents()) {
+        if (!agent.current.skills.some(dropSkill) && !agent.current.mcp.some(dropMcp)) continue;
+        await this.updateAgentLocked(agent.id, {
+          skills: agent.current.skills.filter((ref) => !dropSkill(ref)),
+          mcp: agent.current.mcp.filter((grant) => !dropMcp(grant)),
+        });
+      }
+      // Agents of departments that lost MCP grants get rebuilt without those tools.
+      for (const agent of this.directory.agents()) this.runtime.upsert(agent);
+    });
   }
 
   archiveAgent(id: string): Promise<void> {
@@ -304,7 +347,7 @@ export class OrgService {
       }
       seen.add(grant.key);
     }
-    await this.hooks.checkGrants?.(grants);
+    await this.hooks.checkGrants?.({ tools: grants });
   }
 
   private assertModel(model: ModelRef | null): void {

@@ -1,6 +1,8 @@
 import { Agent, type ToolsInput } from '@mastra/core/agent';
 import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
+import type { McpService } from '../capabilities/mcp/service';
+import type { SkillStore } from '../capabilities/skills';
 import {
   DepartmentNotesProcessor,
   type MemoryProfiles,
@@ -31,12 +33,30 @@ export interface CompileDeps {
   leadTools: ToolsInput;
   /** Task workspaces for agents granted files or shell. */
   workspaces: WorkspaceService;
+  /** MCP servers' tools for agents granted them (decision D36). */
+  mcp: McpService;
+  /** Skills for agents and departments they are attached to (decision D37). */
+  skills: SkillStore;
 }
 
 /** Turns one definition (its active version) into a Mastra agent. */
 export function compileAgent(entry: AgentEntry, deps: CompileDeps): Agent {
-  const { directory, settings, catalog, mastra, memory, leadTools, ownerProfile, memoryService, workspaces } =
-    deps;
+  const {
+    directory,
+    settings,
+    catalog,
+    mastra,
+    memory,
+    leadTools,
+    ownerProfile,
+    memoryService,
+    workspaces,
+    mcp,
+    skills,
+  } = deps;
+  // MCP tools are fixed per compile (the runtime rebuilds agents when they change); skills are looked
+  // up per request, so attaching one applies on the next run.
+  const mcpTools = mcp.toolsFor(directory.mcpOf(entry));
   const model = entry.current.model;
   return new Agent({
     id: entry.key,
@@ -51,13 +71,17 @@ export function compileAgent(entry: AgentEntry, deps: CompileDeps): Agent {
         : specialistInstructions(fresh, directory);
     },
     model: model ? routerId(model) : () => settings.modelRouterId('default'),
+    // Built-in tools come last: no MCP tool can take one's name (reserved slugs keep them apart anyway).
     tools:
       entry.role === 'lead'
-        ? { ...catalog.build(entry.current.tools), ...leadTools }
-        : catalog.build(entry.current.tools),
+        ? { ...mcpTools, ...catalog.build(entry.current.tools), ...leadTools }
+        : { ...mcpTools, ...catalog.build(entry.current.tools) },
     memory: entry.role === 'lead' ? memory.lead : memory.specialist,
     // Inside a task only: the task's folder and sandbox (decision D33).
-    workspace: workspaces.workspaceFor(entry.key, entry.current.tools),
+    workspace: workspaces.workspaceFor(entry.key, entry.current.tools, {
+      source: skills.source,
+      paths: () => skills.pathsFor(directory.skillsOf(directory.agent(entry.id) ?? entry)),
+    }),
     inputProcessors:
       entry.role === 'lead'
         ? [ownerProfile, new DepartmentNotesProcessor(memoryService, entry.departmentId)]
@@ -119,6 +143,19 @@ export class AgentRuntime {
       throw new Error(`Agent "${entry.key}" could not be registered`);
     }
     this.logger.debug('Agent compiled', { key: entry.key, version: entry.activeVersion });
+  }
+
+  /** Rebuilds the agents that get tools from these MCP servers (their tools changed). */
+  recompileGranting(slugs: string[]): void {
+    const changed = new Set(slugs);
+    for (const agent of this.deps.directory.agents()) {
+      if (this.deps.directory.mcpOf(agent).some((grant) => changed.has(grant.server))) this.upsert(agent);
+    }
+  }
+
+  /** Rebuilds a department's agents (its MCP grants changed). */
+  recompileDepartment(departmentId: string): void {
+    for (const agent of this.deps.directory.agents({ departmentId })) this.upsert(agent);
   }
 
   remove(key: string): void {

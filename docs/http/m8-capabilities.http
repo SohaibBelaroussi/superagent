@@ -1,0 +1,70 @@
+# M8 walkthrough: secrets, MCP servers, plugins and skills.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Prerequisites: a default model (m1-providers.http); for plugins' stdio servers, the runner
+# (`pnpm stack:up`, or `pnpm dev:runner` next to `pnpm dev`) and `pnpm mcp:up`.
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+@departmentId = paste-a-department-id
+@previewId = paste-a-preview-id
+@pluginId = paste-a-plugin-id
+
+### Everything an agent or a department can be given.
+GET {{baseUrl}}/v1/capabilities
+Authorization: Bearer {{token}}
+
+### A secret for a remote MCP server (stored encrypted, never shown again).
+PUT {{baseUrl}}/v1/secrets/DOCS_TOKEN
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "value": "paste-the-token", "description": "Docs MCP server" }
+
+### A remote MCP server (Streamable HTTP). Public addresses only, unless "allowPrivateNetwork": true.
+POST {{baseUrl}}/v1/mcp-servers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "slug": "docs",
+  "name": "Docs",
+  "url": "https://mcp.example.com/mcp",
+  "headers": { "Authorization": { "secret": "DOCS_TOKEN" } }
+}
+
+### Preview a plugin from GitHub, pinned to a tag's commit: what it brings, needs and skips.
+POST {{baseUrl}}/v1/plugins/preview
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "source": { "kind": "github", "repo": "heygen-com/hyperframes", "ref": "v0.8.140" } }
+
+### Install it (stdio servers: "network": "egress" for public sites through the proxy, or "none").
+POST {{baseUrl}}/v1/plugins
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "previewId": "{{previewId}}", "network": "egress" }
+
+### Its status: installing, installed, or failed (its skills work either way).
+GET {{baseUrl}}/v1/plugins/{{pluginId}}
+Authorization: Bearer {{token}}
+
+### Give a department its skills (all of them, by the plugin's name) and an MCP server's tools.
+### Every agent of the department gets them; "requireApproval" makes each call wait for you.
+PATCH {{baseUrl}}/v1/departments/{{departmentId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "skills": ["hyperframes"],
+  "mcp": [{ "server": "docs", "tools": ["search"], "requireApproval": false }]
+}
+
+### Skills, and one with its files.
+GET {{baseUrl}}/v1/skills
+Authorization: Bearer {{token}}
+
+### Uninstall: its skills and servers leave every agent and department, then everything of it goes.
+DELETE {{baseUrl}}/v1/plugins/{{pluginId}}
+Authorization: Bearer {{token}}

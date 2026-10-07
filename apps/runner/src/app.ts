@@ -4,6 +4,8 @@ import {
   EnsureSandboxInputSchema,
   ExecInputSchema,
   FsRequestSchema,
+  McpInstallInputSchema,
+  McpLaunchSchema,
   SandboxProfileSchema,
 } from '@superagent/shared/runner';
 import { Hono } from 'hono';
@@ -11,6 +13,7 @@ import type { z } from 'zod';
 import type { BrowserContainers } from './browsers';
 import type { RunnerConfig } from './config';
 import { dockerMessage } from './docker';
+import type { McpPackages } from './mcp';
 import { type Logger, RunnerError, type SandboxManager } from './sandboxes';
 
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
@@ -47,6 +50,7 @@ function profileOf(query: string | undefined): string {
 export function createRunnerApp(
   manager: SandboxManager,
   browsers: BrowserContainers,
+  mcp: McpPackages,
   config: RunnerConfig,
   log: Logger,
 ): Hono {
@@ -74,7 +78,11 @@ export function createRunnerApp(
   // Whether sandboxes and browsers can actually run. /health only says the runner is up.
   app.get('/ready', async (c) => {
     const sandboxes = await manager.ready();
-    return c.json({ ...sandboxes, browser: sandboxes.docker && (await browsers.ready()) });
+    return c.json({
+      ...sandboxes,
+      browser: sandboxes.docker && (await browsers.ready()),
+      mcp: sandboxes.docker && (await mcp.ready()),
+    });
   });
 
   app.get('/sandboxes', async (c) => c.json({ items: await manager.list() }));
@@ -153,6 +161,52 @@ export function createRunnerApp(
       throw new RunnerError(404, 'browser_not_found', 'This task has no browser');
     }
     return c.body(null, 204);
+  });
+
+  // stdio MCP servers (decision D36): packages (a plugin's files and installs) and each server's relay.
+  app.get('/mcp', async (c) => c.json({ items: await mcp.list() }));
+
+  app.put('/mcp/packages/:packageId/files', async (c) => {
+    const length = Number(c.req.header('content-length') ?? '0');
+    if (length > MAX_BODY_BYTES) throw new RunnerError(413, 'too_large', 'The files are too large');
+    const tar = Buffer.from(await c.req.arrayBuffer());
+    if (tar.length > MAX_BODY_BYTES) throw new RunnerError(413, 'too_large', 'The files are too large');
+    await mcp.files(c.req.param('packageId'), tar);
+    return c.body(null, 204);
+  });
+
+  app.post('/mcp/packages/:packageId/install', async (c) => {
+    const input = await body(c.req.raw, McpInstallInputSchema);
+    return c.json(await mcp.install(c.req.param('packageId'), input));
+  });
+
+  app.delete('/mcp/packages/:packageId', async (c) => {
+    await mcp.remove(c.req.param('packageId'), c.req.query('volumes') === '1');
+    return c.body(null, 204);
+  });
+
+  app.put('/mcp/servers/:serverId/launch', async (c) => {
+    mcp.launch(c.req.param('serverId'), await body(c.req.raw, McpLaunchSchema));
+    return c.body(null, 204);
+  });
+
+  // The server was disabled: its launch is forgotten and its process stopped.
+  app.delete('/mcp/servers/:serverId/launch', (c) => {
+    mcp.forget(c.req.param('serverId'));
+    return c.body(null, 204);
+  });
+
+  // The server's Streamable HTTP endpoint (JSON responses; no server-sent stream).
+  app.on(['GET', 'POST', 'DELETE'], '/mcp/servers/:serverId', async (c) => {
+    if (c.req.method === 'GET') return c.body(null, 405, { allow: 'POST, DELETE' });
+    const text = await c.req.text();
+    const answer = await mcp.handle(
+      c.req.param('serverId'),
+      c.req.method,
+      c.req.header('mcp-session-id'),
+      text,
+    );
+    return new Response(answer.body || null, { status: answer.status, headers: answer.headers });
   });
 
   /** Deletes an identity's profile volume (404 if it had none). */

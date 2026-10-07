@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "demo-kit",
+  "version": "1.2.0",
+  "description": "A test plugin: a skill and a stdio MCP server.",
+  "license": "MIT",
+  "homepage": "https://example.com/demo-kit"
+}

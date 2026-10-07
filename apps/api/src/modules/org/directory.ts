@@ -1,4 +1,4 @@
-import type { AgentRole, ModelRef, ToolGrant } from '@superagent/shared';
+import type { AgentRole, McpGrant, ModelRef, ToolGrant } from '@superagent/shared';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../../db/client';
 import { agentDefinitions, agentVersions, departments } from '../../db/schema';
@@ -9,6 +9,9 @@ export interface DepartmentEntry {
   name: string;
   description: string;
   autoClose: boolean;
+  /** Skills and MCP grants every agent of the department gets. */
+  skills: string[];
+  mcp: McpGrant[];
   createdAt: Date;
   updatedAt: Date;
   archivedAt: Date | null;
@@ -20,6 +23,8 @@ export interface AgentVersionEntry {
   instructions: string;
   model: ModelRef | null;
   tools: ToolGrant[];
+  skills: string[];
+  mcp: McpGrant[];
   createdAt: Date;
 }
 
@@ -92,6 +97,8 @@ export class OrgDirectory {
             instructions: version.instructions,
             model: version.model,
             tools: version.tools,
+            skills: version.skills,
+            mcp: version.mcp.map((grant) => ({ ...grant, requireApproval: grant.requireApproval ?? false })),
             createdAt: version.createdAt,
           },
           createdAt: agent.createdAt,
@@ -135,6 +142,44 @@ export class OrgDirectory {
   /** Active specialists of a department: the lead's team. */
   membersOf(departmentId: string): AgentEntry[] {
     return this.agents({ departmentId, role: 'specialist' });
+  }
+
+  /** An agent's skills: its own and its department's. */
+  skillsOf(agent: AgentEntry): string[] {
+    return [...new Set([...agent.current.skills, ...(this.department(agent.departmentId)?.skills ?? [])])];
+  }
+
+  /** An agent's MCP grants: its own, then its department's for servers it doesn't grant itself. */
+  mcpOf(agent: AgentEntry): McpGrant[] {
+    const own = agent.current.mcp;
+    const servers = new Set(own.map((grant) => grant.server));
+    const inherited = (this.department(agent.departmentId)?.mcp ?? []).filter((g) => !servers.has(g.server));
+    return [...own, ...inherited];
+  }
+
+  /** Active agents and departments that grant an MCP server (their keys and slugs). */
+  grantingMcp(slug: string): string[] {
+    return [
+      ...this.agents()
+        .filter((a) => a.current.mcp.some((grant) => grant.server === slug))
+        .map((a) => `agent ${a.key}`),
+      ...this.departments()
+        .filter((d) => d.mcp.some((grant) => grant.server === slug))
+        .map((d) => `department ${d.slug}`),
+    ];
+  }
+
+  /** Active agents and departments whose skills name a plugin (or one of its skills). */
+  grantingPlugin(plugin: string): string[] {
+    const names = (refs: string[]) => refs.some((ref) => ref.split('/')[0] === plugin);
+    return [
+      ...this.agents()
+        .filter((a) => names(a.current.skills))
+        .map((a) => `agent ${a.key}`),
+      ...this.departments()
+        .filter((d) => names(d.skills))
+        .map((d) => `department ${d.slug}`),
+    ];
   }
 
   /** Active agents whose current version references a provider (a deleted provider would break them). */

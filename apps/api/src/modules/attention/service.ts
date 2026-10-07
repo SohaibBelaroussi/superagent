@@ -1,6 +1,7 @@
 import type { AttentionItem } from '@superagent/shared';
 import type { TaskRow } from '../../db/schema';
 import type { BrowserService } from '../browser/service';
+import type { McpService } from '../capabilities/mcp/service';
 import { approvalId, type DispatchService, type PendingApproval } from '../dispatch/service';
 import type { TaskService, TaskSignals } from '../ledger/service';
 import type { OrgDirectory } from '../org/directory';
@@ -20,6 +21,7 @@ export interface AttentionDeps {
   storageEnabled: boolean;
   workspaces: WorkspaceService;
   browsers: BrowserService;
+  mcp: McpService;
 }
 
 /** How long the runner's health is trusted (the inbox is read often; the runner may be down). */
@@ -160,6 +162,24 @@ export class AttentionService {
     });
   }
 
+  private mcpCheck: { at: number; problem: Promise<string | undefined> } | undefined;
+
+  /** Whether the runner can run stdio MCP servers (image and network), checked at most every 30 s. */
+  private mcpProblem(): Promise<string | undefined> {
+    const now = Date.now();
+    if (!this.mcpCheck || now - this.mcpCheck.at > RUNNER_CHECK_MS) {
+      this.mcpCheck = {
+        at: now,
+        problem: this.deps.workspaces.problem().then(async (sandboxes) => {
+          if (sandboxes === 'off' || sandboxes === 'unreachable' || sandboxes === 'no-docker')
+            return sandboxes;
+          return (await this.deps.browsers.runnerReady())?.mcp === false ? 'no-image' : undefined;
+        }),
+      };
+    }
+    return this.mcpCheck.problem;
+  }
+
   private browserProblem(): Promise<string | undefined> {
     const now = Date.now();
     if (!this.browserCheck || now - this.browserCheck.at > RUNNER_CHECK_MS) {
@@ -253,6 +273,38 @@ export class AttentionService {
         ],
       }[problem ?? ''];
       if (what) items.push(item('sandboxes', what[0] as string, what[1] as string));
+    }
+    // MCP servers someone is granted that don't work: their tools are missing or failing.
+    for (const server of this.deps.mcp.list()) {
+      if (!server.enabled || server.status !== 'failed') continue;
+      const users = this.deps.directory.grantingMcp(server.slug);
+      if (users.length === 0 && !server.plugin) continue;
+      items.push(
+        item(
+          `mcp-${server.slug}`,
+          `The MCP server ${server.name} does not work`,
+          `${server.statusDetail ?? 'Its tools could not be listed'}${users.length > 0 ? ` (granted to ${users.join(', ')})` : ''}. Fix it, then list its tools again (POST /v1/mcp-servers/{id}/refresh).`,
+        ),
+      );
+    }
+    if (this.deps.mcp.list().some((server) => server.enabled && server.transport === 'stdio')) {
+      const problem = await this.mcpProblem();
+      const what = {
+        off: [
+          'Plugin MCP servers are off',
+          'Set RUNNER_URL and RUNNER_TOKEN: their stdio servers cannot run.',
+        ],
+        unreachable: [
+          "The runner can't be reached",
+          "Plugins' stdio MCP servers can't run until it is back.",
+        ],
+        'no-docker': ["The runner can't reach Docker", "Plugins' stdio MCP servers can't run."],
+        'no-image': [
+          'Plugin MCP servers are not set up',
+          'Build the MCP image ("docker compose --profile mcp build mcp") and start the egress proxy ("docker compose up -d egress").',
+        ],
+      }[problem ?? ''];
+      if (what) items.push(item('mcp', what[0] as string, what[1] as string));
     }
     const browsing = this.deps.directory
       .agents()
