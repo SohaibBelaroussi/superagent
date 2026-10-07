@@ -42,6 +42,8 @@ Details and evidence: [api-plan.md](api-plan.md), [notes/mastra-1.74.md](notes/m
 | D14 | Agent and department definitions live in our own versioned tables. They compile into runtime Mastra `Agent`s, hot-swapped with `removeAgent` + `addAgent`. Mastra Editor isn't used. | Your call. Also hedges against features moving into EE. Spike-verified, including subagent edits reaching the lead without a rebuild. | you + spike |
 | D15 | The chief reaches departments through task threads plus signals (our dispatch module). Leads reach their specialists through Mastra's built-in subagent delegation. | The chief never blocks, each task keeps its thread, and leads keep their own background budget. | vision |
 | D16 | The task ledger, phases, events and the decisions outbox are ours, modelled on Mastra Factory. | Mastra has no board or task entity. | vision |
+| D24 | A lead's team is its department's active specialists, resolved per request. Specialists receive only the lead's delegation prompt, not the lead's system prompt or history. One active lead per department (enforced by a partial unique index). | No team lists to maintain: adding, editing or archiving a specialist changes the team on the next run. Specialists get a clean, self-contained task. | built in M2 |
+| D25 | Tools are a code-defined catalog (`core`, `web` packs); definitions grant tools by key. The web pack uses the self-hosted SearXNG and Crawl4AI services, and refuses internal and private addresses. | New capabilities ship as code or, from M8, as plugins. Web content is untrusted, so a prompt-injected agent must not reach Postgres, the API, cloud metadata or the tailnet. | built in M2 |
 
 ## Server and code
 

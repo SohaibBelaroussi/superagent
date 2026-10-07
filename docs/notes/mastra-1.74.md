@@ -418,7 +418,41 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - Model discovery, chat, streaming with token usage, and tool calling all pass.
 - It lists no embedding model. M4 needs one: from that provider or another.
 
-## 13. From earlier research, needed in later milestones
+## 13. From the M1 review (2026-10-07)
+
+**Gateway auth and Mastra's model cache:**
+- Return a non-empty `apiKey` with `source: 'gateway'` from `resolveAuth`.
+- If it returns an empty string, Mastra treats that as no credentials and falls back to `getApiKey()` with source `legacy`. On that path `ModelRouterLanguageModel` caches the model in a static WeakMap per gateway, with a key that ignores base URL and headers. Keyless providers then never pick up URL or header edits, and a disabled or deleted provider keeps working.
+- Our gateway returns a revision-scoped placeholder (`sa-gateway:<id>:<updatedAt>`) and never the real key. `buildChatModel` reads the real key from the registry.
+
+**Generate and stream don't throw on retryable failures:**
+- Mastra's `generate` and `stream` resolve with empty text and `finishReason` `retry` or `aborted` on connection refused, HTTP 5xx or abort. Only 4xx errors throw.
+- So check `finishReason`, not just text.
+
+**Global tool registration:**
+- An agent bound to Mastra (`mastra` option or `addAgent`) registers its tools globally (`mastra.addTool`, first wins). They show up in `/api/tools`.
+- Remove throwaway tools with `mastra.removeTool(id)`.
+
+**AES-GCM in Node:**
+- `createDecipheriv` without `{ authTagLength: 16 }` accepts truncated tags.
+- Pass `authTagLength` and check the tag length.
+
+## 14. Learned while building M2 (2026-10-07)
+
+**Delegation:**
+- `defaultOptions.delegation.messageFilter: () => []` gives a specialist only the lead's delegation prompt.
+- Subagent tools take `{ prompt }`.
+- The lead's `agents` function closes over Mastra and looks specialists up per request.
+
+**Crawl4AI 0.9.4** binds to its own loopback, refusing outside connections, unless `CRAWL4AI_API_TOKEN` is set. Requests then need `Authorization: Bearer <token>`. `POST /md { url, f: 'fit' }` returns `{ markdown, success }`.
+
+**SearXNG** needs `search.formats: [html, json]` and `server.limiter: false` for API use (`infra/searxng/settings.yml`).
+
+**URL normalization:** `new URL()` normalizes IPv4-mapped IPv6 to hex (`[::ffff:a00:1]`), so private-address checks must decode that form.
+
+**Live result:** the owner's model led a research department, delegated to the web researcher, and produced a sourced answer via the real SearXNG.
+
+## 15. From earlier research, needed in later milestones
 
 - **DockerSandbox 0.9.2:**
   - One long-lived container per sandbox, reused by label.

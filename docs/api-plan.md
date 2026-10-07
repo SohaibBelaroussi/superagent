@@ -4,8 +4,9 @@
 
 **Progress:**
 - M0 (foundation): merged in PR #1.
-- M1 (providers and models): done on branch `m1-providers`, PR #2. Verified live against the owner's provider (chat, streaming usage, tool calls).
-- Next: M2 (agents, departments, tool catalog).
+- M1 (providers and models): PR #2. Verified live against the owner's provider (chat, streaming usage, tool calls).
+- M2 (agents, departments, tool catalog): done on branch `m2-agents`, PR #3. Verified live: a real model leading a research department delegated to a specialist that searched the web.
+- Next: M3 (ledger, board and dispatch).
 
 **Related docs:**
 - [decisions.md](decisions.md): what is settled and why.
