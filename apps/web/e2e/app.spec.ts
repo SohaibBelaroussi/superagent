@@ -167,6 +167,43 @@ test("shows a task's transcript, empty until the task goes to its lead", async (
   await expect(page.getByText('The transcript starts when the task goes to its lead.')).toBeVisible();
 });
 
+test('lists what needs you in the inbox, counted in the rail', async ({ page }) => {
+  await signIn(page);
+  const inbox = page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: /inbox/i });
+  await expect(inbox).toContainText('waiting');
+  await inbox.click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Inbox' })).toBeVisible();
+  await expect(page).toHaveTitle('Inbox · superagent');
+  // The e2e stack runs without a model, and the inbox says what that stops.
+  await expect(page.getByText('No default model is set: agents cannot run')).toBeVisible();
+});
+
+test('goes anywhere from the command palette', async ({ page }) => {
+  await signIn(page);
+  await page.keyboard.press('Control+k');
+  const search = page.getByRole('combobox', { name: 'Search pages, tasks and actions' });
+  await expect(search).toBeVisible();
+  await search.fill('board');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { level: 1, name: 'Board' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeHidden();
+});
+
+test('can be added to a home screen', async ({ page, request }) => {
+  const manifest = await request.get('/manifest.webmanifest');
+  expect(manifest.status()).toBe(200);
+  expect(manifest.headers()['content-type']).toContain('application/manifest+json');
+  const body = await manifest.json();
+  expect(body).toMatchObject({ name: 'superagent', start_url: '/', display: 'standalone' });
+  for (const icon of body.icons as Array<{ src: string; type: string }>) {
+    const res = await request.get(icon.src);
+    expect(res.status(), icon.src).toBe(200);
+    expect(res.headers()['content-type'], icon.src).toBe(icon.type);
+  }
+  await page.goto('/sign-in');
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', '/manifest.webmanifest');
+});
+
 test('works on a phone: the rail becomes a drawer, and nothing scrolls sideways', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await signIn(page);

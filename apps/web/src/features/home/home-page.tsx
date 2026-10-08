@@ -1,15 +1,5 @@
 import type { AttentionItem, Task, TaskPhase } from '@superagent/shared';
-import {
-  ArrowRight,
-  CircleCheck,
-  CircleHelp,
-  HeartPulse,
-  type LucideIcon,
-  Plus,
-  ScanEye,
-  ShieldQuestion,
-  TriangleAlert,
-} from 'lucide-react';
+import { ArrowRight, CircleCheck, Plus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { errorMessage } from '../../api/client';
@@ -18,7 +8,7 @@ import { useMe } from '../../api/session';
 import { cn } from '../../lib/cn';
 import { formatCost, formatTokens, plural } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
-import { PRIORITIES, TONE_TEXT, type Tone } from '../../lib/tones';
+import { PRIORITIES, TONE_TEXT } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
 import { PhaseIcon } from '../../ui/icons';
@@ -26,6 +16,7 @@ import { Page, Panel, ProgressBar, Section } from '../../ui/layout';
 import { colorTransition, focusRingInset } from '../../ui/recipes';
 import { RelativeTime } from '../../ui/time';
 import { QuickAsk } from '../conversations/quick-ask';
+import { KINDS } from '../inbox/kinds';
 import { NewTaskDialog } from '../tasks/new-task-dialog';
 import { type OrgLookup, useOrg } from '../tasks/org';
 import { DepartmentLabel, taskProgress } from '../tasks/task-bits';
@@ -47,14 +38,6 @@ function weekStart(): string {
   date.setDate(date.getDate() - 6);
   return date.toISOString();
 }
-
-const KIND: Record<AttentionItem['kind'], { icon: LucideIcon; tone: Tone; label: string }> = {
-  approval: { icon: ShieldQuestion, tone: 'orange', label: 'Approval' },
-  question: { icon: CircleHelp, tone: 'orange', label: 'Question' },
-  problem: { icon: TriangleAlert, tone: 'red', label: 'Problem' },
-  review: { icon: ScanEye, tone: 'purple', label: 'Review' },
-  health: { icon: HeartPulse, tone: 'red', label: 'Setup' },
-};
 
 const rowLink = cn(
   'flex min-w-0 items-center gap-3 rounded-lg px-3 py-2.5 outline-hidden hover:bg-fill',
@@ -131,7 +114,18 @@ export function HomePage() {
           />
         </div>
 
-        <Section title="Needs you" id="home-needs">
+        <Section
+          title="Needs you"
+          id="home-needs"
+          action={
+            <Link
+              to="/inbox"
+              className="flex items-center gap-1 text-caption text-muted-foreground hover:text-foreground"
+            >
+              Inbox <ArrowRight aria-hidden className="size-3" />
+            </Link>
+          }
+        >
           {attention.isPending ? (
             <ListSkeleton />
           ) : attention.isError ? (
@@ -224,7 +218,7 @@ function Stat({ label, value, hint }: { label: string; value: string | null; hin
 }
 
 function AttentionRow({ item, org }: { item: AttentionItem; org: OrgLookup }) {
-  const kind = KIND[item.kind];
+  const kind = KINDS[item.kind];
   const Icon = kind.icon;
   const department = item.departmentId ? org.department(item.departmentId) : undefined;
   const body = (

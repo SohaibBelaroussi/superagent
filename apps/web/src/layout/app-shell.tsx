@@ -1,8 +1,9 @@
 import { Menu as MenuIcon } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router';
 import { LiveEventsProvider } from '../api/live';
 import { useSession } from '../api/session';
+import { useAttentionNotifications } from '../features/inbox/attention-notifications';
 import { cn } from '../lib/cn';
 import { Button } from '../ui/button';
 import { Sheet } from '../ui/dialog';
@@ -40,9 +41,39 @@ export function RequireSession() {
   );
 }
 
-/** The frame: the rail on the left (a drawer on phones) and the page in a rounded card beside it. */
+/** The command palette, loaded the first time it opens: most visits never use it. */
+const CommandPalette = lazy(async () => ({
+  default: (await import('../features/palette/command-palette')).CommandPalette,
+}));
+
+/**
+ * The frame: the rail on the left (a drawer on phones) and the page in a rounded card beside it. It
+ * also answers ⌘K with the command palette, and tells you of new things that need you (if you asked).
+ */
 export function AppShell() {
+  useAttentionNotifications();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteLoaded, setPaletteLoaded] = useState(false);
+  const openPalette = () => {
+    setDrawerOpen(false);
+    setPaletteLoaded(true);
+    setPaletteOpen(true);
+  };
+
+  // ⌘K (Ctrl+K) opens the palette from anywhere, and closes it again.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPaletteLoaded(true);
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <div className="flex h-dvh flex-col bg-sidebar lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
       <a
@@ -52,7 +83,7 @@ export function AppShell() {
         Skip to content
       </a>
       <aside className="hidden min-h-0 lg:block">
-        <Sidebar />
+        <Sidebar onSearch={openPalette} />
       </aside>
 
       <header className="flex h-12 shrink-0 items-center gap-1.5 px-2 lg:hidden">
@@ -67,7 +98,7 @@ export function AppShell() {
         label="Navigation"
         className="bg-sidebar shadow-overlay"
       >
-        <Sidebar onNavigate={() => setDrawerOpen(false)} />
+        <Sidebar onNavigate={() => setDrawerOpen(false)} onSearch={openPalette} />
       </Sheet>
 
       <div className="flex min-h-0 flex-1 flex-col px-1.5 pb-1.5 lg:py-2 lg:pr-2 lg:pl-0">
@@ -81,6 +112,11 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      {paletteLoaded ? (
+        <Suspense fallback={null}>
+          <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

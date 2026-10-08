@@ -1,0 +1,16 @@
+{
+  "name": "superagent",
+  "short_name": "superagent",
+  "description": "Your chief of staff and its departments: the board, the inbox and your conversations.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#151515",
+  "theme_color": "#151515",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
