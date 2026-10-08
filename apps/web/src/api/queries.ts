@@ -35,21 +35,36 @@ export const queryKeys = {
   taskArtifacts: (id: string) => ['task', id, 'artifacts'] as const,
   attention: ['attention'] as const,
   profile: ['profile'] as const,
+  agentVersions: (id: string) => ['agents', id, 'versions'] as const,
+  departmentNotes: (id: string) => ['departments', id, 'notes'] as const,
+  capabilities: ['capabilities'] as const,
+  identities: ['browser-identities'] as const,
+  settings: ['settings'] as const,
+  providers: ['providers'] as const,
+  providerModels: (id: string) => ['providers', id, 'models'] as const,
+  schedules: ['schedules'] as const,
+  knowledge: ['knowledge'] as const,
 };
 
+/**
+ * Every department, archived ones included: tasks and history still name them. Lists you pick from
+ * use `useOrg().departments`, the active ones.
+ */
 export function useDepartments() {
   return useQuery({
     queryKey: queryKeys.departments,
-    queryFn: ({ signal }) => api(DepartmentListSchema, '/v1/departments', { signal }),
+    queryFn: ({ signal }) =>
+      api(DepartmentListSchema, '/v1/departments', { signal, query: { includeArchived: true } }),
     select: (data) => data.items,
     staleTime: 5 * 60_000,
   });
 }
 
+/** Every agent, archived ones included (as for departments), each with its active version. */
 export function useAgents() {
   return useQuery({
     queryKey: queryKeys.agents,
-    queryFn: ({ signal }) => api(AgentListSchema, '/v1/agents', { signal }),
+    queryFn: ({ signal }) => api(AgentListSchema, '/v1/agents', { signal, query: { includeArchived: true } }),
     select: (data) => data.items,
     staleTime: 5 * 60_000,
   });

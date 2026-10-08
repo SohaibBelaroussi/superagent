@@ -1,5 +1,6 @@
 import type { Task, TaskPriority } from '@superagent/shared';
 import { type FormEvent, useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import { errorMessage } from '../../api/client';
 import { useCreateTask } from '../../api/queries';
 import { departmentTone, PRIORITIES, TONE_DOT } from '../../lib/tones';
@@ -41,12 +42,24 @@ export function NewTaskDialog({
   const [errors, setErrors] = useState<{ title?: string; brief?: string; department?: string }>({});
   const [failure, setFailure] = useState<string | null>(null);
 
+  /** The department the page is showing, else one with a lead (its tasks start right away). */
+  const defaultDepartment = () =>
+    initialDepartment ??
+    (org.departments.find((department) => department.lead) ?? org.departments[0])?.id ??
+    null;
+
+  // The departments arrive after the dialog opened: choose one then.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when the departments load
+  useEffect(() => {
+    if (open && departmentId === null) setDepartmentId(defaultDepartment());
+  }, [org.ready]);
+
   // Each opening starts fresh, on the department the board is showing. Only on opening: later
   // changes to the org list must not wipe what you typed.
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the dialog opens, see above
   useEffect(() => {
     if (!open) return;
-    setDepartmentId(initialDepartment ?? org.departments[0]?.id ?? null);
+    setDepartmentId(defaultDepartment());
     setTitle('');
     setBrief('');
     setPriority('normal');
@@ -114,7 +127,15 @@ export function NewTaskDialog({
         {failure ? <Notice tone="destructive">{failure}</Notice> : null}
         {org.ready && org.departments.length === 0 ? (
           <Notice tone="warning" title="No departments yet">
-            Create a department first (in the API for now: POST /v1/departments).
+            Tasks go to departments.{' '}
+            <Link
+              to="/departments?new=1"
+              onClick={() => onOpenChange(false)}
+              className="text-foreground underline underline-offset-2"
+            >
+              Set one up first
+            </Link>
+            .
           </Notice>
         ) : null}
 

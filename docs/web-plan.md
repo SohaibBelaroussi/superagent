@@ -15,10 +15,16 @@
   - a message sent while the chief was answering waited for its turn;
   - leads' reports appeared as cards linked to their tasks, and notices of reports on the way as notes;
   - a task's transcript showed the brief, the lead's tool calls and its specialist's answer; it stayed whole while a call waited for approval, and after the approval the rest of the turn streamed in.
-- W3 (the inbox): in review. Verified in a browser against the same scripted API:
+- W3 (the inbox): merged in PR #13. Verified in a browser against the same scripted API:
   - the inbox put the calls to approve first, and accepting a result took it off the list at once;
   - the rail counted what waits;
   - the command palette (Ctrl+K) found pages and tasks, and a question typed into it opened the chief's conversation with the question sent.
+- W4 (the organization): in review. Verified in a browser against the same scripted API, on a desktop and a phone, in both themes:
+  - a department set up from the rail opened on its team, where its lead was added and then given a tool, saved as a new version;
+  - a change to the lead's instructions showed as a diff against the version in use, and leaving with unsaved changes asked first;
+  - a schedule built from "every week, Monday and Thursday at 9" showed its next runs in its timezone, and "Run now" made its task;
+  - an uploaded document was found by the search agents use, with the words marked;
+  - notes written on the department page reached the lead's notes.
 
 **Related docs:**
 - [decisions.md](decisions.md): D06 and D43–D48 cover the web app.
@@ -233,6 +239,25 @@ Each milestone ends like the API's: tests pass, a PR, one review, fixes, CI gree
 - Department notes and your profile.
 - Schedules: create, edit, pause, run now, with readable cron.
 - Knowledge: upload, search, delete.
+
+**Built:**
+- **Departments** (`/departments`): each one as a card with its lead, specialists, open tasks and schedules; archived ones behind a toggle. A new one gets a slug from its name and opens on its team, to add its lead. The rail lists them with a + for a new one.
+- **A department's page** (`/departments/:slug`), in tabs:
+  - its board;
+  - its team: the lead and specialists as cards (model, tools, how many ask first), adding either;
+  - its schedules;
+  - its notes, which you can correct: a save first checks the lead didn't change them meanwhile, and offers to keep theirs or replace them;
+  - its settings: name, purpose, closing tasks without review, the skills and MCP servers every agent of it gets, and archiving (once it has no agents).
+- **An agent's page** (`/agents/:key`):
+  - its definition: name, description, model (the default or any enabled model), instructions, catalog tools (each can ask first; the browser can use an identity), skills by plugin, MCP servers (all their tools or some), with what its department already gives shown as fixed;
+  - its versions: what each changed, the one in use, the instructions of any version against it as a diff, and switching back.
+
+  A save sends only what changed, so a new version comes only from a change to the definition (a rename makes none), and the save bar says which version it makes. Leaving with unsaved changes asks first; so do the department's notes and settings.
+- **Schedules** (`/schedules`, and each department's tab): each in words ("Every Monday and Thursday at 9:00 AM"), its next run in its timezone, its last task and who set it up; run now, pause, resume, edit, delete. The form builds the cron from a frequency, days and a time, or takes one as written, and shows the next runs before you save. They come from croner, the library and version the server uses, and enforce its 5-minute limit; cronstrue words the crons the form doesn't build.
+- **Knowledge** (`/knowledge`): drop or choose files (they go up one at a time, each saying how it went), for every department or one; search them as agents do, with the words marked; delete.
+- **Your profile** (`/settings/profile`, from the account menu): what agents know about you, which the chief keeps; emptying a field removes it.
+- The palette finds agents and departments, and starts a new department or schedule.
+- Dialogs without a field open on themselves, so the first Escape closes them. Switches and checkboxes take their names from their labels: Base UI gives the label's `for` to its hidden input.
 
 ### W5: settings and usage
 

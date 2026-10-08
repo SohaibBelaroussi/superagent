@@ -19,22 +19,32 @@ export function Tabs<T extends string>({
   items,
   children,
   className,
+  listClassName,
 }: {
   value: T;
   onValueChange: (value: T) => void;
   items: readonly TabItem<T>[];
   children?: ReactNode;
   className?: string;
+  /** The tab row's own classes (padding that lines the tabs up with the page's header). */
+  listClassName?: string;
 }) {
   return (
     <Base.Root value={value} onValueChange={(next) => onValueChange(next as T)} className={className}>
-      <Base.List className="relative flex gap-5 border-b border-border">
+      <Base.List
+        className={cn(
+          // The rule is an inset shadow, not a border: the row scrolls on a phone, and a scroller would clip
+          // the indicator where it overlaps a border.
+          'relative flex shrink-0 gap-5 overflow-x-auto [scrollbar-width:none] shadow-[inset_0_-1px_0_var(--color-border)]',
+          listClassName,
+        )}
+      >
         {items.map((item) => (
           <Base.Tab
             key={item.value}
             value={item.value}
             className={cn(
-              'flex h-10 cursor-pointer items-center gap-1.5 text-label text-muted-foreground outline-hidden hover:text-foreground data-active:text-foreground',
+              'flex h-10 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-label text-muted-foreground outline-hidden hover:text-foreground data-active:text-foreground',
               colorTransition,
               focusRingInset,
             )}
@@ -43,7 +53,7 @@ export function Tabs<T extends string>({
             {item.meta}
           </Base.Tab>
         ))}
-        <Base.Indicator className="absolute bottom-[-1px] left-0 h-0.5 w-(--active-tab-width) translate-x-(--active-tab-left) rounded-full bg-foreground transition-[translate,width] duration-200 ease-out-custom" />
+        <Base.Indicator className="absolute bottom-0 left-0 h-0.5 w-(--active-tab-width) translate-x-(--active-tab-left) rounded-full bg-foreground transition-[translate,width] duration-200 ease-out-custom" />
       </Base.List>
       {children}
     </Base.Root>
@@ -54,12 +64,15 @@ export const TabPanel = ({
   value,
   children,
   className,
+  keepMounted,
 }: {
   value: string;
   children: ReactNode;
   className?: string;
+  /** Stay mounted while hidden: a form keeps what you typed when you look at another tab. */
+  keepMounted?: boolean;
 }) => (
-  <Base.Panel value={value} className={cn('outline-hidden', className)}>
+  <Base.Panel value={value} keepMounted={keepMounted} className={cn('outline-hidden', className)}>
     {children}
   </Base.Panel>
 );
@@ -110,5 +123,14 @@ export function Segmented<T extends string>({
         </Toggle>
       ))}
     </ToggleGroup>
+  );
+}
+
+/** A count after a tab's label ("Versions 4"). */
+export function TabCount({ children }: { children: ReactNode }) {
+  return (
+    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-fill px-1.5 text-meta text-muted-foreground tabular-nums">
+      {children}
+    </span>
   );
 }

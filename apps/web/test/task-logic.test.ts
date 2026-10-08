@@ -12,6 +12,7 @@ const org: OrgLookup = {
   agent: (id) => (id === ada.id ? ada : undefined),
   agentByKey: (key) => (key === ada.key ? ada : undefined),
   departments: [research],
+  agents: [ada],
   ready: true,
 };
 

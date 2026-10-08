@@ -1,15 +1,20 @@
 import { Autocomplete } from '@base-ui/react/autocomplete';
 import { Dialog } from '@base-ui/react/dialog';
 import {
+  Building2,
+  CalendarClock,
+  CircleUserRound,
   CornerDownLeft,
   House,
   Inbox,
+  Library,
   type LucideIcon,
   MessagesSquare,
   Plus,
   Search,
   SquareKanban,
   SquareStack,
+  UserRound,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
@@ -83,9 +88,13 @@ export function CommandPalette({
     close();
     navigate(to);
   };
-  // On a department's board, a new task starts in that department.
-  const boardDepartment =
-    pathname === '/board' ? org.departmentBySlug(params.get('department') ?? '')?.id : undefined;
+  // On a department's board or page, a new task starts in that department.
+  const pageSlug = pathname.startsWith('/departments/')
+    ? pathname.slice('/departments/'.length)
+    : pathname === '/board'
+      ? params.get('department')
+      : null;
+  const boardDepartment = pageSlug ? org.departmentBySlug(pageSlug)?.id : undefined;
 
   // Built each render: a few dozen entries, and the query changes them anyway.
   const groups = ((): Group[] => {
@@ -107,15 +116,57 @@ export function CommandPalette({
         run: go('/chief'),
       },
       { value: 'board', label: 'Board', keywords: 'tasks kanban', icon: SquareKanban, run: go('/board') },
+      {
+        value: 'departments',
+        label: 'Departments',
+        keywords: 'organization teams org chart',
+        icon: Building2,
+        run: go('/departments'),
+      },
+      {
+        value: 'schedules',
+        label: 'Schedules',
+        keywords: 'recurring cron repeat',
+        icon: CalendarClock,
+        run: go('/schedules'),
+      },
+      {
+        value: 'knowledge',
+        label: 'Knowledge',
+        keywords: 'documents files upload search',
+        icon: Library,
+        run: go('/knowledge'),
+      },
+      {
+        value: 'profile',
+        label: 'Your profile',
+        keywords: 'me about preferences memory settings',
+        icon: CircleUserRound,
+        run: go('/settings/profile'),
+      },
       ...org.departments.map((department) => ({
         value: `department:${department.slug}`,
         label: department.name,
-        keywords: `${department.slug} department board`,
+        keywords: `${department.slug} department team notes`,
         hint: 'Department',
         dot: TONE_DOT[departmentTone(department.slug)],
-        run: go(`/board?department=${encodeURIComponent(department.slug)}`),
+        run: go(`/departments/${encodeURIComponent(department.slug)}`),
       })),
     ];
+    const agents: Command[] = [...org.agents]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((agent) => {
+        const department = org.department(agent.departmentId);
+        const role = agent.role === 'lead' ? 'Lead' : 'Specialist';
+        return {
+          value: `agent:${agent.key}`,
+          label: agent.name,
+          keywords: `${agent.key} ${role} agent ${department?.name ?? ''}`,
+          hint: department ? `${role}, ${department.name}` : role,
+          icon: UserRound,
+          run: go(`/agents/${encodeURIComponent(agent.key)}`),
+        };
+      });
     const tasks: Command[] = (board.data?.columns ?? [])
       .flatMap((column) => column.tasks)
       .sort((a, b) => b.number - a.number)
@@ -137,6 +188,20 @@ export function CommandPalette({
           close();
           setNewTaskOpen(true);
         },
+      },
+      {
+        value: 'new-department',
+        label: 'New department…',
+        keywords: 'create add team',
+        icon: Plus,
+        run: go('/departments?new=1'),
+      },
+      {
+        value: 'new-schedule',
+        label: 'New schedule…',
+        keywords: 'create add recurring repeat cron',
+        icon: Plus,
+        run: go('/schedules?new=1'),
       },
       ...THEME_CHOICES.map((theme) => ({
         value: `theme:${theme.value}`,
@@ -168,6 +233,7 @@ export function CommandPalette({
     return [
       { value: 'Go to', items: pages },
       { value: 'Tasks', items: tasks },
+      { value: 'Agents', items: agents },
       { value: 'Actions', items: actions },
       ...(ask.length > 0 ? [{ value: 'Ask', items: ask }] : []),
     ];

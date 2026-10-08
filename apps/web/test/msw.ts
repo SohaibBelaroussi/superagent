@@ -2,8 +2,11 @@ import type {
   AgentDefinition,
   AttentionItem,
   Board,
+  Capabilities,
   Department,
   Me,
+  Schedule,
+  Settings,
   Task,
   TaskEvent,
   UsageTotals,
@@ -127,10 +130,44 @@ export function event(overrides: Partial<TaskEvent> & Pick<TaskEvent, 'type'>): 
   };
 }
 
+/** What agents can be given: the API's catalog tools, no skills or MCP servers yet. */
+export const CAPABILITIES: Capabilities = {
+  tools: [
+    { key: 'current_time', pack: 'core', description: 'The current date and time.' },
+    { key: 'web_search', pack: 'web', description: 'Search the web.' },
+    { key: 'fetch_page', pack: 'web', description: 'Read a public web page as markdown.' },
+    { key: 'knowledge_search', pack: 'knowledge', description: "Search the owner's documents." },
+    { key: 'browser', pack: 'browser', description: 'A real browser.' },
+    { key: 'files', pack: 'workspace', description: "Read and write the task's files." },
+    { key: 'shell', pack: 'workspace', description: "Run commands in the task's sandbox." },
+  ],
+  skills: [],
+  mcpServers: [],
+  plugins: [],
+};
+
+export const SETTINGS: Settings = {
+  models: { default: { provider: 'acme', model: 'large-1' }, fast: null, embedding: null },
+  timezone: 'Europe/Paris',
+  concurrency: { global: 4, perAgent: 2 },
+};
+
 /** The usual signed-in world: the owner, one department with its lead, and these tasks. */
-export function signedInHandlers(options: { tasks?: Task[]; attention?: AttentionItem[] } = {}) {
+export function signedInHandlers(
+  options: { tasks?: Task[]; attention?: AttentionItem[]; schedules?: Schedule[] } = {},
+) {
   const tasks = options.tasks ?? [];
   return [
+    http.get(api('/v1/schedules'), () => HttpResponse.json({ items: options.schedules ?? [] })),
+    http.get(api('/v1/capabilities'), () => HttpResponse.json(CAPABILITIES)),
+    http.get(api('/v1/settings'), () => HttpResponse.json(SETTINGS)),
+    http.get(api('/v1/providers'), () => HttpResponse.json({ items: [] })),
+    http.get(api('/v1/browser-identities'), () => HttpResponse.json({ items: [] })),
+    http.get(api('/v1/knowledge'), () => HttpResponse.json({ items: [] })),
+    http.get(api('/v1/agents/:id/versions'), () => HttpResponse.json({ items: [ada.current] })),
+    http.get(api('/v1/departments/:id/memory'), ({ params }) =>
+      HttpResponse.json({ departmentId: params.id, notes: null }),
+    ),
     http.get(api('/v1/me'), () => HttpResponse.json(me())),
     http.get(api('/v1/departments'), () => HttpResponse.json({ items: [research] })),
     http.get(api('/v1/agents'), () => HttpResponse.json({ items: [ada] })),

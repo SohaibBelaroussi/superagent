@@ -62,6 +62,32 @@ export const routes: RouteObject[] = [
                 path: 'tasks/:taskId',
                 ...page(async () => (await import('./features/tasks/task-page')).TaskPage),
               },
+              {
+                path: 'departments',
+                ...page(
+                  async () => (await import('./features/departments/departments-page')).DepartmentsPage,
+                ),
+              },
+              {
+                path: 'departments/:slug',
+                ...page(async () => (await import('./features/departments/department-page')).DepartmentPage),
+              },
+              {
+                path: 'agents/:agentKey',
+                ...page(async () => (await import('./features/agents/agent-page')).AgentPage),
+              },
+              {
+                path: 'schedules',
+                ...page(async () => (await import('./features/schedules/schedules-page')).SchedulesPage),
+              },
+              {
+                path: 'knowledge',
+                ...page(async () => (await import('./features/knowledge/knowledge-page')).KnowledgePage),
+              },
+              {
+                path: 'settings/profile',
+                ...page(async () => (await import('./features/profile/profile-page')).ProfilePage),
+              },
               { path: '*', element: <NotFound /> },
             ],
           },

@@ -3,13 +3,15 @@ import { X } from 'lucide-react';
 import { type ReactNode, useRef } from 'react';
 
 /**
- * A dialog opens on its first field, not on the close button before it (whose tooltip would also open
- * and take the first Escape). On touch, it keeps the default: a field would raise the keyboard.
+ * A dialog opens on its first field, or on itself when it has none: never on the close button before
+ * them, whose tooltip would also open and take the first Escape. On touch, it keeps the default: a field
+ * would raise the keyboard.
  */
 function firstField(type: string, popup: HTMLElement | null): HTMLElement | true {
   if (type === 'touch') return true;
   return (
     popup?.querySelector<HTMLElement>('input:not([type="hidden"]), textarea, select, [role="combobox"]') ??
+    popup ??
     true
   );
 }
@@ -89,6 +91,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
+  cancelLabel = 'Keep it',
   destructive = false,
   busy = false,
   onConfirm,
@@ -99,6 +102,7 @@ export function ConfirmDialog({
   title: ReactNode;
   description?: ReactNode;
   confirmLabel: string;
+  cancelLabel?: string;
   destructive?: boolean;
   busy?: boolean;
   onConfirm: () => void;
@@ -114,7 +118,7 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Keep it
+            {cancelLabel}
           </Button>
           <Button variant={destructive ? 'destructive' : 'primary'} disabled={busy} onClick={onConfirm}>
             {confirmLabel}

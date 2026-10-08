@@ -8,7 +8,10 @@ export interface OrgLookup {
   agent(id: string | null): AgentDefinition | undefined;
   /** An agent by its key ("research-lead"): events name agents by key. */
   agentByKey(key: string): AgentDefinition | undefined;
+  /** Active departments: the ones you pick from. */
   departments: Department[];
+  /** Active agents. */
+  agents: AgentDefinition[];
   ready: boolean;
 }
 
@@ -27,6 +30,7 @@ export function useOrg(): OrgLookup {
       agent: (id) => (id ? agentById.get(id) : undefined),
       agentByKey: (key) => agentByKey.get(key),
       departments: (departments.data ?? []).filter((department) => !department.archivedAt),
+      agents: (agents.data ?? []).filter((agent) => !agent.archivedAt),
       ready: departments.isSuccess && agents.isSuccess,
     };
   }, [departments.data, departments.isSuccess, agents.data, agents.isSuccess]);
