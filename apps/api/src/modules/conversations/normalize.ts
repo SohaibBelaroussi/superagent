@@ -227,6 +227,19 @@ function reportOf(signal: Rec, text: string, context: ThreadContext): Conversati
   };
 }
 
+/**
+ * Notifications that came in while the agent was busy, summed up for it (each one is delivered later):
+ * "2 updates from research on the way". Shown, since the agent may answer it.
+ */
+function summaryText(signal: Rec, parts: MessagePart[]): string {
+  const summary = record(record(signal.metadata).notification);
+  const groups = Array.isArray(summary.groups) ? summary.groups.map(record) : [];
+  const total = groups.reduce((sum, group) => sum + (int(group.count) ?? 0), 0);
+  if (total === 0) return textOf(parts) || 'Updates on the way';
+  const from = groups.map((group) => (str(group.source) ?? 'a department').replace(/^dept:/, '')).join(', ');
+  return `${total} update${total === 1 ? '' : 's'} from ${from} on the way`;
+}
+
 /** Something sent to an agent, read back for the owner. */
 function sentMessage(
   base: Pick<ConversationMessage, 'id' | 'createdAt'>,
@@ -247,8 +260,7 @@ function sentMessage(
 
 /**
  * One stored message as clients see it; null for what isn't shown: system messages, empty ones, and
- * signals meant for the agent alone (reminders, notification summaries: each notification is shown
- * once it is delivered).
+ * signals meant for the agent alone (reminders).
  */
 export function normalizeMessage(message: StoredMessage, context: ThreadContext): ConversationMessage | null {
   const at = message.createdAt instanceof Date ? message.createdAt : new Date(message.createdAt);
@@ -272,6 +284,15 @@ export function normalizeMessage(message: StoredMessage, context: ThreadContext)
           author: null,
           parts: [{ type: 'text', text }],
           report: reportOf(signal, text, context),
+        };
+      }
+      if ((str(signal.tagName) ?? message.type) === 'notification-summary') {
+        return {
+          ...base,
+          role: 'note',
+          author: null,
+          parts: [{ type: 'text', text: summaryText(signal, parts) }],
+          report: null,
         };
       }
       if (signal.type === 'user' || (str(signal.tagName) ?? message.type) === 'user') {
@@ -346,6 +367,8 @@ export class LiveNormalizer {
     const messageId = str(payload.messageId);
     if (messageId && !this.quiet && MESSAGE_ID_CHUNKS.has(type) && !this.messageIds.includes(messageId)) {
       this.messageIds.push(messageId);
+      // Mastra stores the answer as it goes: a client hides that message while the turn shows it live.
+      events.push({ type: 'answer', runId, messageId });
     }
     switch (type) {
       case 'text-delta':

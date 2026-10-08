@@ -47,7 +47,7 @@ const toolMessage = (toolInvocation: Record<string, unknown>) =>
   });
 
 describe('stored messages, as clients see them', () => {
-  it('shows the owner and the chief, and skips what is empty or meant for agents only', () => {
+  it('shows the owner, the chief and notices, and skips what is empty or meant for agents only', () => {
     expect(normalizeMessage(stored({ content: text('Hello') }), chief)).toEqual({
       id: 'm1',
       createdAt: at,
@@ -67,9 +67,30 @@ describe('stored messages, as clients see them', () => {
     const summary = stored({
       role: 'signal',
       type: 'notification-summary',
-      content: { ...text('dept:research: 1'), metadata: { signal: { tagName: 'notification-summary' } } },
+      content: {
+        ...text('dept:research: 1, dept:writing: 2'),
+        metadata: {
+          signal: {
+            tagName: 'notification-summary',
+            metadata: {
+              notification: {
+                signal: 'summary',
+                pending: 3,
+                groups: [
+                  { source: 'dept:research', count: 1 },
+                  { source: 'dept:writing', count: 2 },
+                ],
+              },
+            },
+          },
+        },
+      },
     });
-    expect(normalizeMessage(summary, chief)).toBeNull();
+    // The chief may answer a summary, so it shows: in words.
+    expect(normalizeMessage(summary, chief)).toMatchObject({
+      role: 'note',
+      parts: [{ type: 'text', text: '3 updates from research, writing on the way' }],
+    });
     const reminder = stored({
       role: 'signal',
       type: 'system-reminder',
@@ -265,6 +286,7 @@ describe('live chunks, as clients see them', () => {
     ].flatMap((c) => live.push(c));
     expect(events).toEqual([
       { type: 'run-start', runId: 'r1', agent: 'chief' },
+      { type: 'answer', runId: 'r1', messageId: 'm-1' },
       { type: 'text', runId: 'r1', id: 'text-1', delta: 'Let me ' },
       { type: 'text', runId: 'r1', id: 'text-1', delta: 'check.' },
       {
@@ -285,6 +307,7 @@ describe('live chunks, as clients see them', () => {
         runId: 'r1',
         part: expect.objectContaining({ callId: 'c1', status: 'done', result: { open: 2 } }),
       },
+      { type: 'answer', runId: 'r1', messageId: 'm-2' },
       { type: 'text', runId: 'r1', id: 'text-2', delta: 'Two open.' },
       { type: 'run-end', runId: 'r1', outcome: 'finished', error: null, messageIds: ['m-1', 'm-2'] },
     ]);

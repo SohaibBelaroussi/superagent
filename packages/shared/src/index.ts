@@ -1237,7 +1237,7 @@ export const LiveEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('run-start'),
     runId: z.string(),
-    agent: z.string().nullable().describe("The agent taking the turn (its key), when known"),
+    agent: z.string().nullable().describe('The agent taking the turn (its key), when known'),
   }),
   z.object({
     type: z.literal('text'),
@@ -1250,6 +1250,15 @@ export const LiveEventSchema = z.discriminatedUnion('type', [
     type: z.literal('tool'),
     runId: z.string(),
     part: ToolCallPartSchema.describe('The call as it stands; replaces an earlier one with the same callId'),
+  }),
+  z.object({
+    type: z.literal('answer'),
+    runId: z.string(),
+    messageId: z
+      .string()
+      .describe(
+        "The history message the turn's answer is stored as while it is written; the turn shows it live",
+      ),
   }),
   z.object({ type: z.literal('message'), runId: z.string(), message: ConversationMessageSchema }),
   z.object({

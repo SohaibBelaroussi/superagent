@@ -299,6 +299,25 @@ describe('conversations: the chief and task transcripts', () => {
     expect(after.items.filter((m) => m.role === 'owner').map(textOf)).toEqual(['Add a source, please.']);
   });
 
+  it('says why the chief couldn’t answer when it has no model', async () => {
+    await send('PATCH', '/v1/settings', { models: { default: null } });
+    try {
+      const stream = await openStream('/v1/chief/stream');
+      await stream.until((event) => event.type === 'ready');
+      const sent = await send('POST', '/v1/chief/messages', { message: 'Anyone there?' });
+      expect(sent.status).toBe(202);
+      // A turn that was already under way (the chief reading an earlier report) may still finish first.
+      const ended = (
+        await stream.until((event) => event.type === 'run-end' && event.outcome !== 'finished')
+      ).at(-1);
+      await stream.close();
+      expect(ended).toMatchObject({ type: 'run-end', outcome: 'failed' });
+      expect(ended?.type === 'run-end' && ended.error).toMatch(/model/i);
+    } finally {
+      await send('PATCH', '/v1/settings', { models: { default: { provider: 'fake', model: 'fake-chat' } } });
+    }
+  });
+
   it('answers 404 for a task that does not exist', async () => {
     const missing = '0199b000-0000-7000-8000-ffffffffffff';
     expect((await send('GET', `/v1/tasks/${missing}/transcript`)).status).toBe(404);
