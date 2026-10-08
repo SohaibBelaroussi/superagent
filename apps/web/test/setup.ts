@@ -25,6 +25,7 @@ if (!globalThis.ResizeObserver) {
   } as unknown as typeof ResizeObserver;
 }
 Element.prototype.scrollIntoView ??= () => {};
+Element.prototype.scrollTo ??= () => {};
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {

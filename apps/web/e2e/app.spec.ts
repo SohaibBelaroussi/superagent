@@ -137,6 +137,36 @@ test('shows a task created elsewhere without a reload, then edits and cancels it
   await expect(page.getByText('You moved it from Inbox to Cancelled')).toBeVisible();
 });
 
+// Nothing here sends the chief a message: the stack may have a real model, and these tests stay free.
+test('opens the conversation with the chief of staff, following it live', async ({ page }) => {
+  await signIn(page);
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Chief of staff' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Chief of staff' })).toBeVisible();
+  await expect(page).toHaveTitle('Chief of staff · superagent');
+  // The conversation's own stream is connected (it would say "Reconnecting…" otherwise).
+  await expect(page.getByText('Routes your work to the departments')).toBeVisible();
+  const box = page.getByLabel('Message the chief of staff');
+  await box.fill('A draft I won’t send');
+  await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled();
+  await box.fill('');
+  await expect(page.getByRole('button', { name: 'Send' })).toBeDisabled();
+});
+
+test("shows a task's transcript, empty until the task goes to its lead", async ({ page, request }) => {
+  const team = await department(request);
+  const created = await request.post('/v1/tasks', {
+    headers: auth,
+    data: { departmentId: team.id, title: 'Read the transcript', brief: 'Not sent yet.', dispatch: false },
+  });
+  const task = await created.json();
+  expect((await request.get(`/v1/tasks/${task.id}/transcript`, { headers: auth })).status()).toBe(200);
+  await signIn(page);
+  await page.goto(`/tasks/${task.id}`);
+  await page.getByRole('tab', { name: 'Transcript' }).click();
+  await expect(page).toHaveURL(/view=transcript/);
+  await expect(page.getByText('The transcript starts when the task goes to its lead.')).toBeVisible();
+});
+
 test('works on a phone: the rail becomes a drawer, and nothing scrolls sideways', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await signIn(page);

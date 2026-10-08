@@ -10,7 +10,7 @@ A self-hosted personal assistant organized like a company, built on [Mastra](htt
 
 Everything runs behind one HTTP API and ships as Docker images. A web app, served by the API, runs it from a browser or a phone; a mobile app comes later.
 
-> **Status:** the API is built (M0–M9, see the [plan](docs/api-plan.md)). The web app is under way: W1 (foundation, sign-in, home, the live board and tasks). See the [web plan](docs/web-plan.md) for W2–W6.
+> **Status:** the API is built (M0–M9, see the [plan](docs/api-plan.md)). The web app is under way: W1 (foundation, sign-in, home, the live board and tasks) and W2 (the conversation with the chief of staff, task transcripts). See the [web plan](docs/web-plan.md) for W3–W6.
 
 ## Design
 
@@ -95,7 +95,7 @@ For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS 
 |---|---|
 | `/health`, `/ready` | Liveness and readiness. Public |
 | `/api/*` | Mastra's built-in routes: agents, threads, memory, schedules. Token required |
-| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your profile, department notes, knowledge documents, schedules, the attention inbox, task files and sandboxes, browsers, browser identities and live views (WebSockets: a bearer header, or `?apiKey=` from a browser), capabilities, secrets, MCP servers, skills and plugins, model prices and usage. Token required |
+| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your conversation with the chief and task transcripts (history and live streams), your profile, department notes, knowledge documents, schedules, the attention inbox, task files and sandboxes, browsers, browser identities and live views (WebSockets: a bearer header, or `?apiKey=` from a browser), capabilities, secrets, MCP servers, skills and plugins, model prices and usage. Token required |
 | everything else | The web app, from the image (`WEB_DIR`): its files are public, its data comes from `/v1` |
 
 ## Development

@@ -1,4 +1,3 @@
-import './zod-config';
 import '@fontsource-variable/mona-sans/wght.css';
 import './styles/app.css';
 import { StrictMode } from 'react';

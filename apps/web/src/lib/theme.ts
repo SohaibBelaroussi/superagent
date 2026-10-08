@@ -19,7 +19,7 @@ function systemTheme(): 'light' | 'dark' {
     : 'dark';
 }
 
-/** Puts the theme's class on <html> (the same one public/theme.js sets before the first paint). */
+/** Puts the theme's class on <html> (the same one public/boot.js sets before the first paint). */
 function apply(choice: ThemeChoice): void {
   const theme = choice === 'system' ? systemTheme() : choice;
   const root = document.documentElement;

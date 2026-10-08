@@ -1,0 +1,40 @@
+# W2 walkthrough: your conversation with the chief of staff, and task transcripts.
+# Works with the VS Code "REST Client" extension or the JetBrains HTTP client.
+# Prerequisite: a default model (m1-providers.http) and a department with a lead (m2-org.http).
+
+@baseUrl = http://127.0.0.1:4111
+@token = paste-your-admin-token-here
+
+### Follow the conversation live in a terminal while you go (Ctrl+C to stop): ready, then each turn
+# (run-start, answer, text, tool, message, run-end).
+# curl -N -H "Authorization: Bearer <token>" http://127.0.0.1:4111/v1/chief/stream
+
+### Write to the chief. "started": it answers now; "queued": once its current turn is over.
+POST {{baseUrl}}/v1/chief/messages
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "message": "Ask research to find out what Mastra is, with one source." }
+
+### The conversation, oldest first: your messages, its answers with the tools it used (create_task
+### here), and the departments' reports, each with its task's id. Older: ?before=<nextCursor>
+# @name history
+GET {{baseUrl}}/v1/chief/messages?limit=20
+Authorization: Bearer {{token}}
+
+### Stop its answer (false when it wasn't answering)
+POST {{baseUrl}}/v1/chief/stop
+Authorization: Bearer {{token}}
+
+### The newest task, to read its transcript
+# @name newest
+GET {{baseUrl}}/v1/tasks?limit=1
+Authorization: Bearer {{token}}
+
+### Its transcript: the brief as the lead got it, the lead's tool calls (a delegation to a specialist,
+### agent-<key>, comes with the specialist's answer), and what you or the chief sent it
+GET {{baseUrl}}/v1/tasks/{{newest.response.body.items[0].id}}/transcript
+Authorization: Bearer {{token}}
+
+### Follow it live, like the chief's:
+# curl -N -H "Authorization: Bearer <token>" http://127.0.0.1:4111/v1/tasks/<id>/stream
