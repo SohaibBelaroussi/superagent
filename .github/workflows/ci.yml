@@ -78,6 +78,22 @@ jobs:
       - name: End-to-end tests against the container
         run: pnpm test:e2e
 
+      # A real browser against the same container: the served web app, its CSP, sign-in, live updates.
+      - name: Install Chromium for the browser tests
+        run: pnpm --filter @superagent/web exec playwright install --with-deps chromium
+
+      - name: Browser tests against the container
+        run: pnpm test:web
+
+      - name: Browser test traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces
+          path: apps/web/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Back up the stack, then restore the backup in a drill
         env:
           COMPOSE_FILES: -f compose.yaml -f compose.prod.yaml
