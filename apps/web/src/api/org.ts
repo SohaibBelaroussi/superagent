@@ -192,8 +192,8 @@ export interface ModelChoice {
   label: string;
 }
 
-/** The chat models agents can use: every enabled model of every enabled provider. */
-export function useModelChoices() {
+/** The models of a kind (chat by default) to pick from: every enabled one of every enabled provider. */
+export function useModelChoices(kind: 'chat' | 'embedding' = 'chat') {
   const providers = useQuery({
     queryKey: queryKeys.providers,
     queryFn: ({ signal }) => api(ProviderListSchema, '/v1/providers', { signal }),
@@ -213,7 +213,7 @@ export function useModelChoices() {
         const provider = providers.data?.[index];
         if (!provider || !result.data) return [];
         return result.data.items
-          .filter((model) => model.kind === 'chat' && model.enabled)
+          .filter((model) => model.kind === kind && model.enabled)
           .map((model) => ({
             ref: { provider: provider.slug, model: model.modelId },
             label: `${provider.name} · ${model.modelId}`,

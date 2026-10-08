@@ -24,6 +24,23 @@ async function department(request: APIRequestContext): Promise<{ id: string; slu
   return res.json();
 }
 
+/**
+ * Whatever is wider than the screen: the document, or the page's own scroll container (the document
+ * never scrolls: the page does, inside the frame). Names what overflows, for the failure message.
+ */
+const widerThanItsFrame = (page: Page) =>
+  page.evaluate(() => {
+    const wide: string[] = [];
+    const root = document.documentElement;
+    if (root.scrollWidth > root.clientWidth) wide.push(`document ${root.scrollWidth}px`);
+    for (const scroller of document.querySelectorAll<HTMLElement>('[data-scroll="page"]')) {
+      if (scroller.scrollWidth > scroller.clientWidth) {
+        wide.push(`page ${scroller.scrollWidth}px in ${scroller.clientWidth}px`);
+      }
+    }
+    return wide;
+  });
+
 /** Every Content-Security-Policy violation on a page is recorded; any one fails the test (afterEach). */
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -207,11 +224,11 @@ test('can be added to a home screen', async ({ page, request }) => {
 test('works on a phone: the rail becomes a drawer, and nothing scrolls sideways', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await signIn(page);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
+  expect(await widerThanItsFrame(page)).toEqual([]);
   await page.getByRole('button', { name: 'Menu' }).click();
   await page.getByRole('dialog', { name: 'Navigation' }).getByRole('link', { name: 'Board' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Board' })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
+  expect(await widerThanItsFrame(page)).toEqual([]);
 });
 
 test('sets up a department and its lead, then gives the lead a tool in a new version', async ({ page }) => {
@@ -276,4 +293,128 @@ test('uploads a document, then finds it as an agent would', async ({ page }) => 
   const results = page.getByRole('list', { name: 'Search results' });
   await expect(results).toContainText(`${word}.md`);
   await expect(results.locator('mark').first()).toHaveText(word);
+});
+
+test('adds a provider, prices a model on it by hand, then deletes it', async ({ page, request }) => {
+  const suffix = Date.now().toString(36);
+  // A run that stopped half-way may have left its provider behind.
+  const { items } = await (await request.get('/v1/providers', { headers: auth })).json();
+  for (const provider of items as Array<{ id: string; slug: string }>) {
+    if (provider.slug.startsWith('e2e-'))
+      await request.delete(`/v1/providers/${provider.id}`, { headers: auth });
+  }
+  await signIn(page);
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Settings' }).click();
+  await expect(page).toHaveURL(/\/settings\/models$/);
+  await expect(page.getByRole('heading', { level: 1, name: 'Models' })).toBeVisible();
+  await expect(page).toHaveTitle('Models · superagent');
+  await page.getByRole('button', { name: 'Add a provider' }).first().click();
+  const dialog = page.getByRole('dialog', { name: 'Add a provider' });
+  await dialog.getByLabel('Name').fill(`E2E ${suffix}`);
+  await expect(dialog.getByLabel('Slug')).toHaveValue(`e2e-${suffix}`);
+  // Nothing answers there: its models can't be listed, so one is added by hand.
+  await dialog.getByLabel('Base URL').fill('http://127.0.0.1:9/v1');
+  await dialog.getByRole('button', { name: 'Add provider' }).click();
+  await expect(page.getByText(/Its models couldn’t be listed/)).toBeVisible();
+
+  const panel = page.getByRole('group', { name: new RegExp(`^E2E ${suffix}`) });
+  await panel.getByLabel('Model id to add').fill('e2e-model');
+  await panel.getByRole('button', { name: 'Add', exact: true }).click();
+  const models = panel.getByRole('list', { name: 'Models' });
+  await expect(models).toContainText('Added by hand');
+  await models.getByRole('button', { name: 'Set price' }).click();
+  const price = page.getByRole('dialog', { name: 'Price of e2e-model' });
+  await price.getByLabel('Input', { exact: true }).fill('1');
+  await price.getByLabel('Output', { exact: true }).fill('2');
+  await price.getByRole('button', { name: 'Save price' }).click();
+  await expect(models).toContainText('$1.00 in · $2.00 out');
+
+  // Its model is one to pick for a role (not picked: the other tests run without a model).
+  await page.getByRole('combobox', { name: 'Fast model' }).click();
+  await expect(page.getByRole('option', { name: `E2E ${suffix} · e2e-model` })).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await panel.getByRole('button', { name: `More for E2E ${suffix}` }).click();
+  await page.getByRole('menuitem', { name: 'Delete…' }).click();
+  await page
+    .getByRole('dialog', { name: `Delete E2E ${suffix}?` })
+    .getByRole('button', { name: 'Delete provider' })
+    .click();
+  await expect(panel).toBeHidden();
+});
+
+test('manages devices with the admin token, which only the page keeps', async ({ page, request }) => {
+  const name = `E2E tablet ${Date.now().toString(36)}`;
+  await signIn(page);
+  await page.goto('/settings/devices');
+  await page.getByLabel('Admin token').fill(ADMIN_TOKEN);
+  await page.getByRole('button', { name: 'Show devices' }).click();
+  const devices = page.getByRole('list', { name: 'Devices' });
+  await expect(devices.getByRole('listitem').filter({ hasText: 'This browser' })).toHaveCount(1);
+
+  await page.getByRole('button', { name: 'New device token' }).click();
+  const dialog = page.getByRole('dialog', { name: 'New device token' });
+  await dialog.getByLabel('Device').fill(name);
+  await dialog.getByRole('button', { name: 'Create token' }).click();
+  const shown = page.getByRole('dialog', { name: 'Copy it now' });
+  const token = await shown.getByLabel('Its token').inputValue();
+  expect(token).toMatch(/^sa_/);
+  const asIt = { authorization: `Bearer ${token}` };
+  expect((await request.get('/v1/me', { headers: asIt })).status()).toBe(200);
+  await shown.getByRole('button', { name: 'Done' }).click();
+
+  await devices
+    .getByRole('listitem')
+    .filter({ hasText: name })
+    .getByRole('button', { name: 'Revoke' })
+    .click();
+  await page
+    .getByRole('dialog', { name: `Revoke “${name}”?` })
+    .getByRole('button', { name: 'Revoke' })
+    .click();
+  await expect(page.getByText(`“${name}” revoked`)).toBeVisible();
+  expect((await request.get('/v1/me', { headers: asIt })).status()).toBe(401);
+  expect(JSON.stringify(await page.evaluate(() => ({ ...window.localStorage })))).not.toContain(ADMIN_TOKEN);
+});
+
+test('shows what model calls cost, over the period chosen', async ({ page }) => {
+  await signIn(page);
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Usage' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Usage' })).toBeVisible();
+  await expect(page).toHaveTitle('Usage · superagent');
+  // The stack may have made no model calls yet: either way the page says what it has.
+  const chart = page.getByRole('list', { name: /by day$/ });
+  await expect(page.getByText('No model calls yet').or(chart)).toBeVisible();
+  await page.getByRole('button', { name: '7 days' }).click();
+  await expect(page).toHaveURL(/\/usage\?range=7$/);
+  await expect(page.getByText('No model calls yet').or(chart)).toBeVisible();
+  if (await chart.isVisible()) await expect(chart.getByRole('listitem')).toHaveCount(7);
+});
+
+test('settings on a phone: the sections are a row above the page, and nothing scrolls sideways', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await signIn(page);
+  await page.goto('/settings/skills');
+  const row = page.getByRole('navigation', { name: 'Settings sections' });
+  await expect(row.getByRole('link', { name: 'Skills' })).toHaveAttribute('aria-current', 'page');
+  await expect(row.getByRole('link', { name: 'Skills' })).toBeInViewport();
+  expect(await widerThanItsFrame(page)).toEqual([]);
+  await row.getByRole('link', { name: 'Secrets' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Secrets' })).toBeVisible();
+  expect(await widerThanItsFrame(page)).toEqual([]);
+
+  // Usage over 90 days: each day keeps a visible bar.
+  await page.goto('/usage?range=90');
+  const chart = page.getByRole('list', { name: /by day$/ });
+  await expect(page.getByText(/^No model calls/).or(chart)).toBeVisible();
+  if (await chart.isVisible()) {
+    const widths = await chart
+      .getByRole('listitem')
+      .evaluateAll((items) => items.map((item) => item.querySelector('[aria-hidden]')?.clientWidth ?? 0));
+    expect(widths).toHaveLength(90);
+    expect(Math.min(...widths)).toBeGreaterThan(0);
+  }
+  expect(await widerThanItsFrame(page)).toEqual([]);
 });

@@ -7,6 +7,16 @@ export function formatCost(usd: number): string {
   return `$${Math.round(usd).toLocaleString('en-US')}`;
 }
 
+/** A model's price in USD per million tokens, to the hundredth of a cent: "$3.00", "$0.075", "$0.0375". */
+export function formatPrice(usd: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(usd);
+}
+
 /** Token counts, compact: "950", "12.3k", "1.25M". */
 export function formatTokens(count: number): string {
   if (count < 1000) return String(count);
@@ -78,4 +88,11 @@ export function formatList(items: readonly string[]): string {
 /** "1 task", "3 tasks". */
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
+}
+
+/** "512 B", "2.4 KB", "13 KB", "2.4 MB". */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

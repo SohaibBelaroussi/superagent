@@ -1,4 +1,4 @@
-import { type ComponentPropsWithRef, type ReactNode, useId } from 'react';
+import { type ComponentPropsWithRef, type ReactNode, useId, useState } from 'react';
 import { cn } from '../lib/cn';
 
 /*
@@ -19,6 +19,47 @@ export function Input({ className, ...props }: ComponentPropsWithRef<'input'>) {
       className={cn(fieldMaterial, 'h-control-md w-full min-w-0 rounded-full px-3.5 text-body-sm', className)}
       {...props}
     />
+  );
+}
+
+/**
+ * A field for a credential (a token, a key, a secret's value). A text field masked with CSS, not
+ * type="password": browsers and password managers offer to save what's typed in a password field, and
+ * credentials stay out of the browser (D45). "Show" unmasks it. `className` places the field;
+ * `inputClassName` styles the text.
+ */
+export function SecretInput({
+  className,
+  inputClassName,
+  revealLabel = 'Show what’s typed',
+  ...props
+}: Omit<ComponentPropsWithRef<'input'>, 'type'> & { inputClassName?: string; revealLabel?: string }) {
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <div className={cn('relative w-full min-w-0', className)}>
+      <Input
+        type="text"
+        autoComplete="off"
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        data-1p-ignore
+        data-lpignore="true"
+        data-bwignore
+        {...props}
+        className={cn('pr-16', !revealed && '[-webkit-text-security:disc]', inputClassName)}
+      />
+      <button
+        type="button"
+        onClick={() => setRevealed((shown) => !shown)}
+        aria-pressed={revealed}
+        aria-label={revealLabel}
+        disabled={props.disabled}
+        className="absolute top-1/2 right-1.5 h-6 -translate-y-1/2 cursor-pointer rounded-full px-2.5 text-caption text-muted-foreground enabled:hover:bg-fill enabled:hover:text-foreground disabled:cursor-not-allowed"
+      >
+        {revealed ? 'Hide' : 'Show'}
+      </button>
+    </div>
   );
 }
 

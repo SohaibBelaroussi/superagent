@@ -19,3 +19,24 @@ export function isValidTimezone(timezone: string): boolean {
     return false;
   }
 }
+
+/**
+ * A stack frame's line: "    at fn (file:///srv/app/x.js:3:1)", "    at file:///x.js:3:1",
+ * "    at new X (<anonymous>)", "    at async Promise.all (index 0)". Not "  at least one of…".
+ */
+const FRAME = /^\s+at (?:.+ \()?(?:.*:\d+:\d+|<anonymous>|native|index \d+)\)?$/;
+
+/**
+ * Text with any stack trace cut off. Some libraries (Mastra's MCP client) put one in an error's message,
+ * and its frames name files on this server: the owner sees the lines before the first frame.
+ */
+export function withoutStack(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const frame = lines.findIndex((line, index) => index > 0 && FRAME.test(line));
+  return (frame > 0 ? lines.slice(0, frame).join('\n') : text).trim();
+}
+
+/** An error's message for the owner: without a stack trace. */
+export function errorText(error: unknown): string {
+  return withoutStack(error instanceof Error ? error.message : String(error));
+}

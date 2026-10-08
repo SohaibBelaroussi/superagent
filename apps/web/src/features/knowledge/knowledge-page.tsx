@@ -11,7 +11,7 @@ import {
   useUploadDocument,
 } from '../../api/knowledge';
 import { cn } from '../../lib/cn';
-import { plural } from '../../lib/format';
+import { formatBytes, plural } from '../../lib/format';
 import { randomId } from '../../lib/id';
 import { useDocumentTitle } from '../../lib/title';
 import { departmentTone, TONE_DOT } from '../../lib/tones';
@@ -34,13 +34,6 @@ interface UploadState {
   name: string;
   status: 'waiting' | 'uploading' | 'done' | 'failed';
   detail?: string;
-}
-
-/** "2.4 MB". */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** Documents agents search with `knowledge_search`: upload, search and delete them. */

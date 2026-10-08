@@ -19,12 +19,20 @@
   - the inbox put the calls to approve first, and accepting a result took it off the list at once;
   - the rail counted what waits;
   - the command palette (Ctrl+K) found pages and tasks, and a question typed into it opened the chief's conversation with the question sent.
-- W4 (the organization): in review. Verified in a browser against the same scripted API, on a desktop and a phone, in both themes:
+- W4 (the organization): merged in PR #14. Verified in a browser against the same scripted API, on a desktop and a phone, in both themes:
   - a department set up from the rail opened on its team, where its lead was added and then given a tool, saved as a new version;
   - a change to the lead's instructions showed as a diff against the version in use, and leaving with unsaved changes asked first;
   - a schedule built from "every week, Monday and Thursday at 9" showed its next runs in its timezone, and "Run now" made its task;
   - an uploaded document was found by the search agents use, with the words marked;
   - notes written on the department page reached the lead's notes.
+- W5 (settings and usage): in review. Verified in a browser against the same scripted API, at a phone's width, in both themes:
+  - a provider added from the models page had its models listed; a check of the provider said what worked, and the calls it made were priced at its model's price;
+  - the timezone and the theme saved as they were picked, and the usage page's periods followed the new timezone's days;
+  - the admin token, given on the devices page, listed the devices even after a refused token, and forgetting it left nothing in the browser;
+  - an MCP server that couldn't connect said why in one line (the API now cuts the stack trace from the error);
+  - the usage page showed a bar for each day of the period, and named the built-in agents.
+
+  Browser tests against the release image add, price and delete a provider, make and revoke a device token, and open the usage page and the settings on a phone.
 
 **Related docs:**
 - [decisions.md](decisions.md): D06 and D43–D48 cover the web app.
@@ -267,6 +275,22 @@ Each milestone ends like the API's: tests pass, a PR, one review, fixes, CI gree
 - Devices (with the admin token).
 - Secrets, MCP servers, plugins (preview, then install), skills.
 - The usage page: totals, by day, and by department, model, agent and task.
+
+**Built:**
+- **Settings** (`/settings`, from the rail): one page per section, listed beside them on a desktop and as a row above them on a phone. The palette finds each section.
+- **Models** (`/settings/models`):
+  - the default, fast and embedding models, saved as you pick them;
+  - each provider with its address, whether its key is set (keys and headers are write-only: an edit leaves them alone unless you replace or remove them), a warning when the encryption key changed since they were stored, and a check of chat, streaming, tool calls and embeddings that says what works;
+  - its models, listed for you when it has a `/models` endpoint or added by hand, each priced in USD per million tokens (a price counts from now on).
+- **General** (`/settings/general`): the timezone schedules and agents use, and this browser's theme and notifications. Concurrency is left out until the API applies it.
+- **Devices** (`/settings/devices`): the tokens browsers and apps sign in with, managed with the admin token, which the page asks for and keeps in memory only (D45). A new token is shown once; revoking one signs that device out.
+- **Secrets** (`/settings/secrets`): names, what they're for and which servers use them; values go in sealed and never come back.
+- **MCP servers** (`/settings/mcp`): each with its state, tools and why it can't be reached; add or edit an HTTP one, its credential a secret from the vault; turn one off, list its tools again, delete.
+- **Plugins** (`/settings/plugins`): install from a GitHub repository (its name or address) or an archive with its sha256, after a look at what it brings, the values it needs and its servers' network; uninstall.
+- **Skills** (`/settings/skills`): by plugin, each with what it needs and its files.
+- **Usage** (`/usage`, from the rail): totals, a bar for each day of the period (7, 30 or 90 days, or all time; past 90 days, each bar is a run of days) in the owner's days (the settings' timezone, as the API counts them), and the share of each department, model, agent and task, linked to their pages. Calls to models without a price are counted and pointed out; an empty period points to earlier calls.
+- Keys, tokens and secrets' values are typed into masked text fields, never password fields, which browsers and password managers offer to save (D45); the sign-in page does the same. Requests that carry one are dropped from the query cache as soon as nothing shows them.
+- A form's failure shows at its top, brought into view in a long dialog. Sections are regions named by their headings.
 
 ### W6: workspaces and browsers
 

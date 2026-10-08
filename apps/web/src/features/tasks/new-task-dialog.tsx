@@ -6,7 +6,7 @@ import { useCreateTask } from '../../api/queries';
 import { departmentTone, PRIORITIES, TONE_DOT } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
-import { Notice, Spinner } from '../../ui/feedback';
+import { FormFailure, Notice, Spinner } from '../../ui/feedback';
 import { Field, Input, Textarea } from '../../ui/field';
 import { Select } from '../../ui/select';
 import { Switch } from '../../ui/switch';
@@ -124,7 +124,7 @@ export function NewTaskDialog({
       }
     >
       <form id="new-task" onSubmit={submit} className="flex flex-col gap-4 pb-1" noValidate>
-        {failure ? <Notice tone="destructive">{failure}</Notice> : null}
+        {failure ? <FormFailure>{failure}</FormFailure> : null}
         {org.ready && org.departments.length === 0 ? (
           <Notice tone="warning" title="No departments yet">
             Tasks go to departments.{' '}

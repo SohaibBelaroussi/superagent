@@ -4,6 +4,7 @@ import {
   Bell,
   BellOff,
   CalendarClock,
+  ChartColumn,
   ChevronsUpDown,
   CircleUserRound,
   House,
@@ -13,6 +14,7 @@ import {
   MessagesSquare,
   Plus,
   Search,
+  Settings,
   SquareKanban,
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
@@ -277,6 +279,13 @@ export function Sidebar({ onNavigate, onSearch }: { onNavigate?: () => void; onS
           active={pathname === '/knowledge'}
           onNavigate={onNavigate}
         />
+        <NavItem
+          to="/usage"
+          icon={ChartColumn}
+          label="Usage"
+          active={pathname === '/usage'}
+          onNavigate={onNavigate}
+        />
       </ul>
 
       <section aria-labelledby="sidebar-departments" className="flex min-h-0 flex-col gap-1">
@@ -336,6 +345,15 @@ export function Sidebar({ onNavigate, onSearch }: { onNavigate?: () => void; onS
       </section>
 
       <div className="mt-auto flex flex-col gap-1">
+        <ul>
+          <NavItem
+            to="/settings"
+            icon={Settings}
+            label="Settings"
+            active={pathname.startsWith('/settings')}
+            onNavigate={onNavigate}
+          />
+        </ul>
         <LiveIndicator />
         <AccountMenu onNavigate={onNavigate} />
       </div>

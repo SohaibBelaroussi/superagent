@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef, ReactNode } from 'react';
+import { type ComponentPropsWithoutRef, type ReactNode, useId } from 'react';
 import { cn } from '../lib/cn';
 import { raisedSurface } from './recipes';
 
@@ -7,7 +7,10 @@ export function Panel({ className, ...props }: ComponentPropsWithoutRef<'div'>) 
   return <div className={cn('rounded-xl', raisedSurface, className)} {...props} />;
 }
 
-/** A titled block of a page: a small heading, an optional action on its right, then the content. */
+/**
+ * A titled block of a page: a small heading, an optional action on its right, then the content. A
+ * region named by its heading.
+ */
 export function Section({
   title,
   action,
@@ -21,10 +24,12 @@ export function Section({
   className?: string;
   id?: string;
 }) {
+  const own = useId();
+  const headingId = id ?? own;
   return (
-    <section aria-labelledby={id} className={cn('flex flex-col gap-3', className)}>
+    <section aria-labelledby={headingId} className={cn('flex flex-col gap-3', className)}>
       <div className="flex min-h-control-sm items-center justify-between gap-3">
-        <h2 id={id} className="text-subheading text-foreground">
+        <h2 id={headingId} className="text-subheading text-foreground">
           {title}
         </h2>
         {action}
@@ -53,7 +58,8 @@ export function Page({
 }) {
   const max = width === 'narrow' ? 'max-w-4xl' : width === 'medium' ? 'max-w-6xl' : 'max-w-none';
   return (
-    <div className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto', className)}>
+    // The page scrolls here, not the document: `data-scroll` names it for the browser tests.
+    <div data-scroll="page" className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto', className)}>
       <div
         className={cn(
           'mx-auto flex w-full flex-1 flex-col px-4 pt-5 pb-12 sm:px-8 sm:pt-7',

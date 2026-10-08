@@ -3,11 +3,10 @@ import { type FormEvent, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router';
 import { ProblemError } from '../../api/client';
 import { useSession } from '../../api/session';
-import { cn } from '../../lib/cn';
 import { useDocumentTitle } from '../../lib/title';
 import { Button } from '../../ui/button';
 import { Notice, Spinner } from '../../ui/feedback';
-import { Field, Input } from '../../ui/field';
+import { Field, SecretInput } from '../../ui/field';
 import { LogoMark } from '../../ui/icons';
 import { raisedSurface } from '../../ui/recipes';
 
@@ -36,7 +35,6 @@ export function SignInPage() {
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [revealed, setRevealed] = useState(false);
 
   useDocumentTitle('Sign in');
   if (state.status === 'signed-in') return <Navigate to={from ?? '/'} replace />;
@@ -88,36 +86,17 @@ export function SignInPage() {
             hint="Your admin token, or a device token made for this browser."
           >
             {(control) => (
-              // A text field masked with CSS, not type="password": browsers offer to save what's typed in
-              // a password field, and the admin token must stay out of the browser (D45).
-              <div className="relative">
-                <Input
-                  {...control}
-                  type="text"
-                  name="api-token"
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  data-1p-ignore
-                  data-lpignore="true"
-                  data-bwignore
-                  autoFocus
-                  placeholder="sa_…"
-                  value={token}
-                  onChange={(event) => setToken(event.target.value)}
-                  className={cn('pr-16 font-mono', !revealed && '[-webkit-text-security:disc]')}
-                />
-                <button
-                  type="button"
-                  onClick={() => setRevealed((shown) => !shown)}
-                  aria-pressed={revealed}
-                  aria-label="Show the token"
-                  className="absolute top-1/2 right-1.5 h-6 -translate-y-1/2 cursor-pointer rounded-full px-2.5 text-caption text-muted-foreground hover:bg-fill hover:text-foreground"
-                >
-                  {revealed ? 'Hide' : 'Show'}
-                </button>
-              </div>
+              // Not a password field: the admin token must stay out of the browser's saved passwords (D45).
+              <SecretInput
+                {...control}
+                name="api-token"
+                autoFocus
+                placeholder="sa_…"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                inputClassName="font-mono"
+                revealLabel="Show the token"
+              />
             )}
           </Field>
           <Button type="submit" variant="primary" size="lg" disabled={busy} className="w-full">
