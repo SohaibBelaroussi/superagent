@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { createBrowserRouter, Link, type RouteObject } from 'react-router';
+import { createBrowserRouter, Link, Navigate, type RouteObject } from 'react-router';
 import { SignInPage } from './features/auth/sign-in-page';
 import { AppShell, RequireSession } from './layout/app-shell';
 import { clearReloadGuard, RouteError } from './layout/route-error';
@@ -84,9 +84,46 @@ export const routes: RouteObject[] = [
                 path: 'knowledge',
                 ...page(async () => (await import('./features/knowledge/knowledge-page')).KnowledgePage),
               },
+              { path: 'usage', ...page(async () => (await import('./features/usage/usage-page')).UsagePage) },
               {
-                path: 'settings/profile',
-                ...page(async () => (await import('./features/profile/profile-page')).ProfilePage),
+                path: 'settings',
+                ...page(async () => (await import('./features/settings/settings-layout')).SettingsLayout),
+                children: [
+                  { index: true, element: <Navigate to="models" replace /> },
+                  {
+                    path: 'models',
+                    ...page(async () => (await import('./features/settings/models-page')).ModelsPage),
+                  },
+                  {
+                    path: 'general',
+                    ...page(async () => (await import('./features/settings/general-page')).GeneralPage),
+                  },
+                  {
+                    path: 'profile',
+                    ...page(async () => (await import('./features/profile/profile-page')).ProfilePage),
+                  },
+                  {
+                    path: 'devices',
+                    ...page(async () => (await import('./features/settings/devices-page')).DevicesPage),
+                  },
+                  {
+                    path: 'secrets',
+                    ...page(async () => (await import('./features/settings/secrets-page')).SecretsPage),
+                  },
+                  {
+                    path: 'mcp',
+                    ...page(async () => (await import('./features/settings/mcp-page')).McpPage),
+                  },
+                  {
+                    path: 'plugins',
+                    ...page(async () => (await import('./features/settings/plugins-page')).PluginsPage),
+                  },
+                  {
+                    path: 'skills',
+                    ...page(async () => (await import('./features/settings/skills-page')).SkillsPage),
+                  },
+                  { path: '*', element: <NotFound /> },
+                ],
               },
               { path: '*', element: <NotFound /> },
             ],

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SecretBox } from '../../src/crypto/secret-box';
 import { guessModelKind, parseModelList } from '../../src/modules/providers/discovery';
 import { providerSlugOf, routerId, unconfiguredRouterId } from '../../src/modules/providers/model-ref';
-import { redactSecrets } from '../../src/util/text';
+import { errorText, redactSecrets, withoutStack } from '../../src/util/text';
 
 const KEY = Buffer.alloc(32, 1).toString('base64');
 
@@ -96,5 +96,16 @@ describe('redactSecrets', () => {
     expect(redactSecrets('bad key sk-123456 (sk-123456)', ['sk-123456', null])).toBe(
       'bad key [redacted] ([redacted])',
     );
+  });
+});
+
+describe('error text for the owner', () => {
+  it('cuts off a stack trace a library put in the message', () => {
+    const message =
+      'Failed to connect to MCP server tools: SdkError: probe failed: fetch failed\n    at classify (file:///srv/app/node_modules/x.js:3:1)\n    at next (file:///srv/app/y.js:9:9)';
+    expect(withoutStack(message)).toBe('Failed to connect to MCP server tools: SdkError: probe failed: fetch failed');
+    expect(errorText(new Error(message))).toBe(withoutStack(message));
+    expect(errorText('plain')).toBe('plain');
+    expect(withoutStack('Two lines\nwith no frames')).toBe('Two lines\nwith no frames');
   });
 });

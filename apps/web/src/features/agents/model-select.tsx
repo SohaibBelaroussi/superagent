@@ -5,8 +5,8 @@ import { Select } from '../../ui/select';
 const DEFAULT = 'default';
 
 /** "provider/model": provider slugs have no slash, model ids may. */
-const refValue = (ref: ModelRef) => `${ref.provider}/${ref.model}`;
-function parseRef(value: string): ModelRef | null {
+export const refValue = (ref: ModelRef) => `${ref.provider}/${ref.model}`;
+export function parseRef(value: string): ModelRef | null {
   const slash = value.indexOf('/');
   return slash > 0 ? { provider: value.slice(0, slash), model: value.slice(slash + 1) } : null;
 }

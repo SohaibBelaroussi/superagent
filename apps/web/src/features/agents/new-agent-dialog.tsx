@@ -6,7 +6,7 @@ import { useCreateAgent } from '../../api/org';
 import { slugify } from '../../lib/slug';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
-import { Notice, Spinner } from '../../ui/feedback';
+import { FormFailure, Notice, Spinner } from '../../ui/feedback';
 import { Field, Input, Textarea } from '../../ui/field';
 import { Segmented } from '../../ui/tabs';
 import { toast } from '../../ui/toast';
@@ -128,7 +128,7 @@ export function NewAgentDialog({
       }
     >
       <form id="new-agent" onSubmit={submit} className="flex flex-col gap-4 pb-1" noValidate>
-        {failure ? <Notice tone="destructive">{failure}</Notice> : null}
+        {failure ? <FormFailure>{failure}</FormFailure> : null}
         {hasLead ? (
           errors.role ? (
             <Notice tone="destructive">{errors.role}</Notice>

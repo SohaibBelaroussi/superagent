@@ -1,5 +1,5 @@
 import { CircleAlert, CircleCheck, Info, TriangleAlert } from 'lucide-react';
-import type { ComponentPropsWithoutRef, ReactNode } from 'react';
+import { type ComponentPropsWithoutRef, type ReactNode, useEffect, useRef } from 'react';
 import { cn } from '../lib/cn';
 
 /** A placeholder block while something loads. */
@@ -107,6 +107,22 @@ export function Notice({
         {children ? <div className="text-body-sm break-words text-foreground/80">{children}</div> : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * Why a form couldn't be saved, at its top: brought into view when it appears, so a long form scrolled
+ * down to its button doesn't hide it.
+ */
+export function FormFailure({ children }: { children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    box.current?.scrollIntoView?.({ block: 'nearest' });
+  }, []);
+  return (
+    <div ref={box}>
+      <Notice tone="destructive">{children}</Notice>
     </div>
   );
 }

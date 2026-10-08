@@ -3,7 +3,7 @@ import { Dialog } from '@base-ui/react/dialog';
 import {
   Building2,
   CalendarClock,
-  CircleUserRound,
+  ChartColumn,
   CornerDownLeft,
   House,
   Inbox,
@@ -25,6 +25,7 @@ import { departmentTone, TONE_DOT } from '../../lib/tones';
 import { Kbd } from '../../ui/feedback';
 import { dialogSurface, menuItem, menuLabel } from '../../ui/recipes';
 import type { ChiefDraft } from '../conversations/chief-page';
+import { SETTINGS_SECTIONS } from '../settings/sections';
 import { NewTaskDialog } from '../tasks/new-task-dialog';
 import { useOrg } from '../tasks/org';
 
@@ -138,12 +139,20 @@ export function CommandPalette({
         run: go('/knowledge'),
       },
       {
-        value: 'profile',
-        label: 'Your profile',
-        keywords: 'me about preferences memory settings',
-        icon: CircleUserRound,
-        run: go('/settings/profile'),
+        value: 'usage',
+        label: 'Usage',
+        keywords: 'cost tokens spend money',
+        icon: ChartColumn,
+        run: go('/usage'),
       },
+      ...SETTINGS_SECTIONS.map((section) => ({
+        value: `settings:${section.path}`,
+        label: section.label,
+        keywords: `settings ${section.keywords}`,
+        hint: 'Settings',
+        icon: section.icon,
+        run: go(`/settings/${section.path}`),
+      })),
       ...org.departments.map((department) => ({
         value: `department:${department.slug}`,
         label: department.name,

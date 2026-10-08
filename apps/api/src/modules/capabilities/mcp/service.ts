@@ -9,6 +9,7 @@ import type { Db } from '../../../db/client';
 import { type McpServerRow, type McpToolDefinition, mcpServers, plugins } from '../../../db/schema';
 import { ApiError } from '../../../http/problem';
 import { Mutex } from '../../../util/mutex';
+import { errorText, withoutStack } from '../../../util/text';
 import { assertPublicUrl, type ResolveHost } from '../../tools/web';
 import type { RunnerClient } from '../../workspace/runner-client';
 import { type SecretService, secretNames } from '../secrets';
@@ -305,7 +306,7 @@ export class McpService {
       if (!this.rows.has(id)) return;
       const [next] = await this.deps.db
         .update(mcpServers)
-        .set({ status: 'failed', statusDetail: detail.slice(0, 1000), updatedAt: new Date() })
+        .set({ status: 'failed', statusDetail: withoutStack(detail).slice(0, 1000), updatedAt: new Date() })
         .where(eq(mcpServers.id, id))
         .returning();
       this.keep(id, next);
@@ -345,7 +346,7 @@ export class McpService {
         toolsRefreshedAt: new Date(),
       };
     } catch (error) {
-      update = { status: 'failed', statusDetail: String((error as Error)?.message ?? error).slice(0, 500) };
+      update = { status: 'failed', statusDetail: errorText(error).slice(0, 500) };
       this.logger.warn('MCP server discovery failed', { server: row.slug, error: update.statusDetail });
     }
     const changed = await this.lock.run(async () => {
@@ -453,7 +454,7 @@ export class McpService {
       definition = await this.definition(row);
     } catch (error) {
       this.entries.delete(row.id);
-      const detail = `It can't connect: ${(error as Error).message}`;
+      const detail = `It can't connect: ${errorText(error)}`;
       this.logger.warn('An MCP server cannot be used', { server: row.slug, error: detail });
       const [next] = await this.deps.db
         .update(mcpServers)

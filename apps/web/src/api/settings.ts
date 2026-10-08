@@ -1,0 +1,382 @@
+import {
+  type AddModelInput,
+  CreatedTokenSchema,
+  type CreateMcpServerInput,
+  type CreateProviderInputSchema,
+  type InstallPluginInput,
+  McpServerListSchema,
+  McpServerSchema,
+  PluginListSchema,
+  PluginPreviewSchema,
+  PluginSchema,
+  type PreviewPluginInput,
+  ProviderListSchema,
+  ProviderModelListSchema,
+  ProviderSchema,
+  type ProviderTestInput,
+  ProviderTestResultSchema,
+  type PutSecretInput,
+  SecretListSchema,
+  SecretSchema,
+  type SetModelPriceInput,
+  SettingsSchema,
+  SkillListSchema,
+  SkillSchema,
+  TokenListSchema,
+  type UpdateMcpServerInput,
+  type UpdateProviderInput,
+  type UpdateSettingsInput,
+} from '@superagent/shared';
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { z } from 'zod';
+import { api, apiVoid } from './client';
+import { queryKeys } from './queries';
+
+/*
+ * Settings: providers and their models, model roles and limits, devices, secrets, MCP servers, plugins
+ * and skills. A change to what agents can be given also refreshes the capabilities the organization's
+ * forms list.
+ */
+
+const providerPath = (id: string, rest = '') => `/v1/providers/${encodeURIComponent(id)}${rest}`;
+
+export const settingsKeys = {
+  providerModels: queryKeys.providerModels,
+  tokens: ['tokens'] as const,
+  secrets: ['secrets'] as const,
+  mcpServers: ['mcp-servers'] as const,
+  plugins: ['plugins'] as const,
+  skills: ['skills'] as const,
+  skill: (id: string) => ['skills', id] as const,
+};
+
+/** Every provider, enabled or not (the model pickers use the enabled ones). */
+export function useProviders() {
+  return useQuery({
+    queryKey: queryKeys.providers,
+    queryFn: ({ signal }) => api(ProviderListSchema, '/v1/providers', { signal }),
+    select: (data) => data.items,
+  });
+}
+
+export function useProviderModels(id: string) {
+  return useQuery({
+    queryKey: queryKeys.providerModels(id),
+    queryFn: ({ signal }) => api(ProviderModelListSchema, providerPath(id, '/models'), { signal }),
+    select: (data) => data.items,
+  });
+}
+
+function refreshProviders(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+}
+
+export function useCreateProvider() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: z.input<typeof CreateProviderInputSchema>) =>
+      api(ProviderSchema, '/v1/providers', { method: 'POST', json: input }),
+    onSuccess: () => refreshProviders(queryClient),
+    meta: { silent: true },
+  });
+}
+
+export function useUpdateProvider(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpdateProviderInput) =>
+      api(ProviderSchema, providerPath(id), { method: 'PATCH', json: input }),
+    onSuccess: () => refreshProviders(queryClient),
+    meta: { silent: true },
+  });
+}
+
+export function useDeleteProvider(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiVoid(providerPath(id), { method: 'DELETE' }),
+    onSuccess: () => refreshProviders(queryClient),
+    meta: { failure: 'Couldn’t delete the provider' },
+  });
+}
+
+/** The models list a model mutation answers with, put straight into its query. */
+function useModelsMutation<T>(id: string, run: (input: T) => Promise<{ items: unknown[] }>, failure: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: run,
+    onSuccess: (list) => {
+      queryClient.setQueryData(queryKeys.providerModels(id), list);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
+    },
+    meta: { failure },
+  });
+}
+
+/** Lists any provider's models (by id): for one just added, whose own hooks don't exist yet. */
+export function useDiscoverModels() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api(ProviderModelListSchema, providerPath(id, '/refresh-models'), { method: 'POST' }),
+    onSuccess: (list, id) => {
+      queryClient.setQueryData(queryKeys.providerModels(id), list);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
+    },
+    meta: { silent: true },
+  });
+}
+
+/** Asks the provider for its models again (`GET {baseUrl}/models`). */
+export function useRefreshModels(id: string) {
+  return useModelsMutation(
+    id,
+    () => api(ProviderModelListSchema, providerPath(id, '/refresh-models'), { method: 'POST' }),
+    'Couldn’t list the provider’s models',
+  );
+}
+
+export function useAddModel(id: string) {
+  return useModelsMutation(
+    id,
+    (input: AddModelInput) =>
+      api(ProviderModelListSchema, providerPath(id, '/models'), { method: 'POST', json: input }),
+    'Couldn’t add the model',
+  );
+}
+
+export function useRemoveModel(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (modelId: string) =>
+      apiVoid(providerPath(id, '/models'), { method: 'DELETE', query: { modelId } }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.providerModels(id) }),
+    meta: { failure: 'Couldn’t remove the model' },
+  });
+}
+
+export function useSetPrice(id: string) {
+  return useModelsMutation(
+    id,
+    (input: SetModelPriceInput) =>
+      api(ProviderModelListSchema, providerPath(id, '/prices'), { method: 'PUT', json: input }),
+    'Couldn’t set the price',
+  );
+}
+
+export function useRemovePrice(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (modelId: string) =>
+      apiVoid(providerPath(id, '/prices'), { method: 'DELETE', query: { modelId } }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.providerModels(id) }),
+    meta: { failure: 'Couldn’t remove the price' },
+  });
+}
+
+/** Plain chat, streaming, tool calls and (optionally) embeddings against the provider. */
+export function useTestProvider(id: string) {
+  return useMutation({
+    mutationFn: (input: ProviderTestInput) =>
+      api(ProviderTestResultSchema, providerPath(id, '/test'), { method: 'POST', json: input }),
+    meta: { failure: 'Couldn’t run the checks' },
+  });
+}
+
+export function useUpdateSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpdateSettingsInput) =>
+      api(SettingsSchema, '/v1/settings', { method: 'PATCH', json: input }),
+    onSuccess: (settings) => {
+      queryClient.setQueryData(queryKeys.settings, settings);
+      // The attention inbox says when a model role is missing.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.attention });
+    },
+    meta: { silent: true },
+  });
+}
+
+/**
+ * The API tokens, with the admin token (D45: asked for on the page, kept in memory only). Nothing is
+ * asked for until there is one.
+ */
+export function useTokens(adminToken: string | null) {
+  return useQuery({
+    queryKey: settingsKeys.tokens,
+    queryFn: ({ signal }) => api(TokenListSchema, '/v1/tokens', { signal, token: adminToken ?? undefined }),
+    select: (data) => data.items,
+    enabled: Boolean(adminToken),
+    retry: false,
+    // Dropped as soon as nothing shows it: the list was read with a token this page doesn't keep.
+    gcTime: 0,
+  });
+}
+
+export function useCreateToken(adminToken: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) =>
+      api(CreatedTokenSchema, '/v1/tokens', {
+        method: 'POST',
+        json: { name },
+        token: adminToken ?? undefined,
+      }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: settingsKeys.tokens }),
+    meta: { failure: 'Couldn’t create the token' },
+  });
+}
+
+export function useRevokeToken(adminToken: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiVoid(`/v1/tokens/${encodeURIComponent(id)}`, { method: 'DELETE', token: adminToken ?? undefined }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: settingsKeys.tokens }),
+    meta: { failure: 'Couldn’t revoke the token' },
+  });
+}
+
+export function useSecrets() {
+  return useQuery({
+    queryKey: settingsKeys.secrets,
+    queryFn: ({ signal }) => api(SecretListSchema, '/v1/secrets', { signal }),
+    select: (data) => data.items,
+  });
+}
+
+/** Stores a secret's value (sealed; it never comes back), creating or replacing it. */
+export function usePutSecret() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, ...input }: PutSecretInput & { name: string }) =>
+      api(SecretSchema, `/v1/secrets/${encodeURIComponent(name)}`, { method: 'PUT', json: input }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: settingsKeys.secrets }),
+    meta: { silent: true },
+  });
+}
+
+export function useDeleteSecret() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => apiVoid(`/v1/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: settingsKeys.secrets }),
+    meta: { failure: 'Couldn’t delete the secret' },
+  });
+}
+
+/** After a change to what agents can be given: the lists here and the organization's forms. */
+function refreshCapabilities(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: settingsKeys.mcpServers });
+  void queryClient.invalidateQueries({ queryKey: settingsKeys.plugins });
+  void queryClient.invalidateQueries({ queryKey: settingsKeys.skills });
+  void queryClient.invalidateQueries({ queryKey: settingsKeys.secrets });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.capabilities });
+}
+
+export function useMcpServers() {
+  return useQuery({
+    queryKey: settingsKeys.mcpServers,
+    queryFn: ({ signal }) => api(McpServerListSchema, '/v1/mcp-servers', { signal }),
+    select: (data) => data.items,
+  });
+}
+
+export function useCreateMcpServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateMcpServerInput) =>
+      api(McpServerSchema, '/v1/mcp-servers', { method: 'POST', json: input }),
+    onSuccess: () => refreshCapabilities(queryClient),
+    meta: { silent: true },
+  });
+}
+
+export function useUpdateMcpServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...input }: UpdateMcpServerInput & { id: string }) =>
+      api(McpServerSchema, `/v1/mcp-servers/${encodeURIComponent(id)}`, { method: 'PATCH', json: input }),
+    onSuccess: () => refreshCapabilities(queryClient),
+    meta: { silent: true },
+  });
+}
+
+export function useDeleteMcpServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiVoid(`/v1/mcp-servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: () => refreshCapabilities(queryClient),
+    meta: { failure: 'Couldn’t delete the server' },
+  });
+}
+
+/** Lists a server's tools again. */
+export function useRefreshMcpServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api(McpServerSchema, `/v1/mcp-servers/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
+    onSuccess: () => refreshCapabilities(queryClient),
+    meta: { failure: 'Couldn’t reach the server' },
+  });
+}
+
+export function usePlugins() {
+  return useQuery({
+    queryKey: settingsKeys.plugins,
+    queryFn: ({ signal }) => api(PluginListSchema, '/v1/plugins', { signal }),
+    select: (data) => data.items,
+  });
+}
+
+/** Fetches a plugin (pinned) and says what it would install, without installing it. */
+export function usePreviewPlugin() {
+  return useMutation({
+    mutationFn: (input: PreviewPluginInput) =>
+      api(PluginPreviewSchema, '/v1/plugins/preview', { method: 'POST', json: input }),
+    meta: { silent: true },
+  });
+}
+
+export function useInstallPlugin() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: InstallPluginInput) =>
+      api(PluginSchema, '/v1/plugins', { method: 'POST', json: input }),
+    onSuccess: () => refreshCapabilities(queryClient),
+    meta: { silent: true },
+  });
+}
+
+export function useUninstallPlugin() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiVoid(`/v1/plugins/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      refreshCapabilities(queryClient);
+      // Its skills and servers leave agents' and departments' grants.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agents });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.departments });
+    },
+    meta: { failure: 'Couldn’t uninstall the plugin' },
+  });
+}
+
+export function useSkills() {
+  return useQuery({
+    queryKey: settingsKeys.skills,
+    queryFn: ({ signal }) => api(SkillListSchema, '/v1/skills', { signal }),
+    select: (data) => data.items,
+  });
+}
+
+/** One skill with its files (only when asked for). */
+export function useSkill(id: string | null) {
+  return useQuery({
+    queryKey: settingsKeys.skill(id ?? ''),
+    queryFn: ({ signal }) => api(SkillSchema, `/v1/skills/${encodeURIComponent(id ?? '')}`, { signal }),
+    enabled: Boolean(id),
+  });
+}

@@ -157,11 +157,12 @@ export function useProfile() {
 }
 
 /** Tokens and cost since `from`, grouped by `group`. */
-export function useUsage(group: UsageGroup, from?: string) {
+export function useUsage(group: UsageGroup, from?: string, enabled = true) {
   return useQuery({
     queryKey: ['usage', group, from ?? 'all'],
     queryFn: ({ signal }) => api(UsageReportSchema, '/v1/usage', { signal, query: { group, from } }),
     staleTime: 60_000,
+    enabled,
   });
 }
 

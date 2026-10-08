@@ -6,7 +6,7 @@ import { useCreateDepartment } from '../../api/org';
 import { slugify } from '../../lib/slug';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
-import { Notice, Spinner } from '../../ui/feedback';
+import { FormFailure, Spinner } from '../../ui/feedback';
 import { Field, Input, Textarea } from '../../ui/field';
 import { Switch } from '../../ui/switch';
 import { toast } from '../../ui/toast';
@@ -93,7 +93,7 @@ export function NewDepartmentDialog({
       }
     >
       <form id="new-department" onSubmit={submit} className="flex flex-col gap-4 pb-1" noValidate>
-        {failure ? <Notice tone="destructive">{failure}</Notice> : null}
+        {failure ? <FormFailure>{failure}</FormFailure> : null}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Name" error={errors.name}>
             {(control) => (

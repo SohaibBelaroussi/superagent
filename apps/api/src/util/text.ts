@@ -19,3 +19,17 @@ export function isValidTimezone(timezone: string): boolean {
     return false;
   }
 }
+
+/**
+ * Text with any stack trace cut off. Some libraries (Mastra's MCP client) put one in an error's message,
+ * and its frames name files on this server: the owner sees the first part only.
+ */
+export function withoutStack(text: string): string {
+  const frame = text.search(/\r?\n\s+at /);
+  return (frame >= 0 ? text.slice(0, frame) : text).trim();
+}
+
+/** An error's message for the owner: without a stack trace. */
+export function errorText(error: unknown): string {
+  return withoutStack(error instanceof Error ? error.message : String(error));
+}
