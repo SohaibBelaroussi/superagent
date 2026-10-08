@@ -1,6 +1,7 @@
 import type {
   AttentionItem,
   AttentionList,
+  ConversationPage,
   Decision,
   Department,
   Provider,
@@ -263,6 +264,15 @@ describe('approvals and attention', () => {
     const after = (await attention()).find((i) => i.kind === 'approval' && i.taskId === task.id);
     expect(after?.id).toBe(item.id);
     expect(((await (await send('GET', `/v1/tasks/${task.id}`)).json()) as Task).phase).toBe('waiting');
+    // Only the stored thread is left after a restart, where Mastra keeps the call as plainly called:
+    // the transcript still says it waits for you.
+    const transcript = (await (
+      await send('GET', `/v1/tasks/${task.id}/transcript`)
+    ).json()) as ConversationPage;
+    const call = transcript.items
+      .flatMap((message) => message.parts)
+      .find((part) => part.type === 'tool' && part.tool === 'web_search');
+    expect(call).toMatchObject({ status: 'approval' });
     const res = await decide(after as AttentionItem, 'approve');
     expect(res.status).toBe(200);
     await waitForPhase(task.id, 'review');

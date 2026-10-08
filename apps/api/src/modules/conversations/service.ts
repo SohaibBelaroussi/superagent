@@ -11,6 +11,7 @@ import {
   normalizeMessage,
   reportNumbers,
   type StoredMessage,
+  type TaskRef,
   type ThreadContext,
 } from './normalize';
 
@@ -23,14 +24,18 @@ export interface ConversationDeps {
   mastra: Mastra;
   memory: MemoryProfiles;
   tasks: TaskService;
+  /** The tool calls a task's lead waits on for the owner's approval (DispatchService.pendingApprovals). */
+  approvals(task: TaskRow): Promise<Array<{ toolCallId: string }>>;
 }
 
 const CHIEF: Thread = { resourceId: OWNER_RESOURCE, threadId: CHIEF_THREAD };
-const NO_TASKS: ReadonlyMap<number, string> = new Map();
-const chiefContext = (taskIds = NO_TASKS): ThreadContext => ({
+const NO_TASKS: ReadonlyMap<number, TaskRef> = new Map();
+const NO_CALLS: ReadonlySet<string> = new Set();
+const chiefContext = (tasks = NO_TASKS): ThreadContext => ({
   kind: 'chief',
   authorAt: () => 'chief',
-  taskIds,
+  tasks,
+  waiting: NO_CALLS,
 });
 const threadOf = (task: TaskRow): Thread => ({ resourceId: task.resourceId, threadId: task.threadId });
 const time = (message: StoredMessage) => new Date(message.createdAt).getTime();
@@ -48,13 +53,19 @@ export class ConversationService {
   }
 
   async taskPage(task: TaskRow, query: ConversationQuery): Promise<ConversationPage> {
-    const leads = await this.deps.tasks.leads(task.id);
-    const context = (taskIds: ReadonlyMap<number, string>): ThreadContext => ({
+    const [leads, approvals] = await Promise.all([
+      this.deps.tasks.leads(task.id),
+      // Without them, a call waiting for approval reads as pending; never fails the page.
+      this.deps.approvals(task).catch(() => []),
+    ]);
+    const waiting = new Set(approvals.map((approval) => approval.toolCallId));
+    const context = (tasks: ReadonlyMap<number, TaskRef>): ThreadContext => ({
       kind: 'task',
       // The lead named by the last dispatch or reassignment before the message.
       authorAt: (at) =>
         leads.findLast((entry) => entry.since.getTime() <= at.getTime())?.lead ?? leads[0]?.lead ?? null,
-      taskIds,
+      tasks,
+      waiting,
     });
     return this.page(this.deps.memory.lead, threadOf(task), context, query);
   }
@@ -65,18 +76,22 @@ export class ConversationService {
 
   followTask(task: TaskRow, signal: AbortSignal): AsyncGenerator<LiveEvent> {
     // Live, only what reaches the lead is a message; its own answers come as text and tool calls.
-    return this.follow(threadOf(task), { kind: 'task', authorAt: () => null, taskIds: NO_TASKS }, signal);
+    return this.follow(
+      threadOf(task),
+      { kind: 'task', authorAt: () => null, tasks: NO_TASKS, waiting: NO_CALLS },
+      signal,
+    );
   }
 
   /**
    * The newest messages before `query.before`, oldest first. A full page leaves out the messages of its
    * oldest moment (the next page starts there), so messages that share a timestamp never fall between
-   * two pages.
+   * two pages, unless a whole page shares one millisecond (Mastra spaces a turn's messages apart).
    */
   private async page(
     memory: Memory,
     thread: Thread,
-    context: (taskIds: ReadonlyMap<number, string>) => ThreadContext,
+    context: (tasks: ReadonlyMap<number, TaskRef>) => ThreadContext,
     query: ConversationQuery,
   ): Promise<ConversationPage> {
     if (!(await memory.getThreadById({ threadId: thread.threadId }))) return { items: [], nextCursor: null };
@@ -101,7 +116,7 @@ export class ConversationService {
         nextCursor = new Date(time(oldest) - 1).toISOString();
       }
     }
-    const full = context(await this.deps.tasks.idsByNumber(reportNumbers(kept)));
+    const full = context(await this.deps.tasks.refsByNumber(reportNumbers(kept)));
     return { items: kept.flatMap((message) => normalizeMessage(message, full) ?? []), nextCursor };
   }
 

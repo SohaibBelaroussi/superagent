@@ -41,3 +41,7 @@ export const menuPopup = `min-w-44 max-h-(--available-height) overflow-y-auto ro
 export const menuLabel = 'px-2.5 pt-1.5 pb-1 text-meta tracking-wider text-muted-foreground uppercase';
 
 export const menuSeparator = '-mx-1 my-1 h-px bg-border';
+
+/** A box you write a message in: rounded, its edge brightening while you type. Callers add the fill. */
+export const composerSurface =
+  'rounded-[22px] border border-border transition-colors duration-200 focus-within:border-border-strong';

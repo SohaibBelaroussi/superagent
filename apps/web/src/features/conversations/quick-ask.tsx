@@ -1,8 +1,10 @@
 import { ArrowUp } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router';
+import { cn } from '../../lib/cn';
 import { Avatar } from '../../ui/avatar';
 import { Button } from '../../ui/button';
+import { composerSurface } from '../../ui/recipes';
 import type { ChiefDraft } from './chief-page';
 
 /** One line to the chief of staff: the conversation opens with it sent. */
@@ -21,7 +23,7 @@ export function QuickAsk() {
   return (
     <form
       onSubmit={submit}
-      className="flex items-center gap-3 rounded-[22px] border border-border bg-card py-2 pr-2 pl-3 shadow-raised transition-colors duration-200 focus-within:border-border-strong"
+      className={cn('flex items-center gap-3 bg-card py-2 pr-2 pl-3 shadow-raised', composerSurface)}
     >
       <Avatar name="Chief of staff" size="md" />
       <label htmlFor="quick-ask" className="sr-only">

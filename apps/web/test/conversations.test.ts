@@ -35,7 +35,14 @@ const report: ConversationMessage = {
   role: 'report',
   author: null,
   parts: [{ type: 'text', text: '#3 Proofread: done.' }],
-  report: { kind: 'task-done', source: 'dept:writing', priority: 'medium', taskId: 't-3', taskNumber: 3 },
+  report: {
+    kind: 'task-done',
+    source: 'dept:writing',
+    priority: 'medium',
+    taskId: 't-3',
+    taskNumber: 3,
+    taskTitle: 'Proofread',
+  },
 };
 
 describe('a live turn', () => {

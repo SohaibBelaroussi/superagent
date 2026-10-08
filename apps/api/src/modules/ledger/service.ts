@@ -158,15 +158,15 @@ export class TaskService {
     return new Map(rows.map((row) => [row.id, row]));
   }
 
-  /** Task ids by number, for these numbers (missing ones left out). */
-  async idsByNumber(numbers: number[]): Promise<Map<number, string>> {
+  /** Tasks' ids and titles by number, for these numbers (missing ones left out). */
+  async refsByNumber(numbers: number[]): Promise<Map<number, { id: string; title: string }>> {
     const unique = [...new Set(numbers)].filter((n) => Number.isSafeInteger(n) && n > 0);
     if (unique.length === 0) return new Map();
     const rows = await this.db
-      .select({ id: tasks.id, number: tasks.number })
+      .select({ id: tasks.id, number: tasks.number, title: tasks.title })
       .from(tasks)
       .where(inArray(tasks.number, unique));
-    return new Map(rows.map((row) => [row.number, row.id]));
+    return new Map(rows.map((row) => [row.number, { id: row.id, title: row.title }]));
   }
 
   /**

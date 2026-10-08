@@ -109,7 +109,10 @@ export function ConversationList({
   for (const message of pending) if (message.state === 'queued') pendingRow(message);
   return (
     <RunningCalls value={running}>
-      <div className="flex flex-col gap-5">{rows}</div>
+      {/* A log: screen readers announce what is added at its end. */}
+      <div role="log" aria-label="Conversation" className="flex flex-col gap-5">
+        {rows}
+      </div>
     </RunningCalls>
   );
 }

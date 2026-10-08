@@ -143,7 +143,7 @@ test('opens the conversation with the chief of staff, following it live', async 
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Chief of staff' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Chief of staff' })).toBeVisible();
   await expect(page).toHaveTitle('Chief of staff · superagent');
-  // The conversation's own stream is connected (it would say "Reconnecting…" otherwise).
+  // Shown only once the conversation's own stream is live ("Connecting…" or "Reconnecting…" before).
   await expect(page.getByText('Routes your work to the departments')).toBeVisible();
   const box = page.getByLabel('Message the chief of staff');
   await box.fill('A draft I won’t send');

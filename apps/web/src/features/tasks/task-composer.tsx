@@ -6,6 +6,7 @@ import { useMessageTask } from '../../api/queries';
 import { cn } from '../../lib/cn';
 import { Button } from '../../ui/button';
 import { Spinner } from '../../ui/feedback';
+import { composerSurface } from '../../ui/recipes';
 import { Segmented } from '../../ui/tabs';
 
 const COPY = {
@@ -68,10 +69,7 @@ export function TaskComposer({
   return (
     <form
       onSubmit={submit}
-      className={cn(
-        'rounded-[22px] border border-border bg-muted transition-colors duration-200 focus-within:border-border-strong',
-        'dark:bg-muted [html.light_&]:bg-card',
-      )}
+      className={cn('bg-muted', composerSurface, 'dark:bg-muted [html.light_&]:bg-card')}
     >
       <label htmlFor={`message-${task.id}`} className="sr-only">
         Message the lead

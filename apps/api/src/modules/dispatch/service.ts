@@ -25,6 +25,8 @@ const IDLE_CONFIRM_MS = 600;
 const APPROVAL_CHECK_POLLS = 25;
 /** What a lead is told about a call its cancelled task was waiting for. */
 const CANCELLED_REASON = 'The task was cancelled';
+/** How many times the owner's queued messages to the chief are tried before they are given up. */
+const CHIEF_SEND_ATTEMPTS = 5;
 
 export interface DispatchDeps {
   mastra: Mastra;
@@ -116,6 +118,11 @@ export class DispatchService {
    */
   async close(timeoutMs: number): Promise<void> {
     this.closing = true;
+    if (this.chiefQueue.length > 0) {
+      this.deps.logger.warn("The server stopped before the chief of staff read the owner's messages", {
+        count: this.chiefQueue.length,
+      });
+    }
     for (const supervision of this.supervisions.values()) supervision.stopped = true;
     this.supervisions.clear();
     const runtime = this.runtime();
@@ -201,19 +208,40 @@ export class DispatchService {
     this.chiefDraining = true;
     void (async () => {
       let idleSince: number | undefined;
+      let failures = 0;
       while (this.chiefQueue.length > 0 && !this.closing) {
-        await sleep(POLL_MS);
+        // After a failed send, back off: 3.2 s, then twice as long each time.
+        await sleep(failures === 0 ? POLL_MS : Math.min(POLL_MS * 2 ** (failures + 3), 30_000));
         if (this.chiefBusy()) {
           idleSince = undefined;
           continue;
         }
         idleSince ??= Date.now();
         if (Date.now() - idleSince < IDLE_CONFIRM_MS) continue;
-        await this.chiefLock.run(async () => {
-          if (this.chiefBusy() || this.closing) return;
-          await this.startChiefTurn(this.chiefQueue.splice(0));
-        });
         idleSince = undefined;
+        try {
+          await this.chiefLock.run(async () => {
+            if (this.chiefBusy() || this.closing) return;
+            const messages = [...this.chiefQueue];
+            await this.startChiefTurn(messages);
+            // Only once they went out: a turn that couldn't start leaves them queued.
+            this.chiefQueue.splice(0, messages.length);
+          });
+          failures = 0;
+        } catch (error) {
+          failures += 1;
+          if (failures < CHIEF_SEND_ATTEMPTS) {
+            this.deps.logger.warn("Could not send the owner's messages to the chief of staff; retrying", {
+              error,
+            });
+          } else {
+            const dropped = this.chiefQueue.splice(0);
+            this.deps.logger.error("Gave up sending the owner's messages to the chief of staff", {
+              count: dropped.length,
+              error,
+            });
+          }
+        }
       }
     })()
       .catch((error: unknown) => {
@@ -710,7 +738,7 @@ export class DispatchService {
   private async run(
     task: TaskRow,
     lead: AgentEntry,
-    contents: string,
+    contents: string | string[],
     supervision: Supervision,
   ): Promise<void> {
     supervision.problem = undefined;
@@ -934,7 +962,13 @@ export class DispatchService {
       });
     }
     supervision.generation += 1;
-    await this.run(current, lead, pending.map((p) => p.message.contents).join('\n\n'), supervision);
+    // One message each, so the transcript reads each back as it was sent.
+    await this.run(
+      current,
+      lead,
+      pending.map((p) => p.message.contents),
+      supervision,
+    );
     return true;
   }
 
@@ -975,7 +1009,7 @@ export class DispatchService {
           priority,
           payload: { taskId: task.id, number: task.number, phase: task.phase },
           // Kept on the message the chief's thread stores (the model doesn't see it): reports link to tasks.
-          metadata: { taskId: task.id, taskNumber: task.number },
+          metadata: { taskId: task.id, taskNumber: task.number, taskTitle: task.title },
           dedupeKey: `task:${task.id}:${task.revision}`,
         },
         { resourceId: OWNER_RESOURCE, threadId: CHIEF_THREAD },

@@ -30,8 +30,18 @@ export interface ThreadContext {
   kind: 'chief' | 'task';
   /** Who wrote an agent message at that moment: the chief, or the task's lead then. */
   authorAt(at: Date): string | null;
-  /** Task ids by number, for reports stored before they carried the id. */
-  taskIds: ReadonlyMap<number, string>;
+  /** Tasks by number, for reports stored before they carried their task's id and title. */
+  tasks: ReadonlyMap<number, TaskRef>;
+  /**
+   * Tool calls waiting for the owner's approval. Mastra stores such a call as plainly called, so it would
+   * read as pending without this.
+   */
+  waiting: ReadonlySet<string>;
+}
+
+export interface TaskRef {
+  id: string;
+  title: string;
 }
 
 /** Arguments and results are cut down to this many characters of JSON; a delegation's answer to more. */
@@ -40,6 +50,7 @@ const ANSWER_CHARS = 20_000;
 /** Specialists are tools named after them. */
 const DELEGATION_PREFIX = 'agent-';
 const PRIORITIES = new Set(['low', 'medium', 'high', 'urgent']);
+const NONE: ReadonlySet<string> = new Set();
 const FAILED_REASONS = new Set(['error', 'retry', 'other', 'unknown', 'tripwire']);
 /** The chunks that carry the id of the message a run's answer is stored under. */
 const MESSAGE_ID_CHUNKS = new Set(['start', 'step-start', 'step-finish', 'finish']);
@@ -92,7 +103,7 @@ function delegateOf(tool: string): string | null {
 }
 
 /** A stored tool call (Mastra's `toolInvocation`). */
-export function toolCall(invocation: unknown): ToolCallPart | null {
+export function toolCall(invocation: unknown, waiting: ReadonlySet<string> = NONE): ToolCallPart | null {
   const call = record(invocation);
   const callId = str(call.toolCallId);
   const tool = str(call.toolName);
@@ -124,6 +135,7 @@ export function toolCall(invocation: unknown): ToolCallPart | null {
       }
       break;
   }
+  if (status === 'pending' && waiting.has(callId)) status = 'approval';
   return {
     type: 'tool',
     callId,
@@ -137,7 +149,7 @@ export function toolCall(invocation: unknown): ToolCallPart | null {
 }
 
 /** The parts worth showing: text, reasoning, tool calls, sources, files and errors. */
-export function partsOf(content: unknown): MessagePart[] {
+export function partsOf(content: unknown, waiting: ReadonlySet<string> = NONE): MessagePart[] {
   if (typeof content === 'string') return content ? [{ type: 'text', text: content }] : [];
   const body = record(content);
   const raw = Array.isArray(body.parts) ? body.parts : [];
@@ -159,7 +171,7 @@ export function partsOf(content: unknown): MessagePart[] {
         break;
       }
       case 'tool-invocation': {
-        const call = toolCall(part.toolInvocation);
+        const call = toolCall(part.toolInvocation, waiting);
         if (call) parts.push(call);
         break;
       }
@@ -200,11 +212,12 @@ const signalOf = (message: StoredMessage) => record(record(record(message.conten
 const isReport = (message: StoredMessage, signal: Rec) =>
   message.role === 'signal' && (str(signal.tagName) ?? message.type) === 'notification';
 
-/** The task numbers of reports stored without their task's id (from before they carried it). */
+/** The task numbers of reports stored without their task's id and title (from before they carried them). */
 export function reportNumbers(messages: StoredMessage[]): number[] {
   return messages.flatMap((message) => {
     const signal = signalOf(message);
-    if (!isReport(message, signal) || str(record(signal.metadata).taskId)) return [];
+    const metadata = record(signal.metadata);
+    if (!isReport(message, signal) || (str(metadata.taskId) && str(metadata.taskTitle))) return [];
     const number = /^#(\d+)\b/.exec(textOf(partsOf(message.content)))?.[1];
     return number ? [Number(number)] : [];
   });
@@ -218,12 +231,14 @@ function reportOf(signal: Rec, text: string, context: ThreadContext): Conversati
   const priority = str(attributes.priority) ?? str(notification.priority);
   const taskNumber = int(metadata.taskNumber) ?? Number(/^#(\d+)\b/.exec(text)?.[1] ?? Number.NaN);
   const number = Number.isInteger(taskNumber) ? taskNumber : null;
+  const known = number === null ? undefined : context.tasks.get(number);
   return {
     kind: str(attributes.kind) ?? str(notification.kind) ?? 'notice',
     source: str(attributes.source) ?? str(notification.source) ?? 'system',
     priority: priority && PRIORITIES.has(priority) ? (priority as ConversationReport['priority']) : null,
-    taskId: str(metadata.taskId) ?? (number === null ? null : (context.taskIds.get(number) ?? null)),
+    taskId: str(metadata.taskId) ?? known?.id ?? null,
     taskNumber: number,
+    taskTitle: str(metadata.taskTitle) ?? known?.title ?? null,
   };
 }
 
@@ -266,7 +281,7 @@ export function normalizeMessage(message: StoredMessage, context: ThreadContext)
   const at = message.createdAt instanceof Date ? message.createdAt : new Date(message.createdAt);
   if (Number.isNaN(at.getTime())) return null;
   const base = { id: message.id, createdAt: at.toISOString() };
-  const parts = partsOf(message.content);
+  const parts = partsOf(message.content, context.waiting);
   switch (message.role) {
     case 'user':
       return sentMessage(base, parts, context);
@@ -332,7 +347,8 @@ function signalMessage(data: unknown, context: ThreadContext): ConversationMessa
 /**
  * Turns one thread's stream chunks (from Mastra's thread subscription) into live events. A run is
  * announced by its first chunk and ends once; a signal Mastra only stored (it woke no run) comes as a
- * quiet run, whose message is passed on without a run around it.
+ * quiet run, whose message is passed on without a run around it. A run that stopped for the owner's
+ * approval sends no end: it carries on under the same id once the call is decided, so it stays open.
  */
 export class LiveNormalizer {
   private runId: string | null = null;
@@ -343,6 +359,8 @@ export class LiveNormalizer {
   private readonly ended = new Set<string>();
   /** The ids the run's answers are stored under (a run that steps on may move to a new one). */
   private messageIds: string[] = [];
+  /** Runs waiting for an approval: another run starting doesn't end them. */
+  private readonly paused = new Set<string>();
 
   constructor(private readonly context: ThreadContext) {}
 
@@ -354,7 +372,8 @@ export class LiveNormalizer {
     const payload = record(chunk.payload);
     const events: LiveEvent[] = [];
     if (runId !== this.runId) {
-      if (this.runId && !this.quiet) this.end(events, this.runId, 'finished', null);
+      if (this.runId && !this.quiet && !this.paused.has(this.runId))
+        this.end(events, this.runId, 'finished', null);
       this.runId = runId;
       this.block = null;
       this.tools.clear();
@@ -364,10 +383,12 @@ export class LiveNormalizer {
       const agent = type === 'start' ? str(payload.id) : null;
       if (!this.quiet) events.push({ type: 'run-start', runId, agent });
     }
+    // Until it ends: what follows the prompt in the same segment, or the resumed run, keeps the id.
+    if (type === 'tool-call-approval' || type === 'tool-call-suspended') this.paused.add(runId);
     const messageId = str(payload.messageId);
     if (messageId && !this.quiet && MESSAGE_ID_CHUNKS.has(type) && !this.messageIds.includes(messageId)) {
       this.messageIds.push(messageId);
-      // Mastra stores the answer as it goes: a client hides that message while the turn shows it live.
+      // Mastra stores the answer as it goes: a client tells the turn from its stored answer by this id.
       events.push({ type: 'answer', runId, messageId });
     }
     switch (type) {
@@ -477,6 +498,7 @@ export class LiveNormalizer {
   ): void {
     if (this.ended.has(runId)) return;
     this.ended.add(runId);
+    this.paused.delete(runId);
     // Only the most recent runs can still send chunks.
     if (this.ended.size > 100) this.ended.delete(this.ended.values().next().value as string);
     if (runId === this.runId && this.quiet) return;

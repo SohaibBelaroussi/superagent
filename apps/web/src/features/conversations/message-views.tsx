@@ -1,4 +1,4 @@
-import type { ConversationMessage, MessagePart, ToolCallPart } from '@superagent/shared';
+import type { ConversationMessage, ConversationReport, MessagePart, ToolCallPart } from '@superagent/shared';
 import {
   Ban,
   Bell,
@@ -20,6 +20,7 @@ import { cn } from '../../lib/cn';
 import { departmentTone, TONE_TEXT, type Tone } from '../../lib/tones';
 import { Avatar } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';
+import { CodeBlock } from '../../ui/code-block';
 import { Notice, Spinner } from '../../ui/feedback';
 import { Markdown, webUrl } from '../../ui/markdown';
 import { RelativeTime } from '../../ui/time';
@@ -57,7 +58,8 @@ export interface PendingMessage {
   error?: string;
 }
 
-const textOf = (parts: MessagePart[]) =>
+/** A message's text, its paragraphs joined. */
+export const textOf = (parts: MessagePart[]) =>
   parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n\n');
 
 export function OwnerBubble({ text, children }: { text: string; children?: ReactNode }) {
@@ -90,15 +92,6 @@ const STATUS: Record<ToolCallPart['status'], { label: string | null; icon: Lucid
     failed: { label: 'Failed', icon: CircleX, tone: 'red' },
     declined: { label: 'Declined', icon: Ban, tone: 'neutral' },
   };
-
-function Json({ value }: { value: unknown }) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-  return (
-    <pre className="max-h-64 overflow-auto rounded-lg bg-fill-subtle px-3 py-2 font-mono text-[0.75rem] leading-relaxed whitespace-pre-wrap break-words text-foreground/85 shadow-rim">
-      {text}
-    </pre>
-  );
-}
 
 /** The tool calls running right now: a call without a result elsewhere has none. */
 export const RunningCalls = createContext<ReadonlySet<string>>(new Set());
@@ -157,8 +150,8 @@ export function ToolCallRow({ part, name }: { part: ToolCallPart; name: (key: st
           </>
         ) : (
           <>
-            <Json value={part.args} />
-            {part.result !== undefined ? <Json value={part.result} /> : null}
+            <CodeBlock value={part.args} />
+            {part.result !== undefined ? <CodeBlock value={part.result} /> : null}
           </>
         )}
         {part.error ? <p className="text-body-sm text-destructive-foreground">{part.error}</p> : null}
@@ -269,8 +262,20 @@ const REPORT_KINDS: Record<string, { label: string; tone: Tone; icon: LucideIcon
   'task-interrupted': { label: 'Interrupted', tone: 'orange', icon: TriangleAlert },
 };
 
-/** "#12 Title: what happened" → its parts, so the task can be a link. */
-export function splitReport(text: string): { number: number; title: string; summary: string } | null {
+/**
+ * "#12 Title: what happened" → its parts, so the task can be a link. The report's task title says where
+ * the summary starts (a title can hold ": " too); without it, the first ": " does.
+ */
+export function splitReport(
+  text: string,
+  report: ConversationReport | null = null,
+): { number: number; title: string; summary: string } | null {
+  if (report?.taskNumber != null && report.taskTitle) {
+    const prefix = `#${report.taskNumber} ${report.taskTitle}: `;
+    if (text.startsWith(prefix)) {
+      return { number: report.taskNumber, title: report.taskTitle, summary: text.slice(prefix.length) };
+    }
+  }
   const match = /^#(\d+) ([^\n]*?): ([\s\S]+)$/.exec(text);
   return match ? { number: Number(match[1]), title: match[2] ?? '', summary: match[3] ?? '' } : null;
 }
@@ -286,7 +291,7 @@ export function ReportCard({ message, org }: { message: ConversationMessage; org
   const slug = report?.source.startsWith('dept:') ? report.source.slice(5) : null;
   const department = slug ? org.departmentBySlug(slug) : undefined;
   const text = textOf(message.parts);
-  const split = splitReport(text);
+  const split = splitReport(text, report);
   const Icon = kind.icon;
   const label = `Report${report?.taskNumber ? ` on #${report.taskNumber}` : ''}`;
   return (
@@ -386,7 +391,8 @@ export function TurnView({
   });
   flush('parts-last');
   return (
-    <div className="flex flex-col gap-4">
+    // Busy while it streams: screen readers read the answer once it's done, not every word of it.
+    <div className="flex flex-col gap-4" aria-busy={live}>
       {blocks.length === 0 && live && turn.stored === 0 ? (
         <div className="flex flex-col gap-1.5">
           {showSpeaker ? <SpeakerLine speaker={speaker} /> : null}

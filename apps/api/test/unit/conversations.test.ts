@@ -10,11 +10,17 @@ import {
 import { briefFor, readLeadInput, relayedMessage } from '../../src/modules/dispatch/wording';
 
 const at = '2026-10-08T06:09:48.111Z';
-const chief: ThreadContext = { kind: 'chief', authorAt: () => 'chief', taskIds: new Map([[2, 'task-2']]) };
+const chief: ThreadContext = {
+  kind: 'chief',
+  authorAt: () => 'chief',
+  tasks: new Map([[2, { id: 'task-2', title: 'Find papers' }]]),
+  waiting: new Set(),
+};
 const task: ThreadContext = {
   kind: 'task',
   authorAt: (when) => (when.getTime() < Date.parse('2026-10-08T07:00:00Z') ? 'research-lead' : 'new-lead'),
-  taskIds: new Map(),
+  tasks: new Map(),
+  waiting: new Set(['c-waiting']),
 };
 const stored = (message: Partial<StoredMessage> & { content: unknown }): StoredMessage => ({
   id: 'm1',
@@ -104,24 +110,43 @@ describe('stored messages, as clients see them', () => {
 
   it('links reports to their task: from their metadata, or from the number older ones start with', () => {
     expect(
-      normalizeMessage(notification('#7 Proofread: done.', { taskId: 'task-7', taskNumber: 7 }), chief),
+      normalizeMessage(
+        notification('#7 Proofread: the post: done.', {
+          taskId: 'task-7',
+          taskNumber: 7,
+          taskTitle: 'Proofread: the post',
+        }),
+        chief,
+      ),
     ).toMatchObject({
       role: 'report',
-      parts: [{ type: 'text', text: '#7 Proofread: done.' }],
+      parts: [{ type: 'text', text: '#7 Proofread: the post: done.' }],
       report: {
         kind: 'task-done',
         source: 'dept:research',
         priority: 'medium',
         taskId: 'task-7',
         taskNumber: 7,
+        taskTitle: 'Proofread: the post',
       },
     });
     const older = notification('#2 Find papers: five found.');
-    expect(reportNumbers([older, notification('#7 x', { taskId: 'task-7' })])).toEqual([2]);
-    expect(normalizeMessage(older, chief)?.report).toMatchObject({ taskId: 'task-2', taskNumber: 2 });
+    expect(
+      reportNumbers([
+        older,
+        notification('#7 x: y', { taskId: 'task-7', taskTitle: 'x' }),
+        notification('#8 z: w', { taskId: 'task-8' }),
+      ]),
+    ).toEqual([2, 8]);
+    expect(normalizeMessage(older, chief)?.report).toMatchObject({
+      taskId: 'task-2',
+      taskNumber: 2,
+      taskTitle: 'Find papers',
+    });
     expect(normalizeMessage(notification('#9 Unknown'), chief)?.report).toMatchObject({
       taskId: null,
       taskNumber: 9,
+      taskTitle: null,
     });
   });
 
@@ -186,6 +211,8 @@ describe('stored messages, as clients see them', () => {
       error: 'boom',
     });
     expect(statusOf({ state: 'approval-requested' })).toMatchObject({ status: 'approval' });
+    // Mastra stores a call waiting for approval as plainly called: the waiting list tells.
+    expect(statusOf({ state: 'call', toolCallId: 'c-waiting' })).toMatchObject({ status: 'approval' });
     expect(statusOf({ state: 'approval-responded', approval: { id: 'a', approved: true } })).toMatchObject({
       status: 'pending',
     });
@@ -335,6 +362,31 @@ describe('live chunks, as clients see them', () => {
     });
   });
 
+  it('keeps a run that waits for an approval open, so the rest of it comes through after the decision', () => {
+    const live = new LiveNormalizer(task);
+    const out = [
+      chunk('r1', 'start', { id: 'research-lead', messageId: 'm-1' }),
+      chunk('r1', 'tool-call', { toolCallId: 'c1', toolName: 'web_search', args: { query: 'x' } }),
+      chunk('r1', 'tool-call-approval', { toolCallId: 'c1', toolName: 'web_search', args: { query: 'x' } }),
+      // Mastra ends the paused run's stream without a finish; something else happens on the thread.
+      chunk('p1', 'start', { messageId: 'persisted-signal:s1' }),
+      chunk('p1', 'finish', { stepResult: { reason: 'stop' } }),
+      // Approved: the run carries on under its id.
+      chunk('r1', 'tool-result', { toolCallId: 'c1', toolName: 'web_search', result: { hits: 3 } }),
+      chunk('r1', 'text-delta', { text: 'Found three.' }),
+      chunk('r1', 'finish', { messageId: 'm-1', stepResult: { reason: 'stop' } }),
+    ].flatMap((c) => live.push(c));
+    expect(out.filter((e) => e.type === 'run-end')).toEqual([
+      { type: 'run-end', runId: 'r1', outcome: 'finished', error: null, messageIds: ['m-1'] },
+    ]);
+    expect(out.filter((e) => e.type === 'tool').map((e) => e.type === 'tool' && e.part.status)).toEqual([
+      'pending',
+      'approval',
+      'done',
+    ]);
+    expect(out).toContainEqual({ type: 'text', runId: 'r1', id: expect.any(String), delta: 'Found three.' });
+  });
+
   it('passes on what reaches the agent; a report that woke no run comes without one', () => {
     const live = new LiveNormalizer(chief);
     const report = {
@@ -344,7 +396,7 @@ describe('live chunks, as clients see them', () => {
       contents: '#3 Proofread: done.',
       createdAt: at,
       attributes: { source: 'dept:writing', kind: 'task-done', priority: 'medium' },
-      metadata: { taskId: 'task-3', taskNumber: 3 },
+      metadata: { taskId: 'task-3', taskNumber: 3, taskTitle: 'Proofread' },
     };
     const quiet = [
       chunk('p1', 'start', { messageId: 'persisted-signal:sig-1' }),
@@ -367,6 +419,7 @@ describe('live chunks, as clients see them', () => {
             priority: 'medium',
             taskId: 'task-3',
             taskNumber: 3,
+            taskTitle: 'Proofread',
           },
         },
       },

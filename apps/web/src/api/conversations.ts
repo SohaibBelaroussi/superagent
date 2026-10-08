@@ -168,8 +168,9 @@ function parseEvent(type: string | undefined, data: string | undefined): LiveEve
 }
 
 /**
- * Follows a conversation live while `enabled`: the turn being taken, as it is written. Turns, and
- * whatever reaches the agent, refresh the history, where they end up.
+ * Follows a conversation live while `enabled`, and a turn under way to its end even after that (a task
+ * that closes mid-turn): the turn being taken, as it is written. Turns, and whatever reaches the agent,
+ * refresh the history, where they end up.
  */
 export function useLiveConversation(source: ConversationSource, enabled: boolean): LiveState {
   const queryClient = useQueryClient();
@@ -177,10 +178,11 @@ export function useLiveConversation(source: ConversationSource, enabled: boolean
   const token = session.status === 'signed-in' ? session.token : null;
   const [state, dispatch] = useReducer(liveReducer, INITIAL);
   const key = sourceKey(source);
+  const follow = enabled || state.running;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `key` stands for `source`.
   useEffect(() => {
-    if (!enabled || !token) return;
+    if (!follow || !token) return;
     const refresh = () => void queryClient.invalidateQueries({ queryKey: conversationKey(source) });
     let retry: ReturnType<typeof setTimeout> | undefined;
     const connection = new SseConnection({
@@ -195,7 +197,8 @@ export function useLiveConversation(source: ConversationSource, enabled: boolean
         if (event.type === 'ready' || event.type === 'run-start' || event.type === 'message') refresh();
         if (event.type === 'run-end') {
           refresh();
-          // The turn's last answer can be stored a moment after it ends: look again once.
+          // The turn's last answer can be stored a moment after it ends: look again once, even if the
+          // stream closes meanwhile (it does when the turn was all there was left to follow).
           clearTimeout(retry);
           retry = setTimeout(refresh, 1500);
         }
@@ -204,10 +207,9 @@ export function useLiveConversation(source: ConversationSource, enabled: boolean
     connection.start();
     return () => {
       connection.stop();
-      clearTimeout(retry);
       dispatch({ type: 'status', status: 'connecting' });
     };
-  }, [enabled, token, key, queryClient]);
+  }, [follow, token, key, queryClient]);
 
   return state;
 }

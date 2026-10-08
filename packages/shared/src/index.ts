@@ -1176,6 +1176,10 @@ export const ConversationReportSchema = z.object({
   priority: z.enum(['low', 'medium', 'high', 'urgent']).nullable(),
   taskId: z.string().nullable(),
   taskNumber: z.number().int().nullable(),
+  taskTitle: z
+    .string()
+    .nullable()
+    .describe('The text starts "#<number> <title>: ", so the title tells where the summary begins'),
 });
 export type ConversationReport = z.infer<typeof ConversationReportSchema>;
 

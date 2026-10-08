@@ -644,6 +644,8 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - A stream that joins a run midway gets the run's current segment again from its `start` chunk. A run waiting for an approval counts as active, and joining it gives only its last step (the tool call and the approval prompt), not the steps before.
 - A signal that wakes no run is broadcast as a short run of its own: `start` (`payload.messageId: "persisted-signal:<id>"`), a `data-signal` or `data-user-message` part, then `finish`. Signals delivered into a running turn come as the same `data-*` parts.
 - `start`, `step-start`, `step-finish` and `finish` carry `payload.messageId`: the id the turn's answer is stored under (a step after a delivered signal can move to a new one). `start.payload.id` is the agent's id.
+- A run that stops for an approval ends its stream after the `tool-call-approval` chunk with no `finish`, `error` or `abort`. Once the call is decided, the run carries on under the same `runId`, on the same subscription or on one opened meanwhile.
+- `agent.stream` on a thread where another agent's run is active waits for it to end (`waitForCrossAgentThreadRun`): a turn the owner starts and one a notification wakes never overlap.
 
 **Stored messages:**
 - Mastra stores a turn's answer as it goes, step by step: a history read during a turn sees a half-written message.

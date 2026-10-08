@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AppEnv } from '../../src/http/types';
 import { serveWebApp, WEB_CSP } from '../../src/http/web';
 
-const PAGE = '<!doctype html><html><head><script src="/theme.js"></script></head><body></body></html>';
+const PAGE = '<!doctype html><html><head><script src="/boot.js"></script></head><body></body></html>';
 const SCRIPT = `console.log(${'"superagent "'.repeat(200)});`;
 
 const SECRET = 'top secret, outside the build';
@@ -28,7 +28,7 @@ beforeAll(() => {
   mkdirSync(dir);
   mkdirSync(join(dir, 'assets'));
   writeFileSync(join(dir, 'index.html'), PAGE);
-  writeFileSync(join(dir, 'theme.js'), '/* theme */');
+  writeFileSync(join(dir, 'boot.js'), '/* boot */');
   writeFileSync(join(dir, 'assets', 'index-abc123.js'), SCRIPT);
   writeFileSync(join(dir, 'assets', 'index-abc123.js.br'), brotliCompressSync(SCRIPT));
   writeFileSync(join(dir, 'assets', 'index-abc123.js.gz'), gzipSync(SCRIPT));
@@ -83,10 +83,10 @@ describe('the web app on the API origin', () => {
   });
 
   it('serves the root files without caching them', async () => {
-    const res = await app.request('/theme.js');
+    const res = await app.request('/boot.js');
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-cache');
-    expect(await res.text()).toBe('/* theme */');
+    expect(await res.text()).toBe('/* boot */');
   });
 
   it('answers HEAD without a body', async () => {

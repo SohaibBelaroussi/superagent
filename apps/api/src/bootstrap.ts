@@ -356,7 +356,12 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       keyCheck,
     });
     const decisions = new DecisionService(decisionLog, attention, dispatch, logger);
-    const conversations = new ConversationService({ mastra, memory, tasks });
+    const conversations = new ConversationService({
+      mastra,
+      memory,
+      tasks,
+      approvals: (task) => dispatch.pendingApprovals(task),
+    });
 
     const http = await createApp({
       config,

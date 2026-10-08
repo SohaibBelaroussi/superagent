@@ -4,15 +4,17 @@ import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from 
 import { useLocation, useNavigate } from 'react-router';
 import { errorMessage } from '../../api/client';
 import { useConversation, useSendToChief, useStopChief } from '../../api/conversations';
+import { cn } from '../../lib/cn';
 import { randomId } from '../../lib/id';
 import { useDocumentTitle } from '../../lib/title';
 import { Avatar } from '../../ui/avatar';
 import { Button } from '../../ui/button';
 import { Notice, Skeleton, Spinner } from '../../ui/feedback';
+import { composerSurface } from '../../ui/recipes';
 import { StatusDot } from '../../ui/status-dot';
 import { useOrg } from '../tasks/org';
 import { ConversationList } from './conversation-list';
-import { type PendingMessage, useSpeakers } from './message-views';
+import { type PendingMessage, textOf, useSpeakers } from './message-views';
 import { useStickToBottom } from './scroll';
 
 const SUGGESTIONS = [
@@ -21,8 +23,33 @@ const SUGGESTIONS = [
   'Start a research task: compare the top open-source agent frameworks.',
 ];
 
-const textOf = (message: ConversationMessage) =>
-  message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n\n');
+/** How long a queued message may wait once the chief is idle (it goes out within a second) before it's offered again. */
+const LOST_AFTER_MS = 15_000;
+
+type Pending = PendingMessage & {
+  /** Your stored messages with the same text when it was sent: none of them is this one. */
+  known: ReadonlySet<string>;
+};
+
+/**
+ * The pending messages the history now has, each with the stored message that is it. Each stored message
+ * of yours (with its text, and not there when it was sent) stands for one pending message, in order, so
+ * sending the same words twice works.
+ */
+function storedPending(pending: Pending[], messages: ConversationMessage[]): Map<string, string> {
+  const stored = new Map<string, string>();
+  const used = new Set<string>();
+  for (const item of pending) {
+    const match = messages.find(
+      (m) => m.role === 'owner' && !used.has(m.id) && !item.known.has(m.id) && textOf(m.parts) === item.text,
+    );
+    if (match) {
+      used.add(match.id);
+      stored.set(item.key, match.id);
+    }
+  }
+  return stored;
+}
 
 /** Where the home page's quick message travels, to be sent once the chief's page is open. */
 export interface ChiefDraft {
@@ -38,23 +65,22 @@ export function ChiefPage() {
   const { history, messages, arrived, turns, running: runningCalls, active: running, status } = conversation;
   const send = useSendToChief();
   const stop = useStopChief();
-  const [pending, setPending] = useState<Array<PendingMessage & { known: ReadonlySet<string> }>>([]);
+  const [pending, setPending] = useState<Pending[]>([]);
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const { atBottom, toBottom, keepPlace } = useStickToBottom(scrollRef, contentRef);
 
-  // A message is pending until the history has it: an owner message with its text that wasn't there before.
-  const arrivedOwn = (message: { text: string; known: ReadonlySet<string> }) =>
-    messages.some((m) => m.role === 'owner' && !message.known.has(m.id) && textOf(m) === message.text);
-  const shownPending = pending.filter((message) => !arrivedOwn(message));
+  // A message is pending until the history has it.
+  const stored = storedPending(pending, messages);
+  const shownPending = pending.filter((message) => !stored.has(message.key));
 
   function submit(text: string, key = randomId()) {
     const message = text.trim();
     if (!message) return;
     const known = new Set(
-      messages.filter((m) => m.role === 'owner' && textOf(m) === message).map((m) => m.id),
+      messages.filter((m) => m.role === 'owner' && textOf(m.parts) === message).map((m) => m.id),
     );
     setPending((list) => [
       ...list.filter((item) => item.key !== key),
@@ -73,23 +99,46 @@ export function ChiefPage() {
     });
   }
 
-  // Sent ones the history has caught up with are done with.
+  // The ones the history has caught up with are done with. The rest know those messages aren't theirs.
   useEffect(() => {
-    if (pending.some((message) => message.state !== 'failed' && arrivedOwn(message))) {
-      setPending((list) => list.filter((message) => message.state === 'failed' || !arrivedOwn(message)));
-    }
+    if (stored.size === 0) return;
+    const taken = [...stored.values()];
+    setPending((list) =>
+      list
+        .filter((message) => !stored.has(message.key))
+        .map((message) => ({ ...message, known: new Set([...message.known, ...taken]) })),
+    );
   });
 
-  // A message written on the home page arrives in the navigation state: send it once.
+  // A queued message goes out within a second of the chief going idle. One still waiting well after
+  // that was lost (the server restarted, say): offer it again.
+  useEffect(() => {
+    if (running || status !== 'live' || !pending.some((message) => message.state === 'queued')) return;
+    const timer = setTimeout(() => {
+      setPending((list) =>
+        list.map((message) =>
+          message.state === 'queued'
+            ? { ...message, state: 'failed', error: 'Not sent: the chief didn’t pick it up' }
+            : message,
+        ),
+      );
+    }, LOST_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [running, status, pending]);
+
+  // A message written on the home page arrives in the navigation state: send it once, even when the
+  // effect runs twice (StrictMode) before the cleared state has rendered.
   const location = useLocation();
   const navigate = useNavigate();
   const handoff = (location.state as ChiefDraft | null)?.send;
+  const handedOff = useRef<string | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per handed-off message.
   useEffect(() => {
-    if (!handoff) return;
+    if (!handoff || handedOff.current === location.key) return;
+    handedOff.current = location.key;
     navigate(location.pathname, { replace: true, state: null });
     submit(handoff);
-  }, [handoff]);
+  }, [handoff, location.key]);
 
   function onSubmit(event?: FormEvent) {
     event?.preventDefault();
@@ -128,9 +177,11 @@ export function ChiefPage() {
               />
               {running
                 ? 'Answering…'
-                : status === 'offline'
-                  ? 'Reconnecting…'
-                  : 'Routes your work to the departments'}
+                : status === 'live'
+                  ? 'Routes your work to the departments'
+                  : status === 'offline'
+                    ? 'Reconnecting…'
+                    : 'Connecting…'}
             </p>
           </div>
         </div>
@@ -206,7 +257,7 @@ export function ChiefPage() {
       </div>
 
       <form onSubmit={onSubmit} className="shrink-0 px-3 pb-3 sm:px-6 sm:pb-4">
-        <div className="mx-auto w-full max-w-3xl rounded-[22px] border border-border bg-card shadow-raised transition-colors duration-200 focus-within:border-border-strong">
+        <div className={cn('mx-auto w-full max-w-3xl bg-card shadow-raised', composerSurface)}>
           <label htmlFor="chief-message" className="sr-only">
             Message the chief of staff
           </label>

@@ -84,6 +84,7 @@ describe('the chief of staff', () => {
                 priority: 'medium',
                 taskId: proofread.id,
                 taskNumber: proofread.number,
+                taskTitle: proofread.title,
               },
             },
           ],
@@ -200,12 +201,87 @@ describe('the chief of staff', () => {
         return HttpResponse.json({ delivery: 'started' }, { status: 202 });
       }),
     );
-    const { router } = renderApp('/');
+    // StrictMode runs the page's effects twice, as development does: the message still goes once.
+    const { router } = renderApp('/', { strict: true });
     const user = userEvent.setup();
     await user.type(await screen.findByLabelText('Ask your chief of staff'), 'What needs me today?{Enter}');
     expect(await screen.findByRole('heading', { name: 'Chief of staff' })).toBeVisible();
     await waitFor(() => expect(sent).toEqual([{ message: 'What needs me today?' }]));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(sent).toHaveLength(1);
+    expect(screen.getAllByText('What needs me today?')).toHaveLength(1);
     expect(router.state.location.state).toBeNull();
+  });
+
+  it('keeps the same words sent twice apart, each pending until its own copy is stored', async () => {
+    const history = { items: [] as ConversationMessage[] };
+    server.use(
+      ...signedInHandlers(),
+      http.get(api('/v1/chief/messages'), () =>
+        HttpResponse.json({ items: history.items, nextCursor: null }),
+      ),
+      http.get(api('/v1/chief/stream'), () => liveStream().response()),
+      http.post(api('/v1/chief/messages'), () => HttpResponse.json({ delivery: 'queued' }, { status: 202 })),
+    );
+    const { queryClient } = renderApp('/chief');
+    const user = userEvent.setup();
+    const box = await screen.findByLabelText('Message the chief of staff');
+    await user.type(box, 'ok{Enter}');
+    await user.type(box, 'ok{Enter}');
+    await waitFor(() => expect(screen.getAllByText('Sends once the current answer is done')).toHaveLength(2));
+
+    history.items = [owner('o1', 'ok', 0)];
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(screen.getAllByText('Sends once the current answer is done')).toHaveLength(1));
+    expect(screen.getAllByText('ok')).toHaveLength(2);
+
+    history.items = [owner('o1', 'ok', 0), owner('o2', 'ok', 0)];
+    await queryClient.invalidateQueries();
+    await waitFor(() =>
+      expect(screen.queryByText('Sends once the current answer is done')).not.toBeInTheDocument(),
+    );
+    expect(screen.getAllByText('ok')).toHaveLength(2);
+  });
+
+  it('shows a report that arrives while it waits, once', async () => {
+    const stream = liveStream();
+    const history = { items: [] as ConversationMessage[] };
+    const done = task({ title: 'Proofread: the launch post', phase: 'review' });
+    const report: ConversationMessage = {
+      id: 'sig-1',
+      createdAt: at(0),
+      role: 'report',
+      author: null,
+      parts: [{ type: 'text', text: `#${done.number} Proofread: the launch post: Done.` }],
+      report: {
+        kind: 'task-done',
+        source: 'dept:research',
+        priority: 'medium',
+        taskId: done.id,
+        taskNumber: done.number,
+        taskTitle: done.title,
+      },
+    };
+    server.use(
+      ...signedInHandlers(),
+      http.get(api('/v1/chief/messages'), () =>
+        HttpResponse.json({ items: history.items, nextCursor: null }),
+      ),
+      http.get(api('/v1/chief/stream'), () => stream.response()),
+    );
+    const { queryClient } = renderApp('/chief');
+    await stream.open;
+    stream.send({ type: 'ready', running: false });
+    stream.send({ type: 'message', runId: 'quiet-1', message: report });
+    // A title with ": " in it still links whole.
+    expect(
+      await screen.findByRole('link', { name: `#${done.number} Proofread: the launch post` }),
+    ).toBeVisible();
+    history.items = [report];
+    await queryClient.invalidateQueries();
+    await waitFor(() =>
+      expect(screen.getAllByRole('article', { name: `Report on #${done.number}` })).toHaveLength(1),
+    );
   });
 });
 
@@ -275,5 +351,68 @@ describe('a task’s transcript', () => {
     expect(screen.getByText('Mastra, LangGraph and CrewAI.')).toBeVisible();
     expect(screen.getByText('Add a source for each, please.')).toBeVisible();
     expect(screen.getByRole('tab', { name: 'Transcript' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('follows a turn to its end when the task closes in the middle of it', async () => {
+    const working = task({ title: 'Wrap up', phase: 'working' });
+    const state = { task: working };
+    const stream = liveStream();
+    const transcript = { items: [] as ConversationMessage[] };
+    const reporting = {
+      type: 'tool' as const,
+      callId: 'c1',
+      tool: 'report_to_chief',
+      delegate: null,
+      args: { outcome: 'done' },
+      status: 'pending' as const,
+      error: null,
+    };
+    server.use(
+      ...signedInHandlers({ tasks: [working] }),
+      http.get(api(`/v1/tasks/${working.id}`), () => HttpResponse.json(state.task)),
+      http.get(api(`/v1/tasks/${working.id}/events`), () => HttpResponse.json({ items: [] })),
+      http.get(api(`/v1/tasks/${working.id}/artifacts`), () => HttpResponse.json({ items: [] })),
+      http.get(api(`/v1/tasks/${working.id}/transcript`), () =>
+        HttpResponse.json({ items: transcript.items, nextCursor: null }),
+      ),
+      http.get(api(`/v1/tasks/${working.id}/stream`), () => stream.response()),
+    );
+    const { queryClient } = renderApp(`/tasks/${working.id}?view=transcript`);
+    await stream.open;
+    stream.send({ type: 'ready', running: true });
+    stream.send({ type: 'run-start', runId: 'r1', agent: ada.key });
+    stream.send({ type: 'tool', runId: 'r1', part: reporting });
+    expect(await screen.findByText('Reported it done…')).toBeVisible();
+
+    // The report closes the task (its department closes tasks itself) while the turn goes on.
+    state.task = { ...working, phase: 'done', closedAt: new Date().toISOString() };
+    await queryClient.invalidateQueries({ queryKey: ['task', working.id] });
+    expect(await screen.findByText(/this task is closed/i)).toBeVisible();
+
+    // Still followed: the end of the turn arrives, and the history with it.
+    transcript.items = [
+      {
+        id: 'a1',
+        createdAt: at(0),
+        role: 'agent',
+        author: ada.key,
+        parts: [
+          { ...reporting, status: 'done', result: { reported: true } },
+          { type: 'text', text: 'All done.' },
+        ],
+        report: null,
+      },
+    ];
+    stream.send({
+      type: 'tool',
+      runId: 'r1',
+      part: { ...reporting, status: 'done', result: { reported: true } },
+    });
+    stream.send({ type: 'text', runId: 'r1', id: 'text-1', delta: 'All done.' });
+    stream.send({ type: 'run-end', runId: 'r1', outcome: 'finished', error: null, messageIds: ['a1'] });
+    expect(await screen.findByText('All done.')).toBeVisible();
+    await waitFor(() => expect(screen.queryByText('Reported it done…')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('All done.')).toHaveLength(1));
+    expect(screen.getAllByText('Reported it done')).toHaveLength(1);
   });
 });
