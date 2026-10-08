@@ -55,7 +55,8 @@ export function Field({
   const id = useId();
   const hintId = `${id}-hint`;
   const errorId = `${id}-error`;
-  const describedBy = [error ? errorId : null, hint ? hintId : null].filter(Boolean).join(' ') || undefined;
+  // Only text that is on screen: an error replaces the hint.
+  const describedBy = error ? errorId : hint ? hintId : undefined;
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
       <label htmlFor={id} className="text-label text-foreground">

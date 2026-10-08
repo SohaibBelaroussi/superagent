@@ -11,12 +11,21 @@ import { serveWebApp, WEB_CSP } from '../../src/http/web';
 const PAGE = '<!doctype html><html><head><script src="/theme.js"></script></head><body></body></html>';
 const SCRIPT = `console.log(${'"superagent "'.repeat(200)});`;
 
+const SECRET = 'top secret, outside the build';
+
+let root: string;
 let dir: string;
 let app: Hono<AppEnv>;
 
-/** A built app in a folder, and an API in front of it with one route and problem+json 404s. */
+/**
+ * A built app in a folder, a secret file next to that folder (what a path traversal would be after),
+ * and an API in front of the app with one route and problem+json 404s.
+ */
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), 'web-app-'));
+  root = mkdtempSync(join(tmpdir(), 'web-app-'));
+  dir = join(root, 'web');
+  writeFileSync(join(root, 'SECRET'), SECRET);
+  mkdirSync(dir);
   mkdirSync(join(dir, 'assets'));
   writeFileSync(join(dir, 'index.html'), PAGE);
   writeFileSync(join(dir, 'theme.js'), '/* theme */');
@@ -32,7 +41,7 @@ beforeAll(() => {
   expect(serveWebApp(app, dir, noopLogger)).toBe(true);
 });
 
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 describe('the web app on the API origin', () => {
   it('answers page paths with index.html under a strict CSP', async () => {
@@ -98,17 +107,31 @@ describe('the web app on the API origin', () => {
     expect((await app.request('/board', { method: 'POST' })).status).toBe(404);
   });
 
-  it('serves only files of the build: missing files and other paths are 404s', async () => {
-    for (const path of [
-      '/assets/missing.js',
-      '/favicon.ico',
-      '/secret.env',
-      '/assets/index-abc123.js.br',
-      '/assets/..%2f..%2fpackage.json',
-      '/..%2f..%2fetc%2fpasswd.txt',
-    ]) {
+  it('serves only files of the build: missing files are 404s', async () => {
+    for (const path of ['/assets/missing.js', '/favicon.ico', '/secret.env', '/assets/index-abc123.js.br']) {
       const res = await app.request(path);
       expect(res.status, path).toBe(404);
+    }
+  });
+
+  it('never reaches a file outside the build, however the path is written', async () => {
+    // Extensionless, so the file-extension rule can't be what stops them: a path naming no file of the
+    // build gets the app's page, never the file next to the build.
+    for (const path of [
+      '/../SECRET',
+      '/..%2fSECRET',
+      '/%2e%2e/SECRET',
+      '/%2e%2e%2fSECRET',
+      '/assets/..%2f..%2fSECRET',
+      '/assets/%2e%2e/%2e%2e/SECRET',
+      '/assets%2f..%2f..%2fSECRET',
+      '/web/../SECRET',
+    ]) {
+      const res = await app.request(path);
+      const body = await res.text();
+      expect(body, path).not.toContain(SECRET);
+      expect([200, 404], path).toContain(res.status);
+      if (res.status === 200) expect(body, path).toBe(PAGE);
     }
   });
 

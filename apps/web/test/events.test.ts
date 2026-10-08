@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { onUnauthorized } from '../src/api/client';
+import { onUnauthorized, setApiToken } from '../src/api/client';
 import { EventStream, type LiveStatus, parseFrame } from '../src/api/events';
 
 /** A response whose body the test writes, chunk by chunk, like a server sending events. */
@@ -50,24 +50,34 @@ describe('EventStream', () => {
   let statuses: LiveStatus[];
   let events: number[];
   let resets: number;
-  let next: Array<() => ReturnType<typeof sse>>;
+  /** What the next connections get: a stream, or 'hang' (no answer until aborted). */
+  let next: Array<(() => ReturnType<typeof sse>) | 'hang'>;
 
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
     connections.length = 0;
     statuses = [];
     events = [];
     resets = 0;
     next = [];
+    setApiToken('sa_device_token');
   });
   afterEach(() => {
     vi.useRealTimers();
     onUnauthorized(null);
+    setApiToken(null);
   });
 
   function start() {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const stream = (next.shift() ?? (() => sse()))();
+      const plan = next.shift() ?? (() => sse());
+      if (plan === 'hang') {
+        connections.push({ headers: init?.headers as Record<string, string>, stream: sse() });
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        });
+      }
+      const stream = plan();
       connections.push({ headers: init?.headers as Record<string, string>, stream });
       return stream.response;
     });
@@ -130,8 +140,57 @@ describe('EventStream', () => {
     onUnauthorized(unauthorized);
     next.push(() => sse(401));
     start();
-    await vi.waitFor(() => expect(unauthorized).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(unauthorized).toHaveBeenCalledExactlyOnceWith('sa_device_token'));
     await vi.advanceTimersByTimeAsync(60_000);
     expect(connections).toHaveLength(1);
+  });
+
+  it('refreshes everything once a fresh connection is ready, but not after resuming', async () => {
+    const live = start();
+    await vi.waitFor(() => expect(connections).toHaveLength(1));
+    // Started from "now": anything that changed since the page loaded its data came as no event.
+    connections[0]?.stream.push('id: 41\nevent: ready\ndata: {"lastEventId":41}\n\n');
+    await vi.waitFor(() => expect(resets).toBe(1));
+
+    connections[0]?.stream.end();
+    await vi.waitFor(() => expect(statuses).toContain('offline'));
+    await vi.advanceTimersByTimeAsync(1500);
+    await vi.waitFor(() => expect(connections).toHaveLength(2));
+    expect(connections[1]?.headers['last-event-id']).toBe('41');
+    // Resumed: the server replays the gap, nothing to refresh wholesale.
+    connections[1]?.stream.push('id: 41\nevent: ready\ndata: {"lastEventId":41}\n\n');
+    await vi.waitFor(() => expect(statuses.at(-1)).toBe('live'));
+    expect(resets).toBe(1);
+    live.stop();
+  });
+
+  it('gives up on a connection that never answers, and tries again', async () => {
+    next.push('hang');
+    const live = start();
+    await vi.waitFor(() => expect(connections).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(80_000);
+    await vi.waitFor(() => expect(connections.length).toBeGreaterThanOrEqual(2));
+    live.stop();
+  });
+
+  it('stops for good when stopped during a backoff', async () => {
+    const live = start();
+    await vi.waitFor(() => expect(connections).toHaveLength(1));
+    connections[0]?.stream.end();
+    await vi.waitFor(() => expect(statuses).toContain('offline'));
+    live.stop();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(connections).toHaveLength(1);
+  });
+
+  it('ignores a refusal of a token the session no longer uses', async () => {
+    const unauthorized = vi.fn();
+    onUnauthorized(unauthorized);
+    setApiToken('sa_newer_token');
+    next.push(() => sse(401));
+    start();
+    await vi.waitFor(() => expect(connections).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(unauthorized).not.toHaveBeenCalled();
   });
 });

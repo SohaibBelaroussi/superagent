@@ -51,15 +51,20 @@ export function EditTaskDialog({
       setError('A task needs a title.');
       return;
     }
-    const dueAt = due ? new Date(due).toISOString() : null;
-    update.mutate(
-      {
-        ...(trimmed !== task.title ? { title: trimmed } : {}),
-        ...(priority !== task.priority ? { priority } : {}),
-        ...(dueAt !== task.dueAt ? { dueAt } : {}),
-      },
-      { onSuccess: () => onOpenChange(false) },
-    );
+    // Compared as the input shows it (to the minute): a due date with seconds that you didn't touch
+    // must not be rewritten.
+    const dueChanged = due !== toLocalInput(task.dueAt);
+    const changes = {
+      ...(trimmed !== task.title ? { title: trimmed } : {}),
+      ...(priority !== task.priority ? { priority } : {}),
+      ...(dueChanged ? { dueAt: due ? new Date(due).toISOString() : null } : {}),
+    };
+    // Nothing changed: nothing to record in the task's history.
+    if (Object.keys(changes).length === 0) {
+      onOpenChange(false);
+      return;
+    }
+    update.mutate(changes, { onSuccess: () => onOpenChange(false) });
   }
 
   return (

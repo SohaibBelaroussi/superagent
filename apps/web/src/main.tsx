@@ -6,7 +6,14 @@ import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router/dom';
 import { createQueryClient } from './api/query-client';
 import { AppProviders } from './app';
+import { reloadOnce } from './layout/route-error';
 import { createRouter } from './router';
+
+// A page's code preloaded from a build the server no longer has (upgraded while this tab was open):
+// reload once to get the new build, instead of failing on the next navigation.
+window.addEventListener('vite:preloadError', (event) => {
+  if (reloadOnce()) event.preventDefault();
+});
 
 const queryClient = createQueryClient();
 const router = createRouter();

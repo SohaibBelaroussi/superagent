@@ -24,7 +24,7 @@ async function department(request: APIRequestContext): Promise<{ id: string; slu
   return res.json();
 }
 
-/** Any Content-Security-Policy violation on the page is recorded, and fails the test that checks. */
+/** Every Content-Security-Policy violation on a page is recorded; any one fails the test (afterEach). */
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     const seen: string[] = [];
@@ -35,15 +35,19 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-/** A test that ends signed in leaves a device token behind: revoke it, so local runs don't pile them up. */
-test.afterEach(async ({ page, request }) => {
-  const stored = await page.evaluate(() => window.localStorage.getItem('superagent.token')).catch(() => null);
-  if (!stored) return;
-  const me = await request.get('/v1/me', { headers: { authorization: `Bearer ${stored}` } });
-  if (me.ok()) await request.delete(`/v1/tokens/${(await me.json()).token.id}`, { headers: auth });
-});
+const violations = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __csp?: string[] }).__csp ?? []).catch(() => []);
 
-const violations = (page: Page) => page.evaluate(() => (window as unknown as { __csp: string[] }).__csp);
+test.afterEach(async ({ page, request }) => {
+  const seen = await violations(page);
+  // A test that ends signed in leaves a device token behind: revoke it, so local runs don't pile them up.
+  const stored = await page.evaluate(() => window.localStorage.getItem('superagent.token')).catch(() => null);
+  if (stored) {
+    const me = await request.get('/v1/me', { headers: { authorization: `Bearer ${stored}` } });
+    if (me.ok()) await request.delete(`/v1/tokens/${(await me.json()).token.id}`, { headers: auth });
+  }
+  expect(seen, 'Content-Security-Policy violations').toEqual([]);
+});
 
 test('serves the app under its CSP, and the API next to it', async ({ page, request }) => {
   const res = await request.get('/board');
@@ -56,7 +60,11 @@ test('serves the app under its CSP, and the API next to it', async ({ page, requ
   await signIn(page);
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Board' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Board' })).toBeVisible();
-  expect(await violations(page)).toEqual([]);
+  await expect(page).toHaveTitle('Board · superagent');
+  // Base UI's select injects a style element unless told not to: open one under the CSP.
+  await page.getByRole('combobox', { name: 'Department' }).click();
+  await expect(page.getByRole('option', { name: 'All departments' })).toBeVisible();
+  await page.keyboard.press('Escape');
 });
 
 test('signs in with the admin token but keeps only a device token, revoked on sign-out', async ({
@@ -107,6 +115,10 @@ test('shows a task created elsewhere without a reload, then edits and cancels it
 
   await card.click();
   await expect(page.getByRole('heading', { level: 1, name: 'Check the browser tests' })).toBeVisible();
+  // Tooltips are positioned with inline styles set from script, which the CSP allows: show one.
+  await page.getByRole('button', { name: 'More actions' }).hover();
+  // The icon button's name is an aria-label, so this text is the tooltip's.
+  await expect(page.getByText('More actions', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'More actions' }).click();
   await page.getByRole('menuitem', { name: /edit title/i }).click();
   const edit = page.getByRole('dialog');
@@ -123,7 +135,6 @@ test('shows a task created elsewhere without a reload, then edits and cancels it
   await confirm.getByRole('button', { name: 'Cancel task' }).click();
   await expect(page.getByText('This task was cancelled.')).toBeVisible();
   await expect(page.getByText('You moved it from Inbox to Cancelled')).toBeVisible();
-  expect(await violations(page)).toEqual([]);
 });
 
 test('works on a phone: the rail becomes a drawer, and nothing scrolls sideways', async ({ page }) => {

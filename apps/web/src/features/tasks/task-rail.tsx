@@ -8,7 +8,7 @@ import { departmentTone, PRIORITIES } from '../../lib/tones';
 import { Avatar } from '../../ui/avatar';
 import { Skeleton } from '../../ui/feedback';
 import { DetailRow, Panel, ProgressBar } from '../../ui/layout';
-import { Markdown } from '../../ui/markdown';
+import { Markdown, webUrl } from '../../ui/markdown';
 import { RelativeTime } from '../../ui/time';
 import type { OrgLookup } from './org';
 import { DepartmentLabel, PhaseBadge, taskProgress } from './task-bits';
@@ -135,19 +135,9 @@ export function TaskChecklist({ task }: { task: Task }) {
   );
 }
 
-/** Only links with a web address are clickable: an agent could write anything in a URL field. */
-function safeHref(url: string | null): string | null {
-  if (!url) return null;
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null;
-  } catch {
-    return null;
-  }
-}
-
 function ArtifactRow({ artifact }: { artifact: Artifact }) {
-  const href = safeHref(artifact.url);
+  // Only a web address is clickable: an agent could write anything in a URL field.
+  const href = webUrl(artifact.url);
   if (artifact.kind === 'link' && href) {
     return (
       <a

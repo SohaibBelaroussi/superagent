@@ -71,9 +71,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<SessionState>({ status: 'checking' });
 
+  /**
+   * Back to signed out. The stored token goes only if it is still `token`: another tab may have signed
+   * in since and stored its own, which this tab must not take with it.
+   */
   const forget = useCallback(
-    (reason: 'revoked' | 'signed-out') => {
-      storage.remove(TOKEN_KEY);
+    (reason: 'revoked' | 'signed-out', token: string | null) => {
+      if (token === null || storage.get(TOKEN_KEY) === token) storage.remove(TOKEN_KEY);
       setApiToken(null);
       queryClient.clear();
       setState({ status: 'signed-out', reason });
@@ -93,8 +97,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setApiToken(stored);
       setState({ status: 'signed-in', me, token: stored, persisted: true });
     } catch (error) {
-      if (error instanceof ProblemError && (error.status === 401 || error.status === 403)) forget('revoked');
-      else setState({ status: 'unreachable' });
+      if (error instanceof ProblemError && (error.status === 401 || error.status === 403)) {
+        forget('revoked', stored);
+      } else setState({ status: 'unreachable' });
     }
   }, [forget]);
 
@@ -104,7 +109,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   // A request refused mid-session (token revoked from another device): back to sign-in.
   useEffect(() => {
-    onUnauthorized(() => forget('revoked'));
+    onUnauthorized((token) => forget('revoked', token));
     return () => onUnauthorized(null);
   }, [forget]);
 
@@ -121,7 +126,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           token,
         });
         kept = created.token;
-        keptMe = await api(MeSchema, '/v1/me', { token: kept });
+        // From the answer itself: another request could fail and leave the new token valid but unheld.
+        keptMe = { ...me, token: { id: created.record.id, name: created.record.name } };
       }
       const persisted = storage.set(TOKEN_KEY, kept);
       setApiToken(kept);
@@ -132,14 +138,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
-    if (state.status === 'signed-in' && state.me.token.id !== ADMIN_TOKEN_ID) {
+    if (state.status !== 'signed-in') return;
+    if (state.me.token.id !== ADMIN_TOKEN_ID) {
       try {
-        await apiVoid(`/v1/tokens/${state.me.token.id}`, { method: 'DELETE' });
+        await apiVoid(`/v1/tokens/${encodeURIComponent(state.me.token.id)}`, { method: 'DELETE' });
       } catch {
         // Signed out here either way; the token can still be revoked from another device.
       }
     }
-    forget('signed-out');
+    forget('signed-out', state.token);
   }, [state, forget]);
 
   const value = useMemo<SessionValue>(

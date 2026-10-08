@@ -98,6 +98,18 @@ describe('the board', () => {
     expect(asked).toContain(research.id);
   });
 
+  it('marks only the department being shown as the current page in the rail', async () => {
+    server.use(...signedInHandlers());
+    renderApp('/board?department=research');
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    expect(await within(nav).findByRole('link', { name: /research/i })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(within(nav).getByRole('link', { name: 'Board' })).not.toHaveAttribute('aria-current');
+    expect(within(nav).getByRole('link', { name: 'Home' })).not.toHaveAttribute('aria-current');
+  });
+
   it('invites you to start when the board is empty', async () => {
     server.use(...signedInHandlers({ tasks: [] }));
     renderApp('/board');

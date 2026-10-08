@@ -27,7 +27,7 @@ export class ResponseShapeError extends Error {
 }
 
 let currentToken: string | null = null;
-let unauthorizedHandler: (() => void) | null = null;
+let unauthorizedHandler: ((token: string) => void) | null = null;
 
 /** The token every request carries. Set by the session when you sign in, cleared when you sign out. */
 export function setApiToken(token: string | null): void {
@@ -38,14 +38,17 @@ export function getApiToken(): string | null {
   return currentToken;
 }
 
-/** Called when the API refuses the current token (revoked, or the server's admin token changed). */
-export function onUnauthorized(handler: (() => void) | null): void {
+/** Called with the refused token when the API refuses the session's token (revoked elsewhere). */
+export function onUnauthorized(handler: ((token: string) => void) | null): void {
   unauthorizedHandler = handler;
 }
 
-/** For requests made outside `api()` (the event stream) that get a 401 with the session's token. */
-export function notifyUnauthorized(): void {
-  unauthorizedHandler?.();
+/**
+ * Reports a 401 for `token`. Only the token still in use counts: an answer to a request made with an
+ * older token (signed out and in again meanwhile) must not sign out the new session.
+ */
+export function notifyUnauthorized(token: string): void {
+  if (token === currentToken) unauthorizedHandler?.(token);
 }
 
 export interface RequestOptions {
@@ -105,7 +108,7 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
   if (!response.ok) {
     const problem = await readProblem(response);
     // Only the session's own token: a token being checked at sign-in is the caller's business.
-    if (response.status === 401 && options.token === undefined) unauthorizedHandler?.();
+    if (response.status === 401 && options.token === undefined && token) notifyUnauthorized(token);
     throw new ProblemError(response.status, problem);
   }
   return response;

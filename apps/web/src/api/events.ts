@@ -5,7 +5,10 @@ export type LiveStatus = 'connecting' | 'live' | 'offline';
 
 export interface EventStreamHandlers {
   onEvent(event: TaskEvent): void;
-  /** The server skipped events (too many missed): reload everything. */
+  /**
+   * Events may have been missed, so reload everything: the server skipped some (`reset`), or the
+   * connection started from "now" (no Last-Event-ID), after the page had already loaded its data.
+   */
   onReset(): void;
   onStatus(status: LiveStatus): void;
 }
@@ -33,6 +36,8 @@ export class EventStream {
   private watchdog: ReturnType<typeof setInterval> | undefined;
   private wake: (() => void) | null = null;
   private status: LiveStatus = 'connecting';
+  /** This connection sent a Last-Event-ID, so the server replays what it missed. */
+  private resuming = false;
 
   constructor(
     private readonly token: string,
@@ -41,9 +46,10 @@ export class EventStream {
   ) {}
 
   start(): void {
+    // A connection that hears nothing for a minute (not even a heartbeat, or no answer at all to the
+    // request) is gone, whatever the socket thinks: abort it and reconnect.
     this.watchdog = setInterval(() => {
-      if (this.controller && this.lastHeard && Date.now() - this.lastHeard > SILENCE_MS)
-        this.controller.abort();
+      if (this.controller && Date.now() - this.lastHeard > SILENCE_MS) this.controller.abort();
     }, 15_000);
     window.addEventListener('online', this.reconnectNow);
     void this.run();
@@ -78,6 +84,8 @@ export class EventStream {
           authorization: `Bearer ${this.token}`,
         };
         if (this.lastEventId) headers['last-event-id'] = this.lastEventId;
+        this.resuming = this.lastEventId !== null;
+        this.lastHeard = Date.now();
         const response = await this.fetchImpl('/v1/events', {
           headers,
           signal: this.controller.signal,
@@ -85,7 +93,7 @@ export class EventStream {
           credentials: 'omit',
         });
         if (response.status === 401) {
-          notifyUnauthorized();
+          notifyUnauthorized(this.token);
           return;
         }
         if (!response.ok || !response.body) throw new Error(`Event stream answered ${response.status}`);
@@ -141,6 +149,10 @@ export class EventStream {
     if (frame.event === 'ready') {
       this.backoffMs = 1000;
       this.setStatus('live');
+      // Started from "now", not from an event of ours: whatever changed between the page loading its data
+      // and this moment never comes as an event, so look again once.
+      if (!this.resuming) this.handlers.onReset();
+      this.resuming = true;
     } else if (frame.event === 'reset') {
       this.handlers.onReset();
     } else if (frame.event === 'task' && frame.data) {

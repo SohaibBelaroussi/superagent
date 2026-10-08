@@ -17,6 +17,7 @@ import { useAttention, useBoard, useProfile, useUsage } from '../../api/queries'
 import { useMe } from '../../api/session';
 import { cn } from '../../lib/cn';
 import { formatCost, formatTokens, plural } from '../../lib/format';
+import { useDocumentTitle } from '../../lib/title';
 import { PRIORITIES, TONE_TEXT, type Tone } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
@@ -61,6 +62,7 @@ const rowLink = cn(
 );
 
 export function HomePage() {
+  useDocumentTitle('Home');
   const me = useMe();
   const profile = useProfile();
   const org = useOrg();

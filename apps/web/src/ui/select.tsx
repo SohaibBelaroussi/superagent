@@ -24,6 +24,7 @@ export function Select<T extends string>({
   id,
   'aria-label': ariaLabel,
   'aria-describedby': ariaDescribedBy,
+  'aria-invalid': ariaInvalid,
 }: {
   value: T | null;
   onValueChange: (value: T) => void;
@@ -35,6 +36,7 @@ export function Select<T extends string>({
   id?: string;
   'aria-label'?: string;
   'aria-describedby'?: string;
+  'aria-invalid'?: boolean;
 }) {
   const selected = options.find((option) => option.value === value);
   return (
@@ -50,6 +52,7 @@ export function Select<T extends string>({
         id={id}
         aria-label={ariaLabel}
         aria-describedby={ariaDescribedBy}
+        aria-invalid={ariaInvalid || undefined}
         className={cn(
           buttonVariants({ variant: 'default', size }),
           'justify-between gap-2 pr-2.5',

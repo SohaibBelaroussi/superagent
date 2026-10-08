@@ -6,6 +6,7 @@ import { errorMessage } from '../../api/client';
 import { useAttention, useBoard } from '../../api/queries';
 import { cn } from '../../lib/cn';
 import { plural } from '../../lib/format';
+import { useDocumentTitle } from '../../lib/title';
 import { BOARD_COLUMNS, CLOSED_PHASES, departmentTone, PHASES, PRIORITIES, TONE_DOT } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
@@ -43,6 +44,7 @@ export function BoardPage() {
   const org = useOrg();
   const slug = params.get('department');
   const department = slug ? org.departmentBySlug(slug) : undefined;
+  useDocumentTitle(department ? department.name : 'Board');
   const waitingForDepartment = Boolean(slug) && !department && !org.ready;
   const board = useBoard(department?.id);
   const attention = useAttention();
@@ -68,7 +70,11 @@ export function BoardPage() {
 
   const all = board.data?.columns.flatMap((column) => column.tasks) ?? [];
   const open = all.filter((task) => !task.closedAt).length;
-  const closed = CLOSED_PHASES.flatMap((phase) => columns.get(phase) ?? []);
+  // Failed and cancelled share one column: newest closed first, whichever way they ended.
+  const closed = sortTasks(
+    'failed',
+    CLOSED_PHASES.flatMap((phase) => columns.get(phase) ?? []),
+  );
   const unknownDepartment = Boolean(slug) && org.ready && !department;
 
   return (

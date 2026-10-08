@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { errorMessage, ProblemError } from '../../api/client';
 import { useAttention, useCancelTask, useTask, useUpdateTask } from '../../api/queries';
+import { useDocumentTitle } from '../../lib/title';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/dialog';
 import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';
@@ -23,15 +24,21 @@ import { DepartmentLabel, DueBadge, PhaseBadge, PriorityBadge, SourceBadge } fro
 import { TaskComposer } from './task-composer';
 import { TaskArtifacts, TaskChecklist, TaskDetails, TaskUsage } from './task-rail';
 
+/** Task ids are UUIDs; anything else in the URL is a bad link, never part of a request path. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function TaskPage() {
   const { taskId = '' } = useParams<{ taskId: string }>();
-  const task = useTask(taskId);
+  const valid = UUID.test(taskId);
+  const task = useTask(taskId, { enabled: valid });
   const org = useOrg();
+  useDocumentTitle(task.data ? `#${task.data.number} ${task.data.title}` : 'Task');
 
-  if (task.isPending) return <TaskSkeleton />;
-  if (task.isError) {
+  if (valid && task.isPending) return <TaskSkeleton />;
+  if (!valid || task.isError) {
     const missing =
-      task.error instanceof ProblemError && (task.error.status === 404 || task.error.status === 400);
+      !valid ||
+      (task.error instanceof ProblemError && (task.error.status === 404 || task.error.status === 400));
     return (
       <Page>
         {missing ? (
@@ -60,7 +67,9 @@ export function TaskPage() {
       </Page>
     );
   }
-  return <TaskView task={task.data} org={org} />;
+  if (!task.data) return <TaskSkeleton />;
+  // Keyed by the task: drafts and open dialogs belong to one task and never follow you to another.
+  return <TaskView key={task.data.id} task={task.data} org={org} />;
 }
 
 function TaskView({ task, org }: { task: Task; org: OrgLookup }) {
@@ -152,14 +161,6 @@ function TaskView({ task, org }: { task: Task; org: OrgLookup }) {
               <MenuItem icon={<Pencil aria-hidden />} onClick={() => setEditOpen(true)}>
                 Edit title, priority or due date
               </MenuItem>
-              {task.phase === 'waiting' && canQueue ? (
-                <MenuItem
-                  icon={<RotateCcw aria-hidden />}
-                  onClick={() => move('queued', 'Sent back to the lead')}
-                >
-                  Send back to the lead
-                </MenuItem>
-              ) : null}
               {canCancel ? (
                 <>
                   <MenuSeparator />

@@ -2,7 +2,7 @@ import type { Department } from '@superagent/shared';
 import { OPEN_PHASES } from '@superagent/shared/phases';
 import { ChevronsUpDown, House, LogOut, Monitor, Moon, SquareKanban, Sun } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
-import { NavLink, useLocation, useSearchParams } from 'react-router';
+import { Link, useLocation, useSearchParams } from 'react-router';
 import { useLiveStatus } from '../api/live';
 import { useBoard, useDepartments, useProfile } from '../api/queries';
 import { useMe, useSession } from '../api/session';
@@ -23,33 +23,37 @@ const navRow = cn(
 );
 const navRowActive = 'bg-fill text-foreground hover:bg-fill';
 
+/**
+ * A row of the rail. Plain links with the current page worked out here: React Router's NavLink ignores
+ * the query string, which would mark the board and every department's board as current at once.
+ */
 function NavItem({
   to,
   icon: Icon,
   label,
-  end,
+  active,
   onNavigate,
   trailing,
 }: {
   to: string;
   icon: ComponentType<{ 'aria-hidden'?: boolean }>;
   label: string;
-  end?: boolean;
+  active: boolean;
   onNavigate?: () => void;
   trailing?: ReactNode;
 }) {
   return (
     <li>
-      <NavLink
+      <Link
         to={to}
-        end={end}
         onClick={onNavigate}
-        className={({ isActive }) => cn(navRow, isActive && navRowActive)}
+        className={cn(navRow, active && navRowActive)}
+        aria-current={active ? 'page' : undefined}
       >
         <Icon aria-hidden />
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {trailing}
-      </NavLink>
+      </Link>
     </li>
   );
 }
@@ -68,7 +72,7 @@ function DepartmentLink({
   const active = pathname === '/board' && params.get('department') === department.slug;
   return (
     <li>
-      <NavLink
+      <Link
         to={`/board?department=${encodeURIComponent(department.slug)}`}
         onClick={onNavigate}
         className={cn(navRow, active && navRowActive)}
@@ -81,7 +85,7 @@ function DepartmentLink({
         {openTasks > 0 ? (
           <span className="text-meta text-muted-foreground tabular-nums">{openTasks}</span>
         ) : null}
-      </NavLink>
+      </Link>
     </li>
   );
 }
@@ -164,6 +168,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     }
   }
   const active = (departments.data ?? []).filter((department) => !department.archivedAt);
+  const { pathname } = useLocation();
+  const [params] = useSearchParams();
 
   return (
     <nav aria-label="Main" className="flex h-full min-h-0 flex-col gap-5 px-2.5 py-3">
@@ -173,8 +179,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </div>
 
       <ul className="flex flex-col gap-0.5">
-        <NavItem to="/" end icon={House} label="Home" onNavigate={onNavigate} />
-        <NavItem to="/board" end icon={SquareKanban} label="Board" onNavigate={onNavigate} />
+        <NavItem to="/" icon={House} label="Home" active={pathname === '/'} onNavigate={onNavigate} />
+        <NavItem
+          to="/board"
+          icon={SquareKanban}
+          label="Board"
+          active={pathname === '/board' && !params.get('department')}
+          onNavigate={onNavigate}
+        />
       </ul>
 
       <section aria-labelledby="sidebar-departments" className="flex min-h-0 flex-col gap-1">

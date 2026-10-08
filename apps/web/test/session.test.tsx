@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -107,6 +107,31 @@ describe('signing in', () => {
     expect(await screen.findByText(/you were signed out/i)).toBeVisible();
     expect(router.state.location.pathname).toBe('/sign-in');
     expect(window.localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
+
+  it('goes back to sign-in when the token is revoked mid-session', async () => {
+    server.use(...signedInHandlers());
+    const { router, queryClient } = renderApp('/');
+    expect(await screen.findByRole('heading', { level: 1, name: /sohaib/i })).toBeVisible();
+
+    server.use(http.get(api('/v1/attention'), unauthorized));
+    await act(() => queryClient.invalidateQueries({ queryKey: ['attention'] }));
+    expect(await screen.findByText(/you were signed out/i)).toBeVisible();
+    expect(router.state.location.pathname).toBe('/sign-in');
+    expect(window.localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
+
+  it('leaves another tab’s newer token alone when its own is revoked', async () => {
+    server.use(...signedInHandlers());
+    const { queryClient } = renderApp('/');
+    expect(await screen.findByRole('heading', { level: 1, name: /sohaib/i })).toBeVisible();
+
+    // Another tab signed out (revoking this tab's token) and signed in again with a new one.
+    window.localStorage.setItem(TOKEN_KEY, 'sa_newer_token_from_another_tab_0000000000');
+    server.use(http.get(api('/v1/attention'), unauthorized));
+    await act(() => queryClient.invalidateQueries({ queryKey: ['attention'] }));
+    expect(await screen.findByText(/you were signed out/i)).toBeVisible();
+    expect(window.localStorage.getItem(TOKEN_KEY)).toBe('sa_newer_token_from_another_tab_0000000000');
   });
 
   it('offers a retry, not a sign-out, when the server is down', async () => {
