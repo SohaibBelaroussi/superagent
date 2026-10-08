@@ -9,6 +9,7 @@ import { cors } from 'hono/cors';
 import { createErrorHandler, notFound, problem } from './http/problem';
 import { requestLog } from './http/request-log';
 import type { AppDeps, AppEnv } from './http/types';
+import { serveWebApp } from './http/web';
 import { createV1Router, V1_PREFIX } from './routes/v1';
 import { isUpload, isUploadBeforeAuth, MAX_UPLOAD_BYTES } from './routes/v1/knowledge';
 
@@ -58,6 +59,7 @@ function guardUpgrades(server: Server): Server {
  *   /health, /ready  public liveness and readiness
  *   /api/*           Mastra's built-in routes (agents, threads, memory, schedules...), token auth per route
  *   /v1/*            our control plane, token auth via requireAuth
+ *   everything else  the web app, when WEB_DIR has a build (public files; its data comes from /v1)
  */
 export async function createApp(deps: AppDeps): Promise<HttpApp> {
   const app = new Hono<AppEnv>();
@@ -119,6 +121,8 @@ export async function createApp(deps: AppDeps): Promise<HttpApp> {
   }).init();
 
   app.route(V1_PREFIX, createV1Router(deps, websockets.upgradeWebSocket));
+  // Last: the web app answers only paths the API's routes didn't.
+  if (deps.config.WEB_DIR) serveWebApp(app, deps.config.WEB_DIR, deps.logger);
   return {
     app,
     injectWebSocket: (server) => websockets.injectWebSocket(guardUpgrades(server)),

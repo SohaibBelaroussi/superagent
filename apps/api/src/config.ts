@@ -70,6 +70,9 @@ const configSchema = z.object({
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15_000),
   // Traces (decision D39) older than this many days are pruned; 0 keeps them forever.
   TRACE_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
+  // The built web app (apps/web/dist), served on this origin (decision D44). The image sets it; in
+  // development the app runs on Vite instead.
+  WEB_DIR: z.string().min(1).optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;

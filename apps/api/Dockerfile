@@ -7,31 +7,38 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable
 
-# --- build: install the workspace, bundle the API, assemble production node_modules ---
+# --- build: install the workspace, bundle the API, build the web app, assemble production node_modules ---
 FROM base AS build
 WORKDIR /repo
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/runner/package.json apps/runner/
 COPY apps/egress/package.json apps/egress/
+COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --frozen-lockfile --filter @superagent/api...
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --filter @superagent/api... --filter @superagent/web...
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY apps/api apps/api
 RUN pnpm --filter @superagent/api build
+# The web app (decision D44): static files the API serves from WEB_DIR.
+COPY apps/web apps/web
+RUN pnpm --filter @superagent/web build
 # --legacy: deploy without injectWorkspacePackages; workspace code is already bundled into dist/.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm --filter @superagent/api deploy --prod --legacy /out
 
-# --- runtime: bundle + migrations + production dependencies, running as the node user ---
+# --- runtime: bundle + migrations + production dependencies + the web app, running as the node user ---
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     MASTRA_TELEMETRY_DISABLED=true \
     HOST=0.0.0.0 \
-    PORT=4111
+    PORT=4111 \
+    WEB_DIR=/app/web
 WORKDIR /app
 COPY --from=build --chown=node:node /out ./
+COPY --from=build --chown=node:node /repo/apps/web/dist ./web
 USER node
 EXPOSE 4111
 HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 \
