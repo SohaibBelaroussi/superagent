@@ -1,4 +1,5 @@
 import type { AttentionItem } from '@superagent/shared';
+import type { KeyCheck } from '../../crypto/key-check';
 import type { TaskRow } from '../../db/schema';
 import type { BrowserService } from '../browser/service';
 import type { McpService } from '../capabilities/mcp/service';
@@ -22,6 +23,8 @@ export interface AttentionDeps {
   workspaces: WorkspaceService;
   browsers: BrowserService;
   mcp: McpService;
+  /** Whether SUPERAGENT_ENCRYPTION_KEY opens the database's sealed values (checked at boot). */
+  keyCheck: KeyCheck;
 }
 
 /** How long the runner's health is trusted (the inbox is read often; the runner may be down). */
@@ -180,6 +183,23 @@ export class AttentionService {
     return this.mcpCheck.problem;
   }
 
+  private limitsCheck: { at: number; ignored: Promise<boolean> } | undefined;
+
+  /** Whether the runner's Docker ignores container limits (the runner then creates no container). */
+  private limitsIgnored(): Promise<boolean> {
+    const now = Date.now();
+    if (!this.limitsCheck || now - this.limitsCheck.at > RUNNER_CHECK_MS) {
+      this.limitsCheck = {
+        at: now,
+        ignored: this.deps.browsers.runnerReady().then(
+          (ready) => ready?.docker === true && ready.limits === false,
+          () => false,
+        ),
+      };
+    }
+    return this.limitsCheck.ignored;
+  }
+
   private browserProblem(): Promise<string | undefined> {
     const now = Date.now();
     if (!this.browserCheck || now - this.browserCheck.at > RUNNER_CHECK_MS) {
@@ -246,6 +266,24 @@ export class AttentionService {
           'storage',
           'Document uploads are off',
           'Set S3_ACCESS_KEY and S3_SECRET_KEY to store documents.',
+        ),
+      );
+    }
+    if (this.deps.keyCheck === 'mismatch') {
+      items.push(
+        item(
+          'encryption-key',
+          "The encryption key doesn't open this database's secrets",
+          "SUPERAGENT_ENCRYPTION_KEY is not the key its provider keys and secrets were sealed with (a restore with another .env?). Start with the right key, or set each provider's key and each secret again.",
+        ),
+      );
+    }
+    if (await this.limitsIgnored()) {
+      items.push(
+        item(
+          'runner-limits',
+          "The runner's Docker ignores container limits",
+          'No sandbox, browser or MCP server starts, new or stopped, until the daemon enforces memory, CPU and process limits. Rootless Docker needs cgroup delegation (docs/runbooks/server.md).',
         ),
       );
     }

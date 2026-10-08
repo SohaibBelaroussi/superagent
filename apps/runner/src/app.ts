@@ -13,6 +13,7 @@ import type { z } from 'zod';
 import type { BrowserContainers } from './browsers';
 import type { RunnerConfig } from './config';
 import { dockerMessage } from './docker';
+import type { DaemonLimits } from './limits';
 import type { McpPackages } from './mcp';
 import { type Logger, RunnerError, type SandboxManager } from './sandboxes';
 
@@ -51,6 +52,7 @@ export function createRunnerApp(
   manager: SandboxManager,
   browsers: BrowserContainers,
   mcp: McpPackages,
+  limits: DaemonLimits,
   config: RunnerConfig,
   log: Logger,
 ): Hono {
@@ -82,6 +84,7 @@ export function createRunnerApp(
       ...sandboxes,
       browser: sandboxes.docker && (await browsers.ready()),
       mcp: sandboxes.docker && (await mcp.ready()),
+      limits: sandboxes.docker && (await limits.enforced()),
     });
   });
 

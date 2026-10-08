@@ -16,6 +16,8 @@ export interface CreateMastraOptions {
   agents?: Record<string, Agent>;
   /** Model gateways, keyed by id (our `sa` gateway resolves provider rows). */
   gateways?: Record<string, MastraModelGatewayInterface>;
+  /** Tracing (decision D39): spans to storage, model calls to our usage table. */
+  observability?: MastraConfig['observability'];
 }
 
 export function createMastra(options: CreateMastraOptions): Mastra {
@@ -24,6 +26,7 @@ export function createMastra(options: CreateMastraOptions): Mastra {
     logger: options.logger,
     agents: options.agents ?? {},
     gateways: options.gateways ?? {},
+    ...(options.observability ? { observability: options.observability } : {}),
     server: { auth: options.auth },
     ...(options.studioToken
       ? {

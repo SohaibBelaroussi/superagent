@@ -3,6 +3,7 @@ import type { Mastra } from '@mastra/core/mastra';
 import type { HonoBindings, HonoVariables } from '@mastra/hono';
 import type { TokenService } from '../auth/tokens';
 import type { Config } from '../config';
+import type { KeyCheck } from '../crypto/key-check';
 import type { Db } from '../db/client';
 import type { DecisionService } from '../modules/attention/decisions';
 import type { AttentionService } from '../modules/attention/service';
@@ -22,6 +23,7 @@ import type { ProviderService } from '../modules/providers/service';
 import type { ScheduleService } from '../modules/schedules/service';
 import type { SettingsService } from '../modules/settings/service';
 import type { ToolCatalog } from '../modules/tools/catalog';
+import type { UsageService } from '../modules/usage/service';
 import type { WorkspaceService } from '../modules/workspace/service';
 
 /** Hono environment shared by Mastra's adapter and our routes (requestContext, mastra, ...). */
@@ -53,4 +55,7 @@ export interface AppDeps {
   mcp: McpService;
   skills: SkillStore;
   plugins: PluginService;
+  usage: UsageService;
+  /** Whether SUPERAGENT_ENCRYPTION_KEY opens the database's sealed values (checked at boot). */
+  keyCheck: KeyCheck;
 }

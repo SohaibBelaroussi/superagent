@@ -12,6 +12,7 @@ import {
   TaskPhaseSchema,
   TaskSchema,
   UpdateTaskInputSchema,
+  type UsageTotals,
 } from '@superagent/shared';
 import { streamSSE } from 'hono/streaming';
 import type { ArtifactRow, TaskRow } from '../../db/schema';
@@ -19,10 +20,11 @@ import { ApiError, problem, problemResponse } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 import { matchesFilter } from '../../modules/ledger/events';
 import { canTransition } from '../../modules/ledger/phases';
+import { NO_USAGE, type UsageService } from '../../modules/usage/service';
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
 
-export function toTask(t: TaskRow): Task {
+export function toTask(t: TaskRow, usage: UsageTotals = NO_USAGE): Task {
   return {
     id: t.id,
     number: t.number,
@@ -43,7 +45,18 @@ export function toTask(t: TaskRow): Task {
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
     closedAt: iso(t.closedAt),
+    usage,
   };
+}
+
+/** Tasks as cards: each with its tokens and cost. */
+export async function toTasks(usage: UsageService, rows: TaskRow[]): Promise<Task[]> {
+  const totals = await usage.forTasks(rows.map((row) => row.id));
+  return rows.map((row) => toTask(row, totals.get(row.id)));
+}
+
+async function oneTask(usage: UsageService, row: TaskRow): Promise<Task> {
+  return (await toTasks(usage, [row]))[0] as Task;
 }
 
 function toArtifact(a: ArtifactRow): Artifact {
@@ -196,12 +209,12 @@ const REPLAY_MAX = 5000;
 const SENT_MEMORY = 10_000;
 
 export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void {
-  const { tasks, dispatch } = deps;
+  const { tasks, dispatch, usage } = deps;
 
   v1.openapi(listTasks, async (c) => {
     const { departmentId, phase, scheduleId, limit, cursor } = c.req.valid('query');
     const page = await tasks.list({ departmentId, phase, scheduleId, limit, before: cursor });
-    return c.json({ items: page.items.map(toTask), nextCursor: page.nextCursor }, 200);
+    return c.json({ items: await toTasks(usage, page.items), nextCursor: page.nextCursor }, 200);
   });
 
   v1.openapi(createTask, async (c) => {
@@ -222,7 +235,9 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
     return c.json(toTask(task), 201);
   });
 
-  v1.openapi(getTask, async (c) => c.json(toTask(await tasks.get(c.req.valid('param').id)), 200));
+  v1.openapi(getTask, async (c) =>
+    c.json(await oneTask(usage, await tasks.get(c.req.valid('param').id)), 200),
+  );
 
   v1.openapi(updateTask, async (c) => {
     const { id } = c.req.valid('param');
@@ -253,13 +268,13 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
     if (phase === 'queued') task = await dispatch.dispatch(task, 'owner', 'owner');
     else if (phase === 'cancelled') task = await dispatch.cancel(task, undefined, 'owner');
     else if (phase === 'done') task = await tasks.transition(id, 'done', 'owner', 'owner');
-    return c.json(toTask(task), 200);
+    return c.json(await oneTask(usage, task), 200);
   });
 
   v1.openapi(messageTask, async (c) => {
     const { message, mode } = c.req.valid('json');
     const task = await tasks.get(c.req.valid('param').id);
-    return c.json(toTask(await dispatch.message(task, message, mode, 'owner')), 200);
+    return c.json(await oneTask(usage, await dispatch.message(task, message, mode, 'owner')), 200);
   });
 
   v1.openapi(cancelTask, async (c) => {
@@ -278,7 +293,7 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
       reason = body.data.reason;
     }
     const task = await tasks.get(c.req.valid('param').id);
-    return c.json(toTask(await dispatch.cancel(task, reason, 'owner')), 200);
+    return c.json(await oneTask(usage, await dispatch.cancel(task, reason, 'owner')), 200);
   });
 
   v1.openapi(listEvents, async (c) => {
@@ -293,8 +308,14 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
 
   v1.openapi(getBoard, async (c) => {
     const columns = await tasks.board(c.req.valid('query').departmentId);
+    const totals = await usage.forTasks(columns.flatMap((col) => col.tasks.map((task) => task.id)));
     return c.json(
-      { columns: columns.map((col) => ({ phase: col.phase, tasks: col.tasks.map(toTask) })) },
+      {
+        columns: columns.map((col) => ({
+          phase: col.phase,
+          tasks: col.tasks.map((task) => toTask(task, totals.get(task.id))),
+        })),
+      },
       200,
     );
   });

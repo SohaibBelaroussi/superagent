@@ -6,7 +6,9 @@ import type { Db } from '../../db/client';
 import { mcpServers, plugins, type SecretRow, secrets } from '../../db/schema';
 import { ApiError } from '../../http/problem';
 
-const context = (id: string) => `secret:${id}`;
+/** What a vault secret is sealed to: its id. */
+export const vaultContext = (id: string) => `secret:${id}`;
+const context = vaultContext;
 
 /** The names of the secrets a header or environment map refers to. */
 export function secretNames(values: Record<string, ConfigValue> | undefined): string[] {

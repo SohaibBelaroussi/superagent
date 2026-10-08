@@ -48,7 +48,11 @@ describe('foundation', () => {
     it('reports database readiness on /ready', async () => {
       const res = await request('/ready');
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ status: 'ready', checks: { database: 'ok' } });
+      // Nothing is sealed in a fresh database: any encryption key opens it.
+      expect(await res.json()).toEqual({
+        status: 'ready',
+        checks: { database: 'ok', encryptionKey: 'empty' },
+      });
     });
   });
 

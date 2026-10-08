@@ -1,0 +1,99 @@
+# Production overrides for your server (decision D42), on top of compose.yaml:
+#
+#   docker compose -f compose.yaml -f compose.prod.yaml --profile app up -d
+#
+# - Our images come prebuilt (scripts/release.sh, then `docker load`): nothing of ours is built or
+#   pulled here. SUPERAGENT_VERSION in .env picks the API, runner and egress images' tag.
+# - Every service has memory, CPU and process limits and rotated logs. The runner's own containers
+#   (sandboxes, browsers, MCP servers) keep the limits it gives them.
+# - Only the API is published, on loopback; `tailscale serve` puts it on your tailnet over HTTPS.
+# - The runner talks to the rootless Docker daemon's socket (DOCKER_SOCKET).
+# See docs/runbooks/server.md.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
+services:
+  postgres:
+    ports: !reset []
+    logging: *logging
+    deploy:
+      resources:
+        limits: { memory: 1g, cpus: "2", pids: 512 }
+
+  searxng:
+    ports: !reset []
+    logging: *logging
+    deploy:
+      resources:
+        limits: { memory: 512m, cpus: "1", pids: 256 }
+
+  crawl4ai:
+    ports: !reset []
+    logging: *logging
+    deploy:
+      resources:
+        limits: { memory: 2g, cpus: "2", pids: 1024 }
+
+  egress:
+    image: superagent-egress:${SUPERAGENT_VERSION:?set SUPERAGENT_VERSION in .env}
+    build: !reset null
+    pull_policy: never
+    logging: *logging
+    deploy:
+      resources:
+        limits: { memory: 256m, cpus: "1", pids: 256 }
+
+  seaweedfs:
+    ports: !reset []
+    logging: *logging
+    deploy:
+      resources:
+        limits: { memory: 512m, cpus: "1", pids: 256 }
+
+  runner:
+    image: superagent-runner:${SUPERAGENT_VERSION:?set SUPERAGENT_VERSION in .env}
+    build: !reset null
+    pull_policy: never
+    volumes:
+      # Rootless Docker's socket: $XDG_RUNTIME_DIR/docker.sock, usually /run/user/<uid>/docker.sock.
+      # A wrong path fails here instead of becoming an empty folder.
+      - type: bind
+        source: ${DOCKER_SOCKET:?set DOCKER_SOCKET in .env}
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+    logging: *logging
+    deploy:
+      resources:
+        limits: { memory: 512m, cpus: "1", pids: 256 }
+
+  # The backup script's documents mirror (profile backup).
+  rclone:
+    logging: *logging
+    deploy:
+      resources:
+        limits: { memory: 512m, cpus: "1", pids: 256 }
+
+  # Built elsewhere, loaded with the release: the runner creates containers from them by these tags.
+  sandbox-dev:
+    build: !reset null
+    pull_policy: never
+  mcp:
+    build: !reset null
+    pull_policy: never
+  browser:
+    build: !reset null
+    pull_policy: never
+
+  api:
+    image: superagent-api:${SUPERAGENT_VERSION:?set SUPERAGENT_VERSION in .env}
+    build: !reset null
+    pull_policy: never
+    logging: *logging
+    deploy:
+      resources:
+        limits: { memory: 2g, cpus: "2", pids: 512 }

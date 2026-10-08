@@ -63,6 +63,21 @@ Agents can be given more than the built-in tools (`GET /v1/capabilities` lists e
 
 Plugins' stdio MCP servers run in containers of their own: build their image and start the egress proxy with `pnpm mcp:up`.
 
+Every run is traced (Mastra Studio's Traces page shows them, tagged `task:<id>` and `dept:<slug>`), and every model call is counted:
+- **Task cards** show their tokens and cost: the lead's calls, its specialists' and memory's.
+- **`GET /v1/usage`** groups tokens and cost by department, task, agent, model or day.
+- **Costs** come from the prices you give your models (`PUT /v1/providers/{id}/prices`, USD per million tokens). A model without a price counts tokens at no cost.
+
+## On a server
+
+The stack runs from prebuilt images under rootless Docker, behind `tailscale serve`:
+- `pnpm release <version> --save` builds the images into one tarball.
+- `compose.prod.yaml` runs them with limits and rotated logs.
+- `scripts/backup.sh` backs up the database, documents and task files.
+- `scripts/restore-drill.sh` proves a backup restores.
+
+See the runbooks: [server](docs/runbooks/server.md), [upgrades](docs/runbooks/upgrade.md), [backups](docs/runbooks/backups.md).
+
 For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS Code (REST Client) or a JetBrains IDE.
 
 ## API layout
@@ -71,7 +86,7 @@ For a request-by-request tour, open the files in [docs/http/](docs/http/) in VS 
 |---|---|
 | `/health`, `/ready` | Liveness and readiness. Public |
 | `/api/*` | Mastra's built-in routes: agents, threads, memory, schedules. Token required |
-| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your profile, department notes, knowledge documents, schedules, the attention inbox, task files and sandboxes, browsers, browser identities and live views (WebSockets: a bearer header, or `?apiKey=` from a browser), capabilities, secrets, MCP servers, skills and plugins. Token required |
+| `/v1/*` | The superagent control plane: tokens, model providers, settings, departments, agents, the tool catalog, tasks and the board, live task events (`/v1/events`, SSE), your profile, department notes, knowledge documents, schedules, the attention inbox, task files and sandboxes, browsers, browser identities and live views (WebSockets: a bearer header, or `?apiKey=` from a browser), capabilities, secrets, MCP servers, skills and plugins, model prices and usage. Token required |
 
 ## Development
 
@@ -86,7 +101,7 @@ Other commands:
 - `pnpm test:live` runs against your real model provider, using the `LIVE_LLM_*` keys in `.env`: connectivity checks, delegation and a task from dispatch to report.
 - `pnpm studio` opens Mastra Studio against the dev server. Log in with `STUDIO_TOKEN`.
 
-CI runs the same checks on every pull request. It also builds the Docker image and runs the e2e suite against it.
+CI runs the same checks on every pull request. It also builds the images, runs the stack from them as a server would (`compose.prod.yaml`), runs the e2e suite against it, then backs it up and restores the backup in a drill.
 
 ## License
 

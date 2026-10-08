@@ -67,6 +67,19 @@ describe('model providers', () => {
     expect(reserved.status).toBe(400);
   });
 
+  it('answers providers created at the same time (each reload sees what came before it)', async () => {
+    const created = await Promise.all(
+      [1, 2, 3, 4, 5].map((n) =>
+        send('POST', '/v1/providers', { slug: `parallel-${n}`, name: `Parallel ${n}`, baseUrl: fake.url }),
+      ),
+    );
+    expect(created.map((res) => res.status)).toEqual([201, 201, 201, 201, 201]);
+    for (const res of created) {
+      const { id } = (await res.json()) as { id: string };
+      expect((await send('DELETE', `/v1/providers/${id}`)).status).toBe(204);
+    }
+  });
+
   it('discovers models from GET /models and keeps manual ones', async () => {
     const res = await send('POST', `/v1/providers/${providerId}/refresh-models`);
     expect(res.status).toBe(200);

@@ -96,6 +96,11 @@ export const RunnerReadySchema = z.object({
   browser: z.boolean(),
   /** The MCP image is built and the MCP network exists. */
   mcp: z.boolean(),
+  /**
+   * The daemon enforces memory, CPU and process limits. Rootless Docker without cgroup delegation
+   * ignores them, and the runner then refuses to create containers.
+   */
+  limits: z.boolean(),
 });
 export type RunnerReady = z.infer<typeof RunnerReadySchema>;
 
@@ -299,6 +304,7 @@ export type RunnerErrorCode =
   | 'browsers_busy'
   | 'browser_unavailable'
   | 'launch_unknown'
+  | 'limits_unsupported'
   | 'package_removed'
   | 'mcp_busy'
   | 'mcp_unavailable'

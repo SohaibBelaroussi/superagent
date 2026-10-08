@@ -238,11 +238,15 @@ describe('approvals and attention', () => {
     expect((await decide(item, 'approve')).status).toBe(409);
     await new Promise((resolve) => setTimeout(resolve, 1500));
     // The decline resumes the lead's turn, which is stopped at once: no more model calls for the task.
+    // (The lead's, which alone has report_to_chief: the chief may still read its approval notice.)
     const calls = fake.requests
       .slice(mark)
       .filter(
         (r: RecordedRequest) =>
           r.path === '/chat/completions' &&
+          ((r.body?.tools as Array<{ function: { name: string } }> | undefined) ?? []).some(
+            (t) => t.function.name === 'report_to_chief',
+          ) &&
           JSON.stringify(r.body?.messages).includes('Cancelled after a restart'),
       );
     expect(calls).toHaveLength(0);

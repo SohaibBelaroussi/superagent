@@ -614,6 +614,29 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - Docker's default address pools give about 30 bridge networks. A network per plugin exists only while its container (or an install) does; the reaper drops the rest.
 - Node's fetch gives up on an answer after 300 s (undici's `headersTimeout`): a request that waits for a long install must stay under it, so installs go one server per request, each under `RUNNER_MCP_INSTALL_TIMEOUT_MS` (at most 270 s).
 
-## 21. From earlier research, needed in later milestones
+## 21. Learned while building M9 (2026-10-08)
+
+**Tracing** (`@mastra/observability` 1.18.3, the last built against core 1.74; 1.18.4 is built against 1.75) [spike]:
+- `new Mastra({ observability: new Observability({ configs: { default: { serviceName, exporters, excludeSpanTypes } } }) })`. `MastraStorageExporter` writes spans to the store (`mastra.mastra_ai_spans` with PostgresStore). Metrics need `PostgresStoreVNext`: with PostgresStore they are dropped, and Studio's Metrics page says so.
+- `tracingOptions: { tags, metadata }` on `stream`/`generate`: tags land on the root span only, metadata on every span of the trace, a lead's specialists' (one trace) and memory's included. `requestContextKeys` splits on dots: `superagent.taskId` is never read.
+- `approveToolCall`/`declineToolCall` resume as a new root span in the same trace, without the tags and metadata unless `tracingOptions` is passed again (both take it).
+- Tokens: `MODEL_GENERATION` covers a whole turn (every step), `MODEL_STEP` one step, `MODEL_INFERENCE` one request with its model and provider. Count one kind only; we count `MODEL_INFERENCE`. An OpenAI-compatible provider reports `"<name>.chat"` as its provider.
+- Mastra's bundled price table (`pricing-data.jsonl`) only matches known provider ids; its costs go to metrics. Keep prices yourself.
+- A custom exporter extends `BaseExporter` and implements `_exportTracingEvent` (span_started, span_updated, span_ended); `flush` and `shutdown` are no-ops unless overridden.
+- `mastra.shutdown()` closes the storage before tracing: `await mastra.observability.flush()` first.
+- Retention: `new PostgresStore({ retention: { observability: { spans: { maxAge: '30d' } } } })`, then `storage.prune()` from your own timer (bounded with `maxBatches`, stoppable with `signal`). Nothing in Mastra calls it.
+
+**SQL** (drizzle 0.45 on Postgres 17):
+- `ORDER BY` takes an output column's name only on its own: inside an expression (`input_tokens + output_tokens`) the name is the table's column, and a grouped query fails. Repeat the aggregate.
+- A `GROUP BY` expression with a bound parameter (a timezone) never matches the same expression in the select list (another parameter number): group by position.
+
+**Backups and the server** [spike]:
+- pgvector/pgvector:pg17 ships pg_dump/pg_restore 17 with zstd. `pg_dump --snapshot` takes a snapshot another session exported (`pg_export_snapshot()` in a repeatable-read transaction held open): count the rows in that session and the dump matches the counts exactly.
+- The image's first server, during setup, listens on its socket only: wait with `pg_isready -h 127.0.0.1`.
+- rclone needs no config file: remotes come from `RCLONE_CONFIG_<NAME>_*` variables, and `RCLONE_CONFIG=/dev/null` silences the missing-file notice.
+- Rootless Docker without cgroup delegation accepts `--memory`, `--cpus` and `--pids-limit` and ignores them: check `MemoryLimit`, `CpuCfsQuota` and `PidsLimit` in `docker info`.
+- Compose `!reset` (`ports: !reset []`, `build: !reset null`) clears a list or key in an override file.
+
+## 22. From earlier research, needed in later milestones
 
 - **Factory patterns to reuse:** phase kinds (resting, working, terminal), seats, decisions outbox with idempotency keys, change-hint SSE.

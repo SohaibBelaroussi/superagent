@@ -101,6 +101,11 @@ export const RunnerConfigSchema = z.object({
   /** A stopped sandbox is removed after this long (its files stay). */
   RUNNER_REMOVE_AFTER_MS: duration(7 * 24 * 60 * 60_000, 100),
   RUNNER_REAP_INTERVAL_MS: duration(60_000, 100),
+  /**
+   * Containers are created only when the daemon enforces their memory, CPU and process limits
+   * (rootless Docker needs cgroup delegation). Never set this on a server.
+   */
+  RUNNER_ALLOW_NO_LIMITS: z.stringbool().default(false),
   RUNNER_MEMORY_MB: z.coerce.number().int().min(64).default(1024),
   RUNNER_CPUS: z.coerce.number().min(0.1).max(64).default(1),
   RUNNER_PIDS_LIMIT: z.coerce.number().int().min(16).default(256),
