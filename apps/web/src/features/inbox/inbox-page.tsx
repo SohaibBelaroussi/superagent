@@ -1,6 +1,6 @@
 import type { Task } from '@superagent/shared';
 import { Bell, CircleCheck } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { errorMessage } from '../../api/client';
 import { useAttention, useBoard } from '../../api/queries';
@@ -29,9 +29,20 @@ export function InboxPage() {
   const [params, setParams] = useSearchParams();
   const requested = params.get('kind');
   const filter: Filter = isKind(requested) ? requested : 'all';
-  // Settled here (approved, answered, accepted): gone at once, before the list catches up.
-  const [settled, setSettled] = useState<ReadonlySet<string>>(new Set());
+  // Settled here (approved, answered, accepted): gone at once, before the list catches up. By id and
+  // time: a task's item that comes back (a follow-up question, a result sent back) is new.
+  const [settled, setSettled] = useState<ReadonlyMap<string, string>>(new Map());
   const notifying = useNotificationsOn();
+  const listRef = useRef<HTMLUListElement>(null);
+
+  // Forget what the list no longer has: only the list's own copy of an item stays hidden.
+  useEffect(() => {
+    if (!attention.data || settled.size === 0) return;
+    const listed = new Set(attention.data.map((item) => item.id));
+    if ([...settled.keys()].some((id) => !listed.has(id))) {
+      setSettled((current) => new Map([...current].filter(([id]) => listed.has(id))));
+    }
+  }, [attention.data, settled]);
 
   const tasks = useMemo(() => {
     const byId = new Map<string, Task>();
@@ -40,7 +51,7 @@ export function InboxPage() {
   }, [board.data]);
   // What blocks an agent first (calls to approve, questions), newest first within each kind.
   const items = (attention.data ?? [])
-    .filter((item) => !settled.has(item.id))
+    .filter((item) => settled.get(item.id) !== item.since)
     .sort(
       (a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || b.since.localeCompare(a.since),
     );
@@ -103,20 +114,28 @@ export function InboxPage() {
           <EmptyState
             icon={<CircleCheck />}
             title={
-              filter === 'all' ? 'You’re all caught up' : `No ${KINDS[filter].plural.toLowerCase()} left`
+              filter === 'all'
+                ? 'You’re all caught up'
+                : filter === 'health'
+                  ? 'Nothing to fix'
+                  : `No ${KINDS[filter].plural.toLowerCase()} left`
             }
             description="Calls to approve, questions from leads and results to review show up here as they come."
           />
         </Panel>
       ) : (
-        <ul className="flex flex-col gap-3" aria-label="Waiting for you">
-          {shown.map((item) => (
+        <ul ref={listRef} className="flex flex-col gap-3" aria-label="Waiting for you">
+          {shown.map((item, index) => (
             <li key={item.id}>
               <InboxItem
                 item={item}
                 task={item.taskId ? tasks.get(item.taskId) : undefined}
                 org={org}
-                onDone={() => setSettled((ids) => new Set(ids).add(item.id))}
+                onDone={() => {
+                  setSettled((current) => new Map(current).set(item.id, item.since));
+                  // Its controls are gone: keyboard focus goes on to the next item (or the one before).
+                  requestAnimationFrame(() => focusItem(listRef.current, index));
+                }}
               />
             </li>
           ))}
@@ -124,6 +143,23 @@ export function InboxPage() {
       )}
     </Page>
   );
+}
+
+/**
+ * When focus went with a settled item, gives it to the first control of the item now at `index` (or the
+ * last one), else to the list.
+ */
+function focusItem(list: HTMLUListElement | null, index: number): void {
+  const focused = document.activeElement;
+  if (!list || (focused && focused !== document.body)) return;
+  const items = list.querySelectorAll(':scope > li');
+  const item = items[Math.min(index, items.length - 1)];
+  const control = item?.querySelector<HTMLElement>('button, a[href], textarea');
+  if (control) control.focus();
+  else {
+    list.tabIndex = -1;
+    list.focus();
+  }
 }
 
 function FilterLabel({ label, count }: { label: string; count: number }) {

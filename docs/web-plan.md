@@ -213,7 +213,7 @@ Each milestone ends like the API's: tests pass, a PR, one review, fixes, CI gree
 - A web manifest, so the app can be added to a phone's home screen.
 
 **Built:**
-- **The inbox** (`/inbox`) puts what stops an agent first (calls to approve, questions), then results to review, problems and setup, newest first within each kind. A filter by kind lives in the URL (`?kind=`). Each item carries its action:
+- **The inbox** (`/inbox`) puts what stops an agent first (calls to approve, questions, tasks stuck or stopped), then results to review and setup, newest first within each kind. A filter by kind lives in the URL (`?kind=`). Each item carries its action:
   - approvals: the approval card, with its task;
   - questions: an answer, which sends the task back to its lead;
   - reviews: accept, or send back with the changes you want;
@@ -222,7 +222,7 @@ Each milestone ends like the API's: tests pass, a PR, one review, fixes, CI gree
 
   An item leaves the list as soon as its action goes through. The rail counts everything waiting, and the home page links to the inbox.
 - **The command palette** (⌘K, Ctrl+K, or Search in the rail) finds pages, departments and the board's tasks. It also holds actions: a new task, the theme, and "Ask the chief", which opens the conversation with what you typed sent. It loads the first time it opens.
-- **Notifications** are opt-in, from the account menu or the inbox (D48). While the app is in the background, a new item that needs you shows as a notification, and a click brings the app to its task.
+- **Notifications** are opt-in, from the account menu or the inbox (D48), and work in desktop browsers: a phone's browser refuses them from a page, and the app says so. While the app's tab is hidden, a new item that needs you shows as a notification (task items as they happen, setup items within a minute), and a click brings the app to its task. Turning them on shows a first one, so a browser that can't show them is found out then.
 - **The web manifest and icons** let a phone add the app to its home screen. The PNG icons are rendered from `favicon.svg` (`pnpm --filter @superagent/web icons`).
 
 ### W4: the organization

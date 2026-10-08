@@ -1,6 +1,6 @@
 import type { AttentionItem, Task } from '@superagent/shared';
 import { ArrowUp, Check, Send } from 'lucide-react';
-import { type FormEvent, type ReactNode, useState } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useMessageTask, useUpdateTask } from '../../api/queries';
 import { cn } from '../../lib/cn';
@@ -79,6 +79,30 @@ function ItemCard({
   );
 }
 
+/**
+ * A second step that takes its opening button's place (a reply box after "Request changes"): focus moves
+ * into it, and back to the button when it's cancelled.
+ */
+function useStep() {
+  const [open, setOpen] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+  const returning = useRef(false);
+  useEffect(() => {
+    if (open || !returning.current) return;
+    returning.current = false;
+    opener.current?.focus();
+  }, [open]);
+  return {
+    open,
+    opener,
+    start: () => setOpen(true),
+    cancel: () => {
+      returning.current = true;
+      setOpen(false);
+    },
+  };
+}
+
 /** A message to the task's lead, from the inbox: an answer, changes asked for, or how to go on. */
 function Reply({
   taskId,
@@ -88,6 +112,7 @@ function Reply({
   sentTitle,
   onDone,
   onCancel,
+  focus = false,
 }: {
   taskId: string;
   label: string;
@@ -96,9 +121,16 @@ function Reply({
   sentTitle: string;
   onDone: () => void;
   onCancel?: () => void;
+  /** Take focus when it appears: it was opened from a button. */
+  focus?: boolean;
 }) {
   const message = useMessageTask(taskId);
   const [text, setText] = useState('');
+  const input = useRef<HTMLTextAreaElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on mount only.
+  useEffect(() => {
+    if (focus) input.current?.focus();
+  }, []);
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const value = text.trim();
@@ -120,6 +152,7 @@ function Reply({
       </label>
       <textarea
         id={`reply-${taskId}`}
+        ref={input}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
@@ -131,6 +164,9 @@ function Reply({
         className="field-sizing-content block max-h-48 min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-body-sm text-foreground outline-hidden placeholder:text-placeholder"
       />
       <div className="flex items-center justify-end gap-2 px-2.5 pb-2.5">
+        <span className="mr-auto hidden pl-1.5 text-caption text-placeholder sm:inline">
+          ⌘/Ctrl + Enter to send
+        </span>
         {onCancel ? (
           <Button variant="ghost" size="sm" onClick={onCancel}>
             Cancel
@@ -172,8 +208,10 @@ function QuestionItem({ item, task, org, onDone }: ItemProps) {
 /** A result to review: accept it, or ask for changes, which goes back to the lead. */
 function ReviewItem({ item, task, org, onDone }: ItemProps) {
   const update = useUpdateTask(item.taskId ?? '');
-  const [changes, setChanges] = useState(false);
+  const changes = useStep();
   const lead = leadOf(task, org)?.name ?? 'the lead';
+  // Still in review as far as the board knows (an item can outlive its task's review by a moment).
+  const reviewable = Boolean(item.taskId) && (!task || task.phase === 'review');
   const accept = () =>
     update.mutate(
       { phase: 'done' },
@@ -190,9 +228,9 @@ function ReviewItem({ item, task, org, onDone }: ItemProps) {
       task={task}
       org={org}
       actions={
-        changes || !item.taskId ? null : (
+        changes.open || !reviewable ? null : (
           <>
-            <Button size="sm" onClick={() => setChanges(true)}>
+            <Button ref={changes.opener} size="sm" onClick={changes.start}>
               Request changes
             </Button>
             <Button variant="primary" size="sm" disabled={update.isPending} onClick={accept}>
@@ -206,7 +244,7 @@ function ReviewItem({ item, task, org, onDone }: ItemProps) {
       {item.detail ? (
         <p className="line-clamp-4 text-body-sm whitespace-pre-wrap text-foreground/90">{item.detail}</p>
       ) : null}
-      {changes && item.taskId ? (
+      {changes.open && item.taskId ? (
         <Reply
           taskId={item.taskId}
           label={`What should ${lead} change?`}
@@ -214,7 +252,8 @@ function ReviewItem({ item, task, org, onDone }: ItemProps) {
           send="Send back"
           sentTitle={`Sent back to ${lead}`}
           onDone={onDone}
-          onCancel={() => setChanges(false)}
+          onCancel={changes.cancel}
+          focus
         />
       ) : null}
     </ItemCard>
@@ -227,7 +266,7 @@ function ReviewItem({ item, task, org, onDone }: ItemProps) {
  */
 function ProblemItem({ item, task, org, onDone }: ItemProps) {
   const update = useUpdateTask(item.taskId ?? '');
-  const [message, setMessage] = useState(false);
+  const message = useStep();
   const lead = leadOf(task, org);
   const canSend = task?.phase === 'inbox' && Boolean(org.department(task.departmentId)?.lead);
   const canMessage = task?.phase === 'waiting';
@@ -247,10 +286,10 @@ function ProblemItem({ item, task, org, onDone }: ItemProps) {
       task={task}
       org={org}
       actions={
-        message ? null : (
+        message.open ? null : (
           <>
             {canMessage ? (
-              <Button size="sm" onClick={() => setMessage(true)}>
+              <Button ref={message.opener} size="sm" onClick={message.start}>
                 Tell {lead?.name ?? 'the lead'} how to go on
               </Button>
             ) : null}
@@ -267,7 +306,7 @@ function ProblemItem({ item, task, org, onDone }: ItemProps) {
       {item.detail ? (
         <p className="text-body-sm whitespace-pre-wrap text-foreground/90">{item.detail}</p>
       ) : null}
-      {message && item.taskId ? (
+      {message.open && item.taskId ? (
         <Reply
           taskId={item.taskId}
           label={`Tell ${lead?.name ?? 'the lead'} how to go on`}
@@ -275,7 +314,8 @@ function ProblemItem({ item, task, org, onDone }: ItemProps) {
           send="Send"
           sentTitle={`Sent to ${lead?.name ?? 'the lead'}`}
           onDone={onDone}
-          onCancel={() => setMessage(false)}
+          onCancel={message.cancel}
+          focus
         />
       ) : null}
     </ItemCard>

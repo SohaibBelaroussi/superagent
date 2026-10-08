@@ -21,4 +21,4 @@ export const KINDS: Record<AttentionKind, { icon: LucideIcon; tone: Tone; label:
 };
 
 /** The inbox's order of kinds: what blocks an agent first. */
-export const KIND_ORDER: readonly AttentionKind[] = ['approval', 'question', 'review', 'problem', 'health'];
+export const KIND_ORDER: readonly AttentionKind[] = ['approval', 'question', 'problem', 'review', 'health'];

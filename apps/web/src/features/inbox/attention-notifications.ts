@@ -1,18 +1,21 @@
 import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { useAttention } from '../../api/queries';
-import { notificationsOn } from '../../lib/notifications';
+import { notificationsOn, showNotification, useNotificationsOn } from '../../lib/notifications';
 
 /** More than this at once is shown as one, pointing at the inbox. */
 const AT_ONCE = 3;
 
 /**
- * Tells you when something new needs you while the app is in the background, if you turned it on. What
- * was there when the app opened isn't news; something that leaves and comes back is again. A click
- * brings the app forward on the task (or the inbox).
+ * Tells you when something new needs you while the app is hidden, if you turned it on (D48). What was
+ * there when the app opened isn't news; something that leaves and comes back is again. A click brings
+ * the app forward on the task (or the inbox).
  */
 export function useAttentionNotifications(): void {
-  const attention = useAttention();
+  const on = useNotificationsOn();
+  // Task items arrive with task events; setup problems only by asking again, which a hidden tab
+  // otherwise stops doing.
+  const attention = useAttention({ inBackground: on });
   const navigate = useNavigate();
   const known = useRef<Set<string> | null>(null);
 
@@ -24,20 +27,26 @@ export function useAttentionNotifications(): void {
     if (!before || document.visibilityState === 'visible' || !notificationsOn()) return;
     const fresh = items.filter((item) => !before.has(item.id));
     if (fresh.length === 0) return;
-    const show = (title: string, body: string | undefined, tag: string, to: string) => {
-      const notification = new Notification(title, { body, tag, icon: '/icon-192.png' });
-      notification.onclick = () => {
-        window.focus();
-        navigate(to);
-        notification.close();
-      };
+    const open = (to: string) => () => {
+      window.focus();
+      navigate(to);
     };
     if (fresh.length > AT_ONCE) {
-      show(`${fresh.length} things need you`, fresh[0]?.title, 'superagent:inbox', '/inbox');
+      showNotification(
+        `${fresh.length} things need you`,
+        { body: fresh[0]?.title, tag: `superagent:inbox:${Date.now()}`, icon: '/icon-192.png' },
+        open('/inbox'),
+      );
       return;
     }
     for (const item of fresh) {
-      show(item.title, item.detail ?? undefined, item.id, item.taskId ? `/tasks/${item.taskId}` : '/inbox');
+      // Tagged by item and time: the same item coming back is a new notification, not a quiet update.
+      const shown = showNotification(
+        item.title,
+        { body: item.detail ?? undefined, tag: `${item.id}:${item.since}`, icon: '/icon-192.png' },
+        open(item.taskId ? `/tasks/${item.taskId}` : '/inbox'),
+      );
+      if (!shown) return;
     }
   }, [attention.data, navigate]);
 }

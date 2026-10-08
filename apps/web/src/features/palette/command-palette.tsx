@@ -6,19 +6,16 @@ import {
   Inbox,
   type LucideIcon,
   MessagesSquare,
-  Monitor,
-  Moon,
   Plus,
   Search,
   SquareKanban,
   SquareStack,
-  Sun,
 } from 'lucide-react';
-import { useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useEffect, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useAttention, useBoard } from '../../api/queries';
 import { cn } from '../../lib/cn';
-import { type ThemeChoice, useTheme } from '../../lib/theme';
+import { THEME_CHOICES, useTheme } from '../../lib/theme';
 import { departmentTone, TONE_DOT } from '../../lib/tones';
 import { Kbd } from '../../ui/feedback';
 import { dialogSurface, menuItem, menuLabel } from '../../ui/recipes';
@@ -55,15 +52,9 @@ function matches(command: Command, query: string): boolean {
     .every((word) => haystack.includes(word));
 }
 
-const THEMES: { value: ThemeChoice; label: string; icon: LucideIcon }[] = [
-  { value: 'light', label: 'Light theme', icon: Sun },
-  { value: 'dark', label: 'Dark theme', icon: Moon },
-  { value: 'system', label: 'Theme from the system', icon: Monitor },
-];
-
 /**
- * Pages, tasks and actions in one search: ⌘K (Ctrl+K) anywhere. Typing a question offers to ask the chief
- * of staff, which opens your conversation with it sent.
+ * Pages, tasks and actions in one search: ⌘K (Ctrl+K) anywhere. Whatever you type can also go to the
+ * chief of staff, last of all, so Enter runs a match first and asks the chief only when nothing else fits.
  */
 export function CommandPalette({
   open,
@@ -73,6 +64,8 @@ export function CommandPalette({
   onOpenChange: (open: boolean) => void;
 }) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [params] = useSearchParams();
   const org = useOrg();
   const board = useBoard();
   const waiting = useAttention().data?.length ?? 0;
@@ -80,14 +73,19 @@ export function CommandPalette({
   const [query, setQuery] = useState('');
   const [newTaskOpen, setNewTaskOpen] = useState(false);
 
-  const close = () => {
-    onOpenChange(false);
-    setQuery('');
-  };
+  // However it closes (Escape, a click outside, ⌘K again, a command), it opens empty next time.
+  useEffect(() => {
+    if (!open) setQuery('');
+  }, [open]);
+
+  const close = () => onOpenChange(false);
   const go = (to: string) => () => {
     close();
     navigate(to);
   };
+  // On a department's board, a new task starts in that department.
+  const boardDepartment =
+    pathname === '/board' ? org.departmentBySlug(params.get('department') ?? '')?.id : undefined;
 
   // Built each render: a few dozen entries, and the query changes them anyway.
   const groups = ((): Group[] => {
@@ -140,9 +138,9 @@ export function CommandPalette({
           setNewTaskOpen(true);
         },
       },
-      ...THEMES.map((theme) => ({
+      ...THEME_CHOICES.map((theme) => ({
         value: `theme:${theme.value}`,
-        label: theme.label,
+        label: `${theme.label} theme`,
         keywords: 'appearance mode',
         icon: theme.icon,
         run: () => {
@@ -152,34 +150,32 @@ export function CommandPalette({
       })),
     ];
     const question = query.trim();
-    if (question) {
-      actions.unshift({
-        value: ASK,
-        label: `Ask the chief: “${question}”`,
-        icon: MessagesSquare,
-        run: () => {
-          close();
-          const state: ChiefDraft = { send: question };
-          navigate('/chief', { state });
-        },
-      });
-    }
+    const ask: Command[] = question
+      ? [
+          {
+            value: ASK,
+            label: `Ask the chief: “${question}”`,
+            icon: MessagesSquare,
+            run: () => {
+              close();
+              const state: ChiefDraft = { send: question };
+              // Already there: the conversation sends it without another history entry.
+              navigate('/chief', { state, replace: pathname === '/chief' });
+            },
+          },
+        ]
+      : [];
     return [
       { value: 'Go to', items: pages },
       { value: 'Tasks', items: tasks },
       { value: 'Actions', items: actions },
+      ...(ask.length > 0 ? [{ value: 'Ask', items: ask }] : []),
     ];
   })();
 
   return (
     <>
-      <Dialog.Root
-        open={open}
-        onOpenChange={(next) => {
-          onOpenChange(next);
-          if (!next) setQuery('');
-        }}
-      >
+      <Dialog.Root open={open} onOpenChange={(next) => onOpenChange(next)}>
         <Dialog.Portal>
           <Dialog.Backdrop className="fixed inset-0 z-50 bg-scrim transition-opacity duration-150 data-starting-style:opacity-0 data-ending-style:opacity-0" />
           <Dialog.Viewport className="fixed inset-0 z-50 flex items-start justify-center px-3 pt-[12dvh]">
@@ -211,12 +207,8 @@ export function CommandPalette({
                   />
                   <Kbd>Esc</Kbd>
                 </Autocomplete.InputGroup>
+                {/* Nothing is ever empty: whatever you type, the chief can be asked. */}
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5 [scroll-padding-block:0.375rem]">
-                  <Autocomplete.Empty>
-                    <p className="px-3 py-8 text-center text-body-sm text-muted-foreground">
-                      Nothing matches.
-                    </p>
-                  </Autocomplete.Empty>
                   <Autocomplete.List>
                     {(group: Group) => (
                       <Autocomplete.Group key={group.value} items={group.items} className="not-last:mb-1.5">
@@ -267,7 +259,7 @@ export function CommandPalette({
           </Dialog.Viewport>
         </Dialog.Portal>
       </Dialog.Root>
-      <NewTaskDialog open={newTaskOpen} onOpenChange={setNewTaskOpen} />
+      <NewTaskDialog open={newTaskOpen} onOpenChange={setNewTaskOpen} departmentId={boardDepartment} />
     </>
   );
 }

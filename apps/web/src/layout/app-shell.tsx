@@ -1,10 +1,11 @@
 import { Menu as MenuIcon } from 'lucide-react';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router';
 import { LiveEventsProvider } from '../api/live';
 import { useSession } from '../api/session';
 import { useAttentionNotifications } from '../features/inbox/attention-notifications';
 import { cn } from '../lib/cn';
+import { isApple } from '../lib/keys';
 import { Button } from '../ui/button';
 import { Sheet } from '../ui/dialog';
 import { Spinner } from '../ui/feedback';
@@ -61,17 +62,37 @@ export function AppShell() {
     setPaletteOpen(true);
   };
 
-  // ⌘K (Ctrl+K) opens the palette from anywhere, and closes it again.
+  const paletteOpenNow = useRef(paletteOpen);
+  paletteOpenNow.current = paletteOpen;
+
+  // ⌘K on a Mac, Ctrl+K elsewhere, opens the palette from anywhere and closes it again. Not over
+  // another dialog: going somewhere from the palette would throw away what was being written there.
   useEffect(() => {
+    const apple = isApple();
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setPaletteLoaded(true);
-        setPaletteOpen((open) => !open);
-      }
+      const modifier = apple ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      // A layout whose K key types another script's letter: go by the key's place.
+      const k = event.key.toLowerCase() === 'k' || (!/^[a-z]$/i.test(event.key) && event.code === 'KeyK');
+      if (!modifier || !k || event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      if (event.repeat || (!paletteOpenNow.current && anotherDialogOpen())) return;
+      setPaletteLoaded(true);
+      setPaletteOpen((open) => !open);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // The palette's code, fetched once the app is idle: the first ⌘K opens it at once, with what you
+  // type straight away in it.
+  useEffect(() => {
+    const load = () => void import('../features/palette/command-palette').catch(() => {});
+    if ('requestIdleCallback' in window) {
+      const id = window.requestIdleCallback(load, { timeout: 5_000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const timer = setTimeout(load, 2_000);
+    return () => clearTimeout(timer);
   }, []);
 
   return (
@@ -118,5 +139,12 @@ export function AppShell() {
         </Suspense>
       ) : null}
     </div>
+  );
+}
+
+/** A dialog other than the palette is open (a new task being written, a confirmation). */
+function anotherDialogOpen(): boolean {
+  return [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].some(
+    (dialog) => dialog.getAttribute('aria-label') !== 'Command palette',
   );
 }

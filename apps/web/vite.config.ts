@@ -56,7 +56,12 @@ export default defineConfig({
         codeSplitting: {
           groups: [
             { name: 'react', test: /node_modules[\\/](react|react-dom|scheduler|react-router)[\\/]/ },
-            { name: 'ui', test: /node_modules[\\/](@base-ui|@floating-ui|tabbable|use-sync-external-store)/ },
+            {
+              name: 'ui',
+              // Not the autocomplete (and the combobox it builds on): only the command palette, loaded
+              // when it is first wanted, uses them.
+              test: /node_modules[\\/](@base-ui[\\/]react[\\/](?!(autocomplete|combobox)[\\/])|@floating-ui|tabbable|use-sync-external-store)/,
+            },
             { name: 'data', test: /node_modules[\\/](zod|@tanstack)[\\/]/ },
           ],
         },

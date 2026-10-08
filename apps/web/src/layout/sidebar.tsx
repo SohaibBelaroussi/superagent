@@ -8,11 +8,8 @@ import {
   Inbox,
   LogOut,
   MessagesSquare,
-  Monitor,
-  Moon,
   Search,
   SquareKanban,
-  Sun,
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
@@ -23,7 +20,7 @@ import { toggleNotifications } from '../features/inbox/notify';
 import { cn } from '../lib/cn';
 import { paletteShortcut } from '../lib/keys';
 import { notificationsSupported, useNotificationsOn } from '../lib/notifications';
-import { type ThemeChoice, useTheme } from '../lib/theme';
+import { THEME_CHOICES, useTheme } from '../lib/theme';
 import { departmentTone, TONE_DOT } from '../lib/tones';
 import { Avatar } from '../ui/avatar';
 import { Kbd } from '../ui/feedback';
@@ -129,11 +126,11 @@ function LiveIndicator() {
   );
 }
 
-const THEMES: { value: ThemeChoice; label: string; icon: ReactNode }[] = [
-  { value: 'system', label: 'System', icon: <Monitor aria-hidden /> },
-  { value: 'light', label: 'Light', icon: <Sun aria-hidden /> },
-  { value: 'dark', label: 'Dark', icon: <Moon aria-hidden /> },
-];
+const THEMES = THEME_CHOICES.map(({ value, label, icon: Icon }) => ({
+  value,
+  label,
+  icon: <Icon aria-hidden />,
+}));
 
 function AccountMenu() {
   const me = useMe();
@@ -209,7 +206,7 @@ export function Sidebar({ onNavigate, onSearch }: { onNavigate?: () => void; onS
         <button type="button" onClick={onSearch} className={cn(navRow, 'bg-fill-subtle shadow-rim')}>
           <Search aria-hidden />
           <span className="min-w-0 flex-1 truncate text-left">Search</span>
-          <Kbd>{paletteShortcut()}</Kbd>
+          <Kbd className="hidden lg:inline-flex">{paletteShortcut()}</Kbd>
         </button>
       ) : null}
 

@@ -61,7 +61,7 @@ export function ApprovalCard({
 
   return (
     <section
-      aria-label={`${item.title}: waiting for your approval`}
+      aria-label={`${item.title}${item.taskNumber ? ` on #${item.taskNumber}` : ''}: waiting for your approval`}
       className="flex flex-col gap-3 rounded-xl bg-warning-subtle px-4 py-3.5 shadow-[inset_0_0_0_1px_var(--warning-edge)]"
     >
       <div className="flex items-start gap-3">

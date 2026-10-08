@@ -121,13 +121,15 @@ export function useTaskArtifacts(id: string) {
   });
 }
 
-export function useAttention() {
+/** What needs you. `inBackground` keeps looking while the tab is hidden (for notifications). */
+export function useAttention(options: { inBackground?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.attention,
     queryFn: ({ signal }) => api(AttentionListSchema, '/v1/attention', { signal }),
     select: (data) => data.items,
     // Health items don't arrive as task events: look again now and then.
     refetchInterval: 60_000,
+    refetchIntervalInBackground: options.inBackground ?? false,
   });
 }
 

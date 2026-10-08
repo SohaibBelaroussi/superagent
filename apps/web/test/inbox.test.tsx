@@ -204,4 +204,66 @@ describe('the inbox', () => {
     // A stopped task takes a message telling its lead how to go on.
     expect(screen.getByRole('button', { name: 'Tell Ada how to go on' })).toBeVisible();
   });
+
+  it('shows a task’s item again when it comes back after you settled it', async () => {
+    const asked = task({ title: 'Pick a framework', phase: 'waiting' });
+    const question = (detail: string, since: string) =>
+      itemFor('question', asked, {
+        title: `#${asked.number} Pick a framework: the lead needs you`,
+        detail,
+        since,
+      });
+    const { state, handlers } = inbox([question('Include LangGraph?', ago(10))], [asked]);
+    server.use(
+      http.post(api(`/v1/tasks/${asked.id}/messages`), () => {
+        state.items = [];
+        return HttpResponse.json({ ...asked, phase: 'queued' });
+      }),
+      ...handlers,
+    );
+    const { queryClient } = renderApp('/inbox');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Answer Ada'), 'Yes.');
+    await user.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(await screen.findByText('You’re all caught up')).toBeVisible();
+
+    // The lead asks again: the same item (the task's), later.
+    state.items = [question('And CrewAI?', ago(0))];
+    await queryClient.invalidateQueries({ queryKey: ['attention'] });
+    expect(await screen.findByText('And CrewAI?')).toBeVisible();
+  });
+
+  it('tells a stopped task’s lead how to go on, keeping the keyboard where it was', async () => {
+    const stalled = task({ title: 'Rotate keys', phase: 'waiting' });
+    const sent: unknown[] = [];
+    const { state, handlers } = inbox(
+      [
+        itemFor('problem', stalled, {
+          title: `#${stalled.number} Rotate keys stopped`,
+          detail: 'The run failed.',
+        }),
+      ],
+      [stalled],
+    );
+    server.use(
+      http.post(api(`/v1/tasks/${stalled.id}/messages`), async ({ request }) => {
+        sent.push(await request.json());
+        state.items = [];
+        return HttpResponse.json({ ...stalled, phase: 'queued' });
+      }),
+      ...handlers,
+    );
+    renderApp('/inbox');
+    const user = userEvent.setup();
+    const opener = await screen.findByRole('button', { name: 'Tell Ada how to go on' });
+    await user.click(opener);
+    expect(screen.getByLabelText('Tell Ada how to go on')).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Tell Ada how to go on' })).toHaveFocus();
+
+    await user.click(screen.getByRole('button', { name: 'Tell Ada how to go on' }));
+    await user.type(screen.getByLabelText('Tell Ada how to go on'), 'Try the staging keys first.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent).toEqual([{ message: 'Try the staging keys first.', mode: 'steer' }]));
+  });
 });
