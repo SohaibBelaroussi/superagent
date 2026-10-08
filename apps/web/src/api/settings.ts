@@ -67,8 +67,9 @@ export function useProviderModels(id: string) {
   });
 }
 
+/** After a change to a provider: the list (not each one's models, which it doesn't change) and the roles. */
 function refreshProviders(queryClient: QueryClient): void {
-  void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.providers, exact: true });
   void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
 }
 
@@ -96,7 +97,14 @@ export function useDeleteProvider(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => apiVoid(providerPath(id), { method: 'DELETE' }),
-    onSuccess: () => refreshProviders(queryClient),
+    onSuccess: () => {
+      // Gone from the list at once; its models' query is left to expire, never asked for again.
+      queryClient.setQueryData<z.infer<typeof ProviderListSchema>>(
+        queryKeys.providers,
+        (list) => list && { items: list.items.filter((provider) => provider.id !== id) },
+      );
+      refreshProviders(queryClient);
+    },
     meta: { failure: 'Couldn’t delete the provider' },
   });
 }
@@ -106,10 +114,7 @@ function useModelsMutation<T>(id: string, run: (input: T) => Promise<{ items: un
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: run,
-    onSuccess: (list) => {
-      queryClient.setQueryData(queryKeys.providerModels(id), list);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
-    },
+    onSuccess: (list) => queryClient.setQueryData(queryKeys.providerModels(id), list),
     meta: { failure },
   });
 }
@@ -120,10 +125,7 @@ export function useDiscoverModels() {
   return useMutation({
     mutationFn: (id: string) =>
       api(ProviderModelListSchema, providerPath(id, '/refresh-models'), { method: 'POST' }),
-    onSuccess: (list, id) => {
-      queryClient.setQueryData(queryKeys.providerModels(id), list);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
-    },
+    onSuccess: (list, id) => queryClient.setQueryData(queryKeys.providerModels(id), list),
     meta: { silent: true },
   });
 }
@@ -200,11 +202,12 @@ export function useUpdateSettings() {
 
 /**
  * The API tokens, with the admin token (D45: asked for on the page, kept in memory only). Nothing is
- * asked for until there is one.
+ * asked for until there is one. Each token given is a new `attempt`, asked afresh: nothing is kept
+ * from the one before (its refusal, or the list it read).
  */
-export function useTokens(adminToken: string | null) {
+export function useTokens(adminToken: string | null, attempt: number) {
   return useQuery({
-    queryKey: settingsKeys.tokens,
+    queryKey: [...settingsKeys.tokens, attempt],
     queryFn: ({ signal }) => api(TokenListSchema, '/v1/tokens', { signal, token: adminToken ?? undefined }),
     select: (data) => data.items,
     enabled: Boolean(adminToken),

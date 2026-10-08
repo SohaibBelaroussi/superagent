@@ -103,7 +103,9 @@ describe('error text for the owner', () => {
   it('cuts off a stack trace a library put in the message', () => {
     const message =
       'Failed to connect to MCP server tools: SdkError: probe failed: fetch failed\n    at classify (file:///srv/app/node_modules/x.js:3:1)\n    at next (file:///srv/app/y.js:9:9)';
-    expect(withoutStack(message)).toBe('Failed to connect to MCP server tools: SdkError: probe failed: fetch failed');
+    expect(withoutStack(message)).toBe(
+      'Failed to connect to MCP server tools: SdkError: probe failed: fetch failed',
+    );
     expect(errorText(new Error(message))).toBe(withoutStack(message));
     expect(errorText('plain')).toBe('plain');
     expect(withoutStack('Two lines\nwith no frames')).toBe('Two lines\nwith no frames');

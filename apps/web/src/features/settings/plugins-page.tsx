@@ -145,6 +145,14 @@ export function PluginsPage() {
 
 type SourceKind = 'github' | 'url';
 
+/** "owner/repo" from what was typed: the name itself, or the repository's GitHub address. */
+const repoName = (text: string) =>
+  text
+    .trim()
+    .replace(/^(?:https?:\/\/)?github\.com\//i, '')
+    .replace(/\.git$/, '')
+    .replace(/\/+$/, '');
+
 /** Where from (then a preview), what it brings, the values it needs, then install. */
 function InstallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const preview = usePreviewPlugin();
@@ -187,7 +195,12 @@ function InstallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
       const result = await preview.mutateAsync({
         source:
           kind === 'github'
-            ? { kind, repo: repo.trim(), path: path.trim() || undefined, ref: ref.trim() || undefined }
+            ? {
+                kind,
+                repo: repoName(repo),
+                path: path.trim().replace(/^\/+|\/+$/g, '') || undefined,
+                ref: ref.trim() || undefined,
+              }
             : {
                 kind,
                 url: url.trim(),
@@ -226,7 +239,7 @@ function InstallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
     found?.inputs.filter((input) => input.required && !inputs[input.name]?.trim() && !input.default) ?? [];
   const ready =
     kind === 'github'
-      ? /^[\w.-]+\/[\w.-]+$/.test(repo.trim())
+      ? /^[\w.-]+\/[\w.-]+$/.test(repoName(repo))
       : /^https?:\/\//.test(url.trim()) && /^[a-fA-F0-9]{64}$/.test(sha256.trim());
 
   return (
@@ -299,7 +312,7 @@ function InstallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
             />
             {kind === 'github' ? (
               <>
-                <Field label="Repository" hint="owner/repo">
+                <Field label="Repository" hint="owner/repo, or its GitHub address.">
                   {(control) => (
                     <Input
                       {...control}

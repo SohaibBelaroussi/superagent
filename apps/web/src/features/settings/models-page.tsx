@@ -142,7 +142,7 @@ function ModelRoles() {
         <SettingsList>
           {ROLES.map(({ role, label, description, kind }) => {
             const current = data.models[role];
-            const choices = kind === 'chat' ? chat.choices : embedding.choices;
+            const { choices, pending } = kind === 'chat' ? chat : embedding;
             const value = current ? refValue(current) : NOT_SET;
             const listed = choices.some((choice) => refValue(choice.ref) === value);
             return (
@@ -173,7 +173,10 @@ function ModelRoles() {
                     options={[
                       { value: NOT_SET, label: 'Not set' },
                       ...choices.map((choice) => ({ value: refValue(choice.ref), label: choice.label })),
-                      ...(current && !listed ? [{ value, label: `${value} (not available)` }] : []),
+                      // Not listed while the models load; once they have, it isn't one of them.
+                      ...(current && !listed
+                        ? [{ value, label: pending ? value : `${value} (not available)` }]
+                        : []),
                     ]}
                   />
                 }

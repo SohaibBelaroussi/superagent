@@ -17,12 +17,22 @@ const sectionLink = cn(
 export function SettingsLayout() {
   const { pathname } = useLocation();
   const row = useRef<HTMLElement>(null);
-  // On a phone the row scrolls: keep the current section in view.
+  // On a phone the row scrolls: keep the current section in view, in its middle. Again once the fonts
+  // have loaded, which can widen it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: on each section change
   useEffect(() => {
-    row.current
-      ?.querySelector('[aria-current="page"]')
-      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    let current = true;
+    const bring = () => {
+      if (!current) return;
+      row.current
+        ?.querySelector('[aria-current="page"]')
+        ?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    };
+    bring();
+    void document.fonts?.ready.then(bring);
+    return () => {
+      current = false;
+    };
   }, [pathname]);
   const current = SETTINGS_SECTIONS.find((section) => pathname.startsWith(`/settings/${section.path}`));
   const links = (className: string) =>

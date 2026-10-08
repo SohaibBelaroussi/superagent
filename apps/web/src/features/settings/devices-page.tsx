@@ -23,7 +23,12 @@ import { toast } from '../../ui/toast';
 export function DevicesPage() {
   useDocumentTitle('Devices');
   const [adminToken, setAdminToken] = useState<string | null>(null);
-  const tokens = useTokens(adminToken);
+  const [attempt, setAttempt] = useState(0);
+  const giveToken = (token: string | null) => {
+    setAdminToken(token);
+    setAttempt((count) => count + 1);
+  };
+  const tokens = useTokens(adminToken, attempt);
   const refused =
     tokens.error instanceof ProblemError && (tokens.error.status === 401 || tokens.error.status === 403)
       ? tokens.error.status === 403
@@ -42,7 +47,7 @@ export function DevicesPage() {
           actions={
             adminToken && !refused ? (
               <>
-                <Button variant="ghost" onClick={() => setAdminToken(null)}>
+                <Button variant="ghost" onClick={() => giveToken(null)}>
                   Forget the admin token
                 </Button>
                 <Button variant="primary" onClick={() => setCreating(true)}>
@@ -56,7 +61,7 @@ export function DevicesPage() {
       }
     >
       {!adminToken || refused ? (
-        <AdminTokenForm refused={refused} onToken={setAdminToken} />
+        <AdminTokenForm refused={refused} onToken={giveToken} />
       ) : tokens.isError ? (
         <Notice tone="destructive" title="Couldn’t load the devices">
           {errorMessage(tokens.error)}

@@ -76,8 +76,14 @@ export function startOfDayIn(day: string, timezone?: string): Date {
       const wall = Date.UTC(clock.year, clock.month - 1, clock.day, clock.hour, clock.minute, clock.second);
       return wall - Math.floor(at / 1000) * 1000;
     };
-    // Twice: the offset near midnight, then at the instant that gives (the offset may change that night).
-    return new Date(midnight - offset(midnight - offset(midnight)));
+    // The offset near midnight, then at the instant that gives (it may change that night). Where the
+    // clocks skip midnight, the day starts at the later one: the first that is on that day.
+    const first = midnight - offset(midnight);
+    const second = midnight - offset(first);
+    const start = [Math.min(first, second), Math.max(first, second)].find(
+      (at) => dayIn(new Date(at), timezone) === day,
+    );
+    return new Date(start ?? second);
   } catch {
     return local;
   }
