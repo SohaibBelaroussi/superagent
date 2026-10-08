@@ -1,6 +1,8 @@
 import {
+  Box,
   CircleUserRound,
   Cpu,
+  Globe,
   KeyRound,
   type LucideIcon,
   MonitorSmartphone,
@@ -38,4 +40,11 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { path: 'mcp', label: 'MCP servers', icon: Plug, keywords: 'tools servers integrations' },
   { path: 'plugins', label: 'Plugins', icon: Package, keywords: 'install skills servers github' },
   { path: 'skills', label: 'Skills', icon: Sparkles, keywords: 'instructions plugins' },
+  {
+    path: 'browsers',
+    label: 'Browsers',
+    icon: Globe,
+    keywords: 'identities sign in cookies chromium live view',
+  },
+  { path: 'sandboxes', label: 'Sandboxes', icon: Box, keywords: 'containers workspaces shell commands' },
 ];

@@ -155,6 +155,23 @@ export async function apiVoid(path: string, options: RequestOptions = {}): Promi
   await send(path, options);
 }
 
+/** Calls the API for bytes (a file), with the session's token like every request. */
+export async function apiBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
+  const response = await send(path, { ...options, headers: { accept: '*/*', ...options.headers } });
+  return response.blob();
+}
+
+/**
+ * The address of a WebSocket route on this origin. A browser can't put a header on a WebSocket, so the
+ * token goes as `?apiKey=` (the API's request log never records it).
+ */
+export function socketUrl(path: string, token: string): string {
+  const url = new URL(path, window.location.href);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.searchParams.set('apiKey', token);
+  return url.toString();
+}
+
 /** A message for people, from whatever a request threw. */
 export function errorMessage(error: unknown): string {
   if (error instanceof ProblemError) {
