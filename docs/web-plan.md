@@ -1,6 +1,6 @@
 # Superagent web app: development plan
 
-**Status:** started 2026-10-08. Builds on the API of [api-plan.md](api-plan.md) (M0–M9 merged).
+**Status:** done: W1–W6 merged (started and finished 2026-10-08). Builds on the API of [api-plan.md](api-plan.md) (M0–M9 merged).
 
 **Progress:**
 - W1 (foundation and the board): merged in PR #11. Verified in a browser against an API driven by a scripted model:
@@ -33,7 +33,7 @@
   - the usage page showed a bar for each day of the period, and named the built-in agents.
 
   Browser tests against the release image add, price and delete a provider, make and revoke a device token, and open the usage page and the settings on a phone.
-- W6 (workspaces and browsers): in review. Verified in a browser against the same scripted API, with a runner of its own starting real sandboxes and Chromium:
+- W6 (workspaces and browsers): merged in PR #16. Verified in a browser against the same scripted API, with a runner of its own starting real sandboxes and Chromium:
   - a task's Files tab listed what its agent wrote in the sandbox, and showed the Markdown formatted or as source, and the text as it is;
   - its Browser tab showed the agent's browser live; taken over, it went where the address bar said, took clicks and typing (shortcuts included), then went back to the agents and closed;
   - an identity was signed in through its own browser: public sites through the egress proxy, a search typed into a page, and Done saved it;

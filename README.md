@@ -10,7 +10,7 @@ A self-hosted personal assistant organized like a company, built on [Mastra](htt
 
 Everything runs behind one HTTP API and ships as Docker images. A web app, served by the API, runs it from a browser or a phone; a mobile app comes later.
 
-> **Status:** the API is built (M0–M9, see the [plan](docs/api-plan.md)). The web app is under way: W1 (foundation, sign-in, home, the live board and tasks), W2 (the conversation with the chief of staff, task transcripts), W3 (the inbox, a command palette, notifications, adding the app to a home screen), W4 (departments, agents and their versions, notes, your profile, schedules, knowledge), W5 (settings: models and providers, devices, secrets, MCP servers, plugins and skills; usage and cost) and W6 (a task's files and its live browser, with takeover; identities and their sign-in; sandboxes). See the [web plan](docs/web-plan.md).
+> **Status:** the API is built (M0–M9, see the [plan](docs/api-plan.md)), and so is the web app: W1 (foundation, sign-in, home, the live board and tasks), W2 (the conversation with the chief of staff, task transcripts), W3 (the inbox, a command palette, notifications, adding the app to a home screen), W4 (departments, agents and their versions, notes, your profile, schedules, knowledge), W5 (settings: models and providers, devices, secrets, MCP servers, plugins and skills; usage and cost) and W6 (a task's files and its live browser, with takeover; identities and their sign-in; sandboxes). See the [web plan](docs/web-plan.md).
 
 ## Design
 
