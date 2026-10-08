@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkCron, DEFAULT_CRON_DRAFT, describeCron, fromCron, toCron } from '../src/lib/cron';
+import { checkCron, DEFAULT_CRON_DRAFT, describeCron, formatClock, fromCron, toCron } from '../src/lib/cron';
 
 const draft = (overrides: Partial<typeof DEFAULT_CRON_DRAFT>) => ({ ...DEFAULT_CRON_DRAFT, ...overrides });
 
@@ -34,11 +34,17 @@ describe('schedules as the form builds them', () => {
 
 describe('a schedule in words', () => {
   it('reads the shapes the form builds plainly', () => {
-    expect(describeCron('0 9 * * 1-5')).toBe('Every weekday at 9:00 AM');
-    expect(describeCron('30 7 * * *')).toBe('Every day at 7:30 AM');
-    expect(describeCron('0 9 * * 1,3,5')).toBe('Every Monday, Wednesday and Friday at 9:00 AM');
-    expect(describeCron('0 18 1 * *')).toBe('On the 1st of every month at 6:00 PM');
-    expect(describeCron('0 8 22 * *')).toBe('On the 22nd of every month at 8:00 AM');
+    // Times as this machine's locale writes them ("9:00 AM" or "09:00").
+    expect(describeCron('0 9 * * 1-5')).toBe(`Every weekday at ${formatClock('09:00')}`);
+    expect(describeCron('30 7 * * *')).toBe(`Every day at ${formatClock('07:30')}`);
+    expect(describeCron('0 9 * * 1,3,5')).toBe(
+      `Every Monday, Wednesday and Friday at ${formatClock('09:00')}`,
+    );
+    expect(describeCron('0 18 1 * *')).toBe(`On the 1st of every month at ${formatClock('18:00')}`);
+    expect(describeCron('0 8 22 * *')).toBe(`On the 22nd of every month at ${formatClock('08:00')}`);
+    expect(describeCron('0 8 31 * *')).toBe(
+      `On the 31st of every month at ${formatClock('08:00')} (months without one are skipped)`,
+    );
     expect(describeCron('0 */4 * * *')).toBe('Every 4 hours, on the hour');
     expect(describeCron('15 * * * *')).toBe('Every hour, 15 minutes past');
   });

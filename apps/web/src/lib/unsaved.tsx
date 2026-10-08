@@ -3,13 +3,23 @@ import { type Blocker, useBlocker } from 'react-router';
 import { ConfirmDialog } from '../ui/dialog';
 
 /**
+ * Navigation state for a page's own move after an action whose edits can't be saved any more (it
+ * archived what they were for): it goes past the guard.
+ */
+export const pastUnsaved = { pastUnsaved: true } as const;
+
+const goesPast = (state: unknown) =>
+  typeof state === 'object' && state !== null && (state as { pastUnsaved?: unknown }).pastUnsaved === true;
+
+/**
  * While `dirty`, leaving the page asks first: going elsewhere in the app opens `UnsavedChangesDialog`,
  * closing or reloading the tab asks the browser's question. Moving between the page's own tabs (its
  * query string) isn't leaving.
  */
 export function useUnsavedChanges(dirty: boolean): Blocker {
   const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) => dirty && currentLocation.pathname !== nextLocation.pathname,
+    ({ currentLocation, nextLocation }) =>
+      dirty && currentLocation.pathname !== nextLocation.pathname && !goesPast(nextLocation.state),
   );
   useEffect(() => {
     if (!dirty) return;

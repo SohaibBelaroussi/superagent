@@ -2,6 +2,7 @@ import type { BrowserIdentity, Capabilities, CatalogTool, McpGrant, ToolGrant } 
 import { Plug, Sparkles, Wrench } from 'lucide-react';
 import { type ReactNode, useId } from 'react';
 import { Badge } from '../../ui/badge';
+import { Button } from '../../ui/button';
 import { Checkbox } from '../../ui/checkbox';
 import { EmptyState } from '../../ui/feedback';
 import { Select } from '../../ui/select';
@@ -252,9 +253,9 @@ export function SkillGrants({
                     inset
                     label={
                       <>
-                        {skill.name}
+                        {skill.name}{' '}
                         {viaDepartment ? (
-                          <Badge size="xs" className="ml-2 align-middle">
+                          <Badge size="xs" className="ml-1 align-middle">
                             {inheritedFrom ?? 'Department'}
                           </Badge>
                         ) : null}
@@ -367,6 +368,17 @@ export function McpGrants({
   );
 }
 
+/** "all its tools, asking you first". */
+function grantSummary(grant: McpGrant): string {
+  const tools = grant.tools ? `${grant.tools.length} of its tools` : 'all its tools';
+  return grant.requireApproval ? `${tools}, asking you first` : tools;
+}
+
+/**
+ * One MCP server for an agent (or a department). An agent's own grant replaces its department's for
+ * that server, as the server applies them: the department's shows as given, and can be replaced by the
+ * agent's own (its tools, asking first) or come back when the own one goes.
+ */
 function McpRow({
   server,
   grant,
@@ -383,6 +395,7 @@ function McpRow({
   onChange: (grant: McpGrant | null) => void;
 }) {
   const id = useId();
+  const from = inheritedFrom ?? 'the department';
   const status = server.enabled ? SERVER_STATUS[server.status] : 'Off';
   const tone = !server.enabled
     ? 'neutral'
@@ -399,30 +412,45 @@ function McpRow({
       label={
         <>
           {server.name}
-          <Key>{server.slug}</Key>
-          <Badge size="xs" tone={tone} dot className="ml-2 align-middle">
+          <Key>{server.slug}</Key>{' '}
+          <Badge size="xs" tone={tone} dot className="ml-1 align-middle">
             {status}
           </Badge>
         </>
       }
       description={
-        inherited
-          ? `Given by ${inheritedFrom ?? 'the department'}${inherited.tools ? `: ${inherited.tools.length} of its tools` : ''}.`
-          : server.tools.length > 0
-            ? `${server.tools.length} ${server.tools.length === 1 ? 'tool' : 'tools'}`
-            : 'Its tools aren’t known yet.'
+        grant && inherited
+          ? `Its own grant, in place of ${from}’s (${grantSummary(inherited)}).`
+          : inherited
+            ? `Given by ${from}: ${grantSummary(inherited)}.`
+            : server.tools.length > 0
+              ? `${server.tools.length} ${server.tools.length === 1 ? 'tool' : 'tools'}`
+              : 'Its tools aren’t known yet.'
       }
       control={
         <SwitchControl
           id={id}
           {...settingLabels(id)}
           checked={Boolean(grant) || Boolean(inherited)}
-          disabled={disabled || Boolean(inherited)}
+          // The department's grant is changed in the department's settings, not here.
+          disabled={disabled || (!grant && Boolean(inherited))}
           onCheckedChange={(on) => onChange(on ? { server: server.slug, requireApproval: false } : null)}
         />
       }
     >
-      {grant && !inherited ? (
+      {!grant && inherited && !disabled ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="w-fit"
+          onClick={() =>
+            onChange({ ...inherited, tools: inherited.tools ? [...inherited.tools] : undefined })
+          }
+        >
+          Give it its own grant
+        </Button>
+      ) : null}
+      {grant ? (
         <>
           <Checkbox
             checked={grant.requireApproval}
@@ -471,6 +499,11 @@ function McpRow({
                 </div>
               ) : null}
             </>
+          ) : null}
+          {inherited && !disabled ? (
+            <Button size="sm" variant="ghost" className="w-fit" onClick={() => onChange(null)}>
+              Use {from}’s grant instead
+            </Button>
           ) : null}
         </>
       ) : null}

@@ -14,6 +14,9 @@ const org: OrgLookup = {
   departments: [research],
   agents: [ada],
   ready: true,
+  fetching: false,
+  error: null,
+  refetch: () => {},
 };
 
 const item = (overrides: Partial<AttentionItem> & Pick<AttentionItem, 'kind'>): AttentionItem => ({

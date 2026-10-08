@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { onUnauthorized, setApiToken } from '../src/api/client';
 import { EventStream, type LiveStatus, parseFrame } from '../src/api/events';
+import { staleKeysFor } from '../src/api/live';
+import { event } from './msw';
 
 /** A response whose body the test writes, chunk by chunk, like a server sending events. */
 function sse(status = 200) {
@@ -192,5 +194,18 @@ describe('EventStream', () => {
     await vi.waitFor(() => expect(connections).toHaveLength(1));
     await vi.advanceTimersByTimeAsync(10);
     expect(unauthorized).not.toHaveBeenCalled();
+  });
+});
+
+describe('what a task event makes stale', () => {
+  it('moves the schedules when a schedule made the task', () => {
+    const made = event({
+      type: 'created',
+      data: { title: 'Digest', source: 'schedule', priority: 'normal' },
+    });
+    expect(staleKeysFor(made)).toContainEqual(['schedules']);
+    const byHand = event({ type: 'created', data: { title: 'Digest', source: 'owner', priority: 'normal' } });
+    expect(staleKeysFor(byHand)).not.toContainEqual(['schedules']);
+    expect(staleKeysFor(event({ type: 'phase_changed' }))).toContainEqual(['board']);
   });
 });

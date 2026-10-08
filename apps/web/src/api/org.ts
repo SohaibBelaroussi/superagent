@@ -39,7 +39,10 @@ export function useCreateDepartment() {
   return useMutation({
     mutationFn: (input: z.input<typeof CreateDepartmentInputSchema>) =>
       api(DepartmentSchema, '/v1/departments', { method: 'POST', json: input }),
-    onSuccess: () => refreshOrg(queryClient),
+    onSuccess: (department) => {
+      setDepartment(queryClient, department);
+      refreshOrg(queryClient);
+    },
     meta: { silent: true },
   });
 }
@@ -49,7 +52,10 @@ export function useUpdateDepartment(id: string) {
   return useMutation({
     mutationFn: (input: UpdateDepartmentInput) =>
       api(DepartmentSchema, departmentPath(id), { method: 'PATCH', json: input }),
-    onSuccess: () => refreshOrg(queryClient),
+    onSuccess: (department) => {
+      setDepartment(queryClient, department);
+      refreshOrg(queryClient);
+    },
     meta: { silent: true },
   });
 }
@@ -68,7 +74,10 @@ export function useCreateAgent() {
   return useMutation({
     mutationFn: (input: z.input<typeof CreateAgentInputSchema>) =>
       api(AgentDefinitionSchema, '/v1/agents', { method: 'POST', json: input }),
-    onSuccess: () => refreshOrg(queryClient),
+    onSuccess: (agent) => {
+      setAgent(queryClient, agent);
+      refreshOrg(queryClient);
+    },
     meta: { silent: true },
   });
 }
@@ -123,12 +132,31 @@ export function useActivateVersion(id: string) {
   });
 }
 
-/** The agents list with this agent replaced, so the page shows the saved version at once. */
-function setAgent(queryClient: QueryClient, agent: AgentDefinition): void {
-  queryClient.setQueryData<{ items: AgentDefinition[] }>(queryKeys.agents, (list) =>
-    list ? { items: list.items.map((item) => (item.id === agent.id ? agent : item)) } : list,
+/**
+ * The list with this item put in (replaced, or added when new), so the page shows it at once: a page
+ * opened right after making something finds it, and a save shows saved. The refetch after brings the
+ * rest (a department's lead and members).
+ */
+function putInList<T extends { id: string }>(
+  queryClient: QueryClient,
+  key: readonly string[],
+  item: T,
+): void {
+  queryClient.setQueryData<{ items: T[] }>(key, (list) =>
+    list
+      ? {
+          items: list.items.some((entry) => entry.id === item.id)
+            ? list.items.map((entry) => (entry.id === item.id ? item : entry))
+            : [...list.items, item],
+        }
+      : list,
   );
 }
+
+const setAgent = (queryClient: QueryClient, agent: AgentDefinition) =>
+  putInList(queryClient, queryKeys.agents, agent);
+const setDepartment = (queryClient: QueryClient, department: Department) =>
+  putInList(queryClient, queryKeys.departments, department);
 
 /** What agents and departments can be given: catalog tools, skills, MCP servers and their tools. */
 export function useCapabilities() {

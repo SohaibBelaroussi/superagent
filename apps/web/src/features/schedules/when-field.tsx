@@ -84,6 +84,7 @@ export function WhenField({
       <div className="flex flex-wrap items-center gap-2">
         <Select
           aria-label="How often"
+          aria-describedby={`${id}-preview`}
           value={draft.frequency}
           onValueChange={(frequency) =>
             // Custom starts from the cron the form makes now, to edit from there.
@@ -97,6 +98,7 @@ export function WhenField({
             on day
             <Select
               aria-label="Day of the month"
+              aria-describedby={`${id}-preview`}
               value={String(draft.dayOfMonth)}
               onValueChange={(day) => patch({ dayOfMonth: Number(day) })}
               options={DAYS_OF_MONTH}
@@ -109,6 +111,7 @@ export function WhenField({
             every
             <Select
               aria-label="Every how many hours"
+              aria-describedby={`${id}-preview`}
               value={String(draft.everyHours)}
               onValueChange={(hours) => patch({ everyHours: Number(hours) })}
               options={HOUR_STEPS.map((hours) => ({
@@ -120,6 +123,7 @@ export function WhenField({
             at minute
             <Input
               aria-label="Minutes past the hour"
+              aria-describedby={`${id}-preview`}
               type="number"
               inputMode="numeric"
               min={0}
@@ -137,6 +141,7 @@ export function WhenField({
             at
             <Input
               aria-label="Time"
+              aria-describedby={`${id}-preview`}
               type="time"
               required
               value={draft.time}
@@ -182,7 +187,7 @@ export function WhenField({
         <div className="flex flex-col gap-1.5">
           <Input
             aria-label="Cron"
-            aria-describedby={`${id}-cron`}
+            aria-describedby={`${id}-cron ${id}-preview`}
             value={draft.custom}
             spellCheck={false}
             autoCapitalize="off"
@@ -203,6 +208,7 @@ export function WhenField({
         </label>
         <Input
           id={`${id}-tz`}
+          aria-describedby={`${id}-preview`}
           list={`${id}-zones`}
           value={timezone}
           spellCheck={false}
@@ -218,7 +224,8 @@ export function WhenField({
       </div>
 
       <div
-        role="status"
+        id={`${id}-preview`}
+        role="note"
         className={cn(
           'flex items-start gap-2.5 rounded-xl px-3.5 py-3 text-body-sm',
           problem

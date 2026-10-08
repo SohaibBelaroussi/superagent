@@ -2,9 +2,22 @@ import type { KnowledgeDocument } from '@superagent/shared';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { api, research, server, signedInHandlers } from './msw';
 import { renderApp } from './render';
+
+// jsdom's FormData and File aren't the ones Node's fetch serializes: an upload would go out as an empty
+// "blob". This file's uploads are built with Node's own, as a browser builds them with its own. (Only
+// here: React builds a jsdom form's data with FormData, which Node's refuses.)
+const NodeFormData = (
+  await new Response('', { headers: { 'content-type': 'application/x-www-form-urlencoded' } }).formData()
+).constructor as typeof FormData;
+const { File: NodeFile } = await import('node:buffer');
+beforeAll(() => {
+  vi.stubGlobal('FormData', NodeFormData);
+  vi.stubGlobal('File', NodeFile);
+});
+afterAll(() => vi.unstubAllGlobals());
 
 const guide: KnowledgeDocument = {
   id: '0199d000-0000-7000-8000-000000000001',
@@ -128,34 +141,5 @@ describe('knowledge', () => {
     await user.click(await screen.findByRole('button', { name: 'Delete document' }));
     await waitFor(() => expect(deleted).toEqual([guide.id]));
     expect(await screen.findByText('No documents yet')).toBeVisible();
-  });
-});
-
-describe('your profile', () => {
-  it('corrects what your agents know about you', async () => {
-    const patches: unknown[] = [];
-    server.use(
-      http.get(api('/v1/profile'), () =>
-        HttpResponse.json({ name: 'Sohaib', language: 'French', preferences: ['cite sources'] }),
-      ),
-      http.patch(api('/v1/profile'), async ({ request }) => {
-        const patch = await request.json();
-        patches.push(patch);
-        return HttpResponse.json({ name: 'Sohaib', preferences: ['cite sources', 'no meetings before 10'] });
-      }),
-      ...signedInHandlers(),
-    );
-    renderApp('/settings/profile');
-    const user = userEvent.setup();
-    await user.clear(await screen.findByLabelText('Language'));
-    await user.click(screen.getByRole('button', { name: 'Add a preference' }));
-    await user.type(screen.getByLabelText('Preference 2'), 'no meetings before 10');
-    await user.click(
-      within(screen.getByRole('region', { name: 'Unsaved changes' })).getByRole('button', { name: 'Save' }),
-    );
-    await waitFor(() =>
-      expect(patches).toEqual([{ language: null, preferences: ['cite sources', 'no meetings before 10'] }]),
-    );
-    expect(await screen.findByText('Profile saved')).toBeVisible();
   });
 });

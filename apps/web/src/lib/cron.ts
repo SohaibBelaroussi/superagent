@@ -149,7 +149,9 @@ export function describeCron(cron: string): string | null {
     case 'weekly':
       return `Every ${dayList(draft.days)} at ${formatClock(draft.time)}`;
     case 'monthly':
-      return `On the ${ordinal(draft.dayOfMonth)} of every month at ${formatClock(draft.time)}`;
+      return `On the ${ordinal(draft.dayOfMonth)} of every month at ${formatClock(draft.time)}${
+        draft.dayOfMonth > 28 ? ' (months without one are skipped)' : ''
+      }`;
     case 'hourly': {
       const every = draft.everyHours === 1 ? 'Every hour' : `Every ${draft.everyHours} hours`;
       return draft.minute === 0
@@ -195,12 +197,17 @@ export function checkCron(cron: string, timezone: string, after: Date = new Date
 
 /** A fire time in the schedule's timezone: "Mon 12 Oct, 9:00 AM". */
 export function formatFire(date: Date, timezone: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  const options: Intl.DateTimeFormatOptions = {
     weekday: 'short',
     day: 'numeric',
     month: 'short',
     hour: 'numeric',
     minute: '2-digit',
-    timeZone: timezone,
-  }).format(date);
+  };
+  try {
+    return new Intl.DateTimeFormat(undefined, { ...options, timeZone: timezone }).format(date);
+  } catch {
+    // A timezone the server knows but this browser doesn't: say it in UTC rather than fail.
+    return `${new Intl.DateTimeFormat(undefined, { ...options, timeZone: 'UTC' }).format(date)} UTC`;
+  }
 }

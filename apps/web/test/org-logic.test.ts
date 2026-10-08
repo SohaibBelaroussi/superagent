@@ -10,7 +10,7 @@ import {
   versionChanges,
 } from '../src/features/agents/draft';
 import { suggestKey } from '../src/features/agents/new-agent-dialog';
-import { profileChanges } from '../src/features/profile/profile-page';
+import { profileChanges, profileDraft } from '../src/features/profile/profile-page';
 import { diffLines, foldDiff } from '../src/lib/diff';
 import { slugify } from '../src/lib/slug';
 import { ada, research } from './msw';
@@ -18,13 +18,13 @@ import { ada, research } from './msw';
 describe('saving an agent', () => {
   it('sends only what changed: a version only when its definition did', () => {
     const draft = agentDraft(ada);
-    expect(agentChanges(ada, draft)).toEqual({});
+    expect(agentChanges(agentDraft(ada), draft)).toEqual({});
 
-    const renamed = agentChanges(ada, { ...draft, name: '  Ada L.  ' });
+    const renamed = agentChanges(agentDraft(ada), { ...draft, name: '  Ada L.  ' });
     expect(renamed).toEqual({ name: 'Ada L.' });
     expect(makesVersion(renamed)).toBe(false);
 
-    const tooled = agentChanges(ada, {
+    const tooled = agentChanges(agentDraft(ada), {
       ...draft,
       instructions: `${draft.instructions} `,
       tools: [{ key: 'web_search', requireApproval: true }],
@@ -48,13 +48,15 @@ describe('saving an agent', () => {
     };
     const draft = agentDraft(agent);
     expect(
-      agentChanges(agent, {
+      agentChanges(agentDraft(agent), {
         ...draft,
         tools: [...draft.tools].reverse(),
         mcp: [{ server: 'github', requireApproval: false, tools: ['a', 'b'] }],
       }),
     ).toEqual({});
-    expect(agentChanges(agent, { ...draft, mcp: [{ server: 'github', requireApproval: false }] })).toEqual({
+    expect(
+      agentChanges(agentDraft(agent), { ...draft, mcp: [{ server: 'github', requireApproval: false }] }),
+    ).toEqual({
       mcp: [{ server: 'github', requireApproval: false }],
     });
   });
@@ -95,9 +97,13 @@ describe('saving an agent', () => {
 describe('saving a department and the profile', () => {
   it('sends the department’s changed fields only', () => {
     const draft = departmentDraft(research);
-    expect(departmentChanges(research, draft)).toEqual({});
+    expect(departmentChanges(departmentDraft(research), draft)).toEqual({});
     expect(
-      departmentChanges(research, { ...draft, autoClose: true, description: ' Finds things out. ' }),
+      departmentChanges(departmentDraft(research), {
+        ...draft,
+        autoClose: true,
+        description: ' Finds things out. ',
+      }),
     ).toEqual({
       autoClose: true,
     });
@@ -113,16 +119,31 @@ describe('saving a department and the profile', () => {
       preferences: ['cite sources', ' ', 'no meetings before 10'],
       about: '',
     };
-    expect(profileChanges(profile, draft)).toEqual({
+    expect(profileChanges(profileDraft(profile), draft)).toEqual({
       language: null,
       timezone: 'Asia/Qatar',
       preferences: ['cite sources', 'no meetings before 10'],
     });
-    expect(profileChanges(profile, { ...draft, language: 'English', timezone: '', preferences: [] })).toEqual(
-      {
-        preferences: null,
-      },
-    );
+    expect(
+      profileChanges(profileDraft(profile), { ...draft, language: 'English', timezone: '', preferences: [] }),
+    ).toEqual({
+      preferences: null,
+    });
+  });
+});
+
+describe('changes measured from where editing started', () => {
+  it('doesn’t count spaces the chief stored around a value as a change', () => {
+    const stored = profileDraft({ about: 'Builds superagent. ', preferences: ['cite sources', ''] });
+    expect(profileChanges(stored, stored)).toEqual({});
+    expect(profileChanges(stored, { ...stored, about: 'Builds superagent.' })).toEqual({});
+  });
+
+  it('sends only the fields you changed, whatever else changed meanwhile', () => {
+    const base = departmentDraft(research);
+    const yours = { ...base, autoClose: true };
+    // The description changed elsewhere; your save mustn't put the old one back.
+    expect(departmentChanges(base, yours)).toEqual({ autoClose: true });
   });
 });
 

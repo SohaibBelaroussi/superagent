@@ -10,8 +10,9 @@ import type {
 } from '@superagent/shared';
 
 /*
- * Forms edit a draft; saving sends only what changed. For an agent that matters: any definition field
- * in a save, even unchanged, makes a new version.
+ * Forms edit a draft and send only what you changed from where editing started (`useServerDraft`). For
+ * an agent that matters twice over: any definition field in a save, even unchanged, makes a new version,
+ * and a field sent with its old value would undo a change made elsewhere meanwhile.
  */
 
 export interface AgentDraft {
@@ -57,19 +58,33 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
   return left.every((item, index) => item === right[index]);
 }
 
-/** What saving `draft` over `agent` sends: the changed fields only, text trimmed. */
-export function agentChanges(agent: AgentDefinition, draft: AgentDraft): UpdateAgentInput {
+/** What you changed in `draft` from `base`: the fields to send, text trimmed. */
+export function agentChanges(base: AgentDraft, draft: AgentDraft): UpdateAgentInput {
   const changes: UpdateAgentInput = {};
-  const current = agent.current;
-  if (draft.name.trim() !== agent.name) changes.name = draft.name.trim();
-  if (draft.description.trim() !== current.description) changes.description = draft.description.trim();
-  if (draft.instructions.trim() !== current.instructions) changes.instructions = draft.instructions.trim();
-  if (!sameModel(draft.model, current.model)) changes.model = draft.model;
-  if (!sameTools(draft.tools, current.tools)) changes.tools = draft.tools;
-  if (!sameSkills(draft.skills, current.skills)) changes.skills = draft.skills;
-  if (!sameMcp(draft.mcp, current.mcp)) changes.mcp = draft.mcp;
+  if (draft.name.trim() !== base.name.trim()) changes.name = draft.name.trim();
+  if (draft.description.trim() !== base.description.trim()) changes.description = draft.description.trim();
+  if (draft.instructions.trim() !== base.instructions.trim())
+    changes.instructions = draft.instructions.trim();
+  if (!sameModel(draft.model, base.model)) changes.model = draft.model;
+  if (!sameTools(draft.tools, base.tools)) changes.tools = draft.tools;
+  if (!sameSkills(draft.skills, base.skills)) changes.skills = draft.skills;
+  if (!sameMcp(draft.mcp, base.mcp)) changes.mcp = draft.mcp;
   return changes;
 }
+
+const AGENT_FIELDS: Record<keyof UpdateAgentInput, string> = {
+  name: 'name',
+  description: 'description',
+  instructions: 'instructions',
+  model: 'model',
+  tools: 'tools',
+  skills: 'skills',
+  mcp: 'MCP servers',
+};
+
+/** The fields a save changes, in words ("instructions and tools"). */
+export const agentFieldNames = (changes: UpdateAgentInput): string[] =>
+  (Object.keys(changes) as (keyof UpdateAgentInput)[]).map((field) => AGENT_FIELDS[field]);
 
 /** Whether saving these changes makes a new version (anything but the name does). */
 export const makesVersion = (changes: UpdateAgentInput): boolean =>
@@ -123,12 +138,25 @@ export function departmentDraft(department: Department): DepartmentDraft {
   };
 }
 
-export function departmentChanges(department: Department, draft: DepartmentDraft): UpdateDepartmentInput {
+/** What you changed in `draft` from `base`: the fields to send, text trimmed. */
+export function departmentChanges(base: DepartmentDraft, draft: DepartmentDraft): UpdateDepartmentInput {
   const changes: UpdateDepartmentInput = {};
-  if (draft.name.trim() !== department.name) changes.name = draft.name.trim();
-  if (draft.description.trim() !== department.description) changes.description = draft.description.trim();
-  if (draft.autoClose !== department.autoClose) changes.autoClose = draft.autoClose;
-  if (!sameSkills(draft.skills, department.skills)) changes.skills = draft.skills;
-  if (!sameMcp(draft.mcp, department.mcp)) changes.mcp = draft.mcp;
+  if (draft.name.trim() !== base.name.trim()) changes.name = draft.name.trim();
+  if (draft.description.trim() !== base.description.trim()) changes.description = draft.description.trim();
+  if (draft.autoClose !== base.autoClose) changes.autoClose = draft.autoClose;
+  if (!sameSkills(draft.skills, base.skills)) changes.skills = draft.skills;
+  if (!sameMcp(draft.mcp, base.mcp)) changes.mcp = draft.mcp;
   return changes;
 }
+
+const DEPARTMENT_FIELDS: Record<keyof UpdateDepartmentInput, string> = {
+  name: 'name',
+  description: 'purpose',
+  autoClose: 'review setting',
+  skills: 'skills',
+  mcp: 'MCP servers',
+};
+
+/** The fields a save changes, in words. */
+export const departmentFieldNames = (changes: UpdateDepartmentInput): string[] =>
+  (Object.keys(changes) as (keyof UpdateDepartmentInput)[]).map((field) => DEPARTMENT_FIELDS[field]);

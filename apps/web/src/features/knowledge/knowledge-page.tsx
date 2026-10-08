@@ -1,4 +1,4 @@
-import type { KnowledgeDocument } from '@superagent/shared';
+import type { KnowledgeDocument, KnowledgeHit } from '@superagent/shared';
 import { CircleAlert, CircleCheck, FileText, Library, Search, Trash2, Upload } from 'lucide-react';
 import { type DragEvent, type ReactNode, useDeferredValue, useRef, useState } from 'react';
 import { errorMessage } from '../../api/client';
@@ -306,7 +306,7 @@ function Uploader({ org }: { org: OrgLookup }) {
         </div>
       </div>
       {uploads.length > 0 ? (
-        <ul className="flex flex-col gap-1.5" aria-label="Uploads">
+        <ul className="flex flex-col gap-1.5" aria-label="Uploads" aria-live="polite">
           {uploads.map((item) => (
             <li key={item.id} className="flex items-start gap-2.5 text-body-sm">
               <span className="mt-0.5 flex shrink-0">
@@ -347,13 +347,7 @@ function SearchResults({
   query: string;
   loading: boolean;
   error: string | null;
-  hits: readonly {
-    documentId: string;
-    title: string;
-    departmentId: string | null;
-    passage: number;
-    content: string;
-  }[];
+  hits: readonly KnowledgeHit[];
   org: OrgLookup;
 }) {
   if (error)
@@ -366,34 +360,41 @@ function SearchResults({
     return loading ? (
       <Skeleton className="h-32 rounded-xl" />
     ) : (
-      <EmptyState
-        compact
-        icon={<Search />}
-        title="Nothing found"
-        description="No passage matches those words."
-      />
+      <div role="status">
+        <EmptyState
+          compact
+          icon={<Search />}
+          title="Nothing found"
+          description="No passage matches those words."
+        />
+      </div>
     );
   }
   return (
-    <ol className={cn('flex flex-col gap-2', loading && 'opacity-70')} aria-label="Search results">
-      {hits.map((hit) => (
-        <li
-          key={`${hit.documentId}:${hit.passage}`}
-          className={cn('flex flex-col gap-1.5 rounded-xl px-4 py-3', raisedSurface)}
-        >
-          <p className="flex flex-wrap items-center gap-x-1.5 text-caption text-muted-foreground">
-            <span className="text-label text-foreground">{hit.title}</span>
-            <span aria-hidden>·</span>
-            <span>passage {hit.passage + 1}</span>
-            <span aria-hidden>·</span>
-            <DepartmentName org={org} id={hit.departmentId} />
-          </p>
-          <p className="line-clamp-5 text-body-sm whitespace-pre-wrap text-foreground/85">
-            <Highlight text={hit.content} query={query} />
-          </p>
-        </li>
-      ))}
-    </ol>
+    <>
+      <p role="status" className="sr-only">
+        {plural(hits.length, 'passage')} found
+      </p>
+      <ol className={cn('flex flex-col gap-2', loading && 'opacity-70')} aria-label="Search results">
+        {hits.map((hit) => (
+          <li
+            key={`${hit.documentId}:${hit.passage}`}
+            className={cn('flex flex-col gap-1.5 rounded-xl px-4 py-3', raisedSurface)}
+          >
+            <p className="flex flex-wrap items-center gap-x-1.5 text-caption text-muted-foreground">
+              <span className="text-label text-foreground">{hit.title}</span>
+              <span aria-hidden>·</span>
+              <span>passage {hit.passage + 1}</span>
+              <span aria-hidden>·</span>
+              <DepartmentName org={org} id={hit.departmentId} />
+            </p>
+            <p className="line-clamp-5 text-body-sm whitespace-pre-wrap text-foreground/85">
+              <Highlight text={hit.content} query={query} />
+            </p>
+          </li>
+        ))}
+      </ol>
+    </>
   );
 }
 

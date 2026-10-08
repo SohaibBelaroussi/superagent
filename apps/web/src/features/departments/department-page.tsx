@@ -11,15 +11,16 @@ import { useDocumentTitle } from '../../lib/title';
 import { departmentTone, TONE_DOT } from '../../lib/tones';
 import { UnsavedChangesDialog, useUnsavedChanges } from '../../lib/unsaved';
 import { Button } from '../../ui/button';
-import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
+import { EmptyState, Notice } from '../../ui/feedback';
 import { Input } from '../../ui/field';
-import { Page, PageHeader, Panel } from '../../ui/layout';
+import { PageHeader, Panel } from '../../ui/layout';
 import { TabCount, TabPanel, Tabs } from '../../ui/tabs';
 import { BoardColumns } from '../board/board-columns';
 import { ScheduleDialog } from '../schedules/schedule-dialog';
 import { ScheduleList, sortSchedules } from '../schedules/schedule-list';
 import { NewTaskDialog } from '../tasks/new-task-dialog';
 import { useOrg } from '../tasks/org';
+import { OrgMiss } from '../tasks/org-miss';
 import { DepartmentSettings } from './department-settings';
 import { NotesTab } from './notes';
 import { TeamTab } from './team';
@@ -37,26 +38,13 @@ export function DepartmentPage() {
 
   if (!department) {
     return (
-      <Page>
-        {org.ready ? (
-          <EmptyState
-            icon={<Building2 />}
-            title="No such department"
-            description={`There’s no department “${slug}”.`}
-            action={
-              <Link to="/departments" className="text-label text-foreground underline underline-offset-4">
-                See the departments
-              </Link>
-            }
-          />
-        ) : (
-          <div className="flex flex-col gap-4" role="status">
-            <span className="sr-only">Loading the department…</span>
-            <Skeleton className="h-10 w-64 rounded-full" />
-            <Skeleton className="h-48 rounded-xl" />
-          </div>
-        )}
-      </Page>
+      <OrgMiss
+        org={org}
+        name={slug}
+        icon={<Building2 />}
+        title="No such department"
+        description={`There’s no department “${slug}”.`}
+      />
     );
   }
   return <DepartmentView key={department.id} department={department} />;
@@ -65,14 +53,16 @@ export function DepartmentPage() {
 function DepartmentView({ department }: { department: Department }) {
   const [params, setParams] = useSearchParams();
   const requested = params.get('tab');
-  const tab: DepartmentTab = isTab(requested) ? requested : 'board';
+  const archived = Boolean(department.archivedAt);
+  // An archived department has no settings to show.
+  const tab: DepartmentTab =
+    isTab(requested) && !(archived && requested === 'settings') ? requested : 'board';
   const agents = useAgents();
   const schedules = useSchedules();
   const team = teamOf(department, agents.data ?? []);
   const own = sortSchedules(
     (schedules.data ?? []).filter((schedule) => schedule.departmentId === department.id),
   );
-  const archived = Boolean(department.archivedAt);
   const [filter, setFilter] = useState('');
   const query = useDeferredValue(filter.trim());
   const [newTaskOpen, setNewTaskOpen] = useState(false);

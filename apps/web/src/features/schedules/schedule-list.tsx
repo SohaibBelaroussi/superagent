@@ -14,7 +14,7 @@ import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/dialog';
 import { Menu, MenuItem, MenuSeparator } from '../../ui/menu';
 import { raisedSurface } from '../../ui/recipes';
-import { RelativeTime } from '../../ui/time';
+import { RelativeTime, useClock } from '../../ui/time';
 import { toast } from '../../ui/toast';
 import { useOrg } from '../tasks/org';
 
@@ -103,6 +103,9 @@ function ScheduleRow({
     .flatMap((column) => column.tasks)
     .find((task) => task.id === schedule.lastTaskId);
   const paused = schedule.status === 'paused';
+  // Looked at again every 30 seconds, so a run that came due says so.
+  useClock();
+  const now = Date.now();
   const ownTimezone = settings.data?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const author = schedule.createdBy.startsWith('agent:')
     ? (org.agentByKey(schedule.createdBy.slice('agent:'.length))?.name ??
@@ -151,10 +154,15 @@ function ScheduleRow({
         </p>
         <p className="flex flex-wrap items-center gap-x-1.5 text-caption text-muted-foreground">
           {schedule.nextFireAt && !paused ? (
-            <span>
-              Next <RelativeTime iso={schedule.nextFireAt} /> (
-              {formatFire(new Date(schedule.nextFireAt), schedule.timezone)})
-            </span>
+            Date.parse(schedule.nextFireAt) <= now ? (
+              // The ticker takes it within the minute; the list moves on when its task arrives.
+              <span>Due now</span>
+            ) : (
+              <span>
+                Next <RelativeTime iso={schedule.nextFireAt} /> (
+                {formatFire(new Date(schedule.nextFireAt), schedule.timezone)})
+              </span>
+            )
           ) : (
             <span>Not running while paused</span>
           )}

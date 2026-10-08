@@ -10,9 +10,19 @@ export function useLiveStatus(): LiveStatus {
   return useContext(LiveStatusContext);
 }
 
-/** What a task event makes stale: that task, the lists it appears in, and the attention inbox. */
+/**
+ * What a task event makes stale: that task, the lists it appears in, and the attention inbox. A task a
+ * schedule made also moves that schedule's last and next runs.
+ */
 export function staleKeysFor(event: TaskEvent): QueryKey[] {
-  return [queryKeys.task(event.taskId), queryKeys.board, queryKeys.tasks(), queryKeys.attention];
+  const keys: QueryKey[] = [
+    queryKeys.task(event.taskId),
+    queryKeys.board,
+    queryKeys.tasks(),
+    queryKeys.attention,
+  ];
+  if (event.type === 'created' && event.data.source === 'schedule') keys.push(queryKeys.schedules);
+  return keys;
 }
 
 /**

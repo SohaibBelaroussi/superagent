@@ -4,7 +4,15 @@ import { errorMessage, ProblemError } from '../../api/client';
 import { useSettings } from '../../api/org';
 import { useCreateSchedule, useUpdateSchedule } from '../../api/schedules';
 import { cn } from '../../lib/cn';
-import { type CronDraft, checkCron, DEFAULT_CRON_DRAFT, formatFire, fromCron, toCron } from '../../lib/cron';
+import {
+  type CronCheck,
+  type CronDraft,
+  checkCron,
+  DEFAULT_CRON_DRAFT,
+  formatFire,
+  fromCron,
+  toCron,
+} from '../../lib/cron';
 import { departmentTone, PRIORITIES, TONE_DOT } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
@@ -93,7 +101,11 @@ export function ScheduleDialog({
   }, [settings.data?.timezone]);
 
   const cron = toCron(draft);
-  const check = cron && timezone ? checkCron(cron, timezone) : null;
+  const check: CronCheck | null = !cron
+    ? null
+    : timezone
+      ? checkCron(cron, timezone)
+      : { ok: false, error: 'Choose a timezone.' };
   const department = departmentId ? org.department(departmentId) : undefined;
   const pending = create.isPending || update.isPending;
 
@@ -113,7 +125,8 @@ export function ScheduleDialog({
         const changes: UpdateScheduleInput = {};
         if (title.trim() !== schedule.title) changes.title = title.trim();
         if (brief.trim() !== schedule.brief) changes.brief = brief.trim();
-        if (cron !== schedule.cron) changes.cron = cron;
+        // As the form writes it ("0 9 * * 5,1" reads back as "0 9 * * 1,5"): only a real change is sent.
+        if (cron !== toCron(fromCron(schedule.cron))) changes.cron = cron;
         if (timezone !== schedule.timezone) changes.timezone = timezone;
         if (priority !== schedule.priority) changes.priority = priority;
         if (Object.keys(changes).length > 0) await update.mutateAsync({ id: schedule.id, ...changes });

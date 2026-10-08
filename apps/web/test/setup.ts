@@ -27,15 +27,6 @@ if (!globalThis.ResizeObserver) {
 Element.prototype.scrollIntoView ??= () => {};
 Element.prototype.scrollTo ??= () => {};
 
-// jsdom's FormData and File aren't the ones Node's fetch serializes: a multipart upload would go out
-// with an empty "blob". Requests are Node's here, so the app builds its forms with Node's classes, as a
-// browser builds them with its own.
-const nodeFormData = (
-  await new Response('', { headers: { 'content-type': 'application/x-www-form-urlencoded' } }).formData()
-).constructor as typeof FormData;
-globalThis.FormData = nodeFormData;
-globalThis.File = (await import('node:buffer')).File as unknown as typeof File;
-
 // Pages load on first visit: a test's first page waits for its module, which takes longer than the
 // default second when every test file runs at once.
 configure({ asyncUtilTimeout: 3000 });

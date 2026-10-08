@@ -119,7 +119,8 @@ function NotesEditor({
       setChecking(true);
       try {
         const latest = await latestNotes(queryClient, department.id);
-        if (latest !== base) {
+        // No notes and empty notes are the same: only a real change is a conflict.
+        if ((latest ?? '') !== (base ?? '')) {
           setTheirs(latest);
           return;
         }
@@ -176,7 +177,7 @@ function NotesEditor({
         aria-describedby={`${id}-hint`}
         value={text}
         maxLength={MAX_NOTES}
-        className="max-h-[70dvh] min-h-80 font-mono text-[0.8125rem]"
+        className="max-h-[70dvh] min-h-80 font-mono text-body-sm"
         onChange={(event) => setText(event.target.value)}
       />
       <p id={`${id}-hint`} className="text-caption text-muted-foreground">

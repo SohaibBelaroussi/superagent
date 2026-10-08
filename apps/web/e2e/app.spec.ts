@@ -251,10 +251,10 @@ test('sets up a schedule in words, with its next runs', async ({ page, request }
   const dialog = page.getByRole('dialog', { name: 'New schedule' });
   await dialog.getByLabel('Title').fill('Morning check');
   await dialog.getByLabel('Brief').fill('Look at what changed overnight.');
-  await expect(dialog.getByRole('group', { name: 'When' }).getByRole('status')).toContainText(
+  await expect(dialog.getByRole('group', { name: 'When' }).getByRole('note')).toContainText(
     'Every weekday at',
   );
-  await expect(dialog.getByRole('group', { name: 'When' }).getByRole('status')).toContainText('Next:');
+  await expect(dialog.getByRole('group', { name: 'When' }).getByRole('note')).toContainText('Next:');
   await dialog.getByRole('button', { name: 'Set up schedule' }).click();
   await expect(page.getByText('Schedule set up')).toBeVisible();
   const row = page.getByRole('listitem').filter({ hasText: 'Morning check' });

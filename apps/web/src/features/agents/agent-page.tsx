@@ -1,6 +1,6 @@
 import type { AgentDefinition, Department } from '@superagent/shared';
 import { Archive, Ellipsis, UserRound } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { errorMessage } from '../../api/client';
 import {
@@ -12,15 +12,16 @@ import {
 } from '../../api/org';
 import { Loaded } from '../../layout/loaded';
 import { cn } from '../../lib/cn';
-import { formatDate } from '../../lib/format';
+import { formatDate, formatList } from '../../lib/format';
+import { useServerDraft } from '../../lib/server-draft';
 import { useDocumentTitle } from '../../lib/title';
 import { departmentTone, TONE_DOT } from '../../lib/tones';
-import { UnsavedChangesDialog, useUnsavedChanges } from '../../lib/unsaved';
+import { pastUnsaved, UnsavedChangesDialog, useUnsavedChanges } from '../../lib/unsaved';
 import { Avatar } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/dialog';
-import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
+import { Notice } from '../../ui/feedback';
 import { Field, Input, Textarea } from '../../ui/field';
 import { Page, PageHeader, Panel, Section } from '../../ui/layout';
 import { Menu, MenuItem } from '../../ui/menu';
@@ -28,12 +29,13 @@ import { SaveBar } from '../../ui/settings';
 import { TabCount, TabPanel, Tabs } from '../../ui/tabs';
 import { toast } from '../../ui/toast';
 import { useOrg } from '../tasks/org';
+import { OrgMiss } from '../tasks/org-miss';
 import {
-  type AgentDraft,
   type AgentDraftErrors,
   agentChanges,
   agentDraft,
   agentDraftErrors,
+  agentFieldNames,
   makesVersion,
 } from './draft';
 import { McpGrants, SkillGrants, ToolGrants } from './grants';
@@ -51,26 +53,13 @@ export function AgentPage() {
 
   if (!agent) {
     return (
-      <Page>
-        {org.ready ? (
-          <EmptyState
-            icon={<UserRound />}
-            title="No such agent"
-            description={`There’s no agent “${agentKey}”. It may have a different key.`}
-            action={
-              <Link to="/departments" className="text-label text-foreground underline underline-offset-4">
-                See the departments
-              </Link>
-            }
-          />
-        ) : (
-          <div className="flex flex-col gap-4" role="status">
-            <span className="sr-only">Loading the agent…</span>
-            <Skeleton className="h-10 w-64 rounded-full" />
-            <Skeleton className="h-48 rounded-xl" />
-          </div>
-        )}
-      </Page>
+      <OrgMiss
+        org={org}
+        name={agentKey}
+        icon={<UserRound />}
+        title="No such agent"
+        description={`There’s no agent “${agentKey}”. It may have a different key.`}
+      />
     );
   }
   return <AgentEditor key={agent.id} agent={agent} department={org.department(agent.departmentId)} />;
@@ -86,36 +75,30 @@ function AgentEditor({ agent, department }: { agent: AgentDefinition; department
   const archive = useArchiveAgent(agent.id);
   const readOnly = Boolean(agent.archivedAt);
 
-  const [draft, setDraft] = useState<AgentDraft>(() => agentDraft(agent));
-  const [startedFrom, setStartedFrom] = useState(agent.updatedAt);
+  // What you change is the difference from where you started: saved here, another version put in
+  // use, or a save elsewhere is taken in, with your changes kept on top.
+  const editor = useServerDraft({
+    server: agent,
+    revision: agent.updatedAt,
+    toDraft: agentDraft,
+    diff: agentChanges,
+  });
+  const { draft, patch, changes } = editor;
   const [errors, setErrors] = useState<AgentDraftErrors>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
-  const changes = agentChanges(agent, draft);
-  const dirty = !readOnly && Object.keys(changes).length > 0;
+  const dirty = !readOnly && editor.dirty;
   const blocker = useUnsavedChanges(dirty);
   const browserGranted = draft.tools.some((grant) => grant.key === 'browser');
   const identities = useBrowserIdentities(browserGranted);
 
-  // The agent changed (saved here, another version put in use, or saved elsewhere): take it in, unless
-  // you are in the middle of changes, which then say they started from an older version.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: on a new saved state only, see above
-  useEffect(() => {
-    if (dirty) return;
-    setDraft(agentDraft(agent));
-    setStartedFrom(agent.updatedAt);
-  }, [agent.updatedAt]);
-  const stale = dirty && startedFrom !== agent.updatedAt;
-
-  const patch = (next: Partial<AgentDraft>) => setDraft((current) => ({ ...current, ...next }));
   const serverName = (slug: string) =>
     capabilities.data?.mcpServers.find((server) => server.slug === slug)?.name ?? slug;
   const nextVersion = Math.max(agent.activeVersion, versions.data?.[0]?.version ?? 0) + 1;
   const newVersion = makesVersion(changes);
 
   const discard = () => {
-    setDraft(agentDraft(agent));
-    setStartedFrom(agent.updatedAt);
+    editor.discard();
     setErrors({});
     setFailure(null);
   };
@@ -129,7 +112,7 @@ function AgentEditor({ agent, department }: { agent: AgentDefinition; department
     }
     setFailure(null);
     try {
-      const saved = await update.mutateAsync(changes);
+      const saved = await editor.save((sent) => update.mutateAsync(sent));
       toast.success(
         newVersion ? `Saved as version ${saved.activeVersion}` : 'Saved',
         newVersion ? `${saved.name} works this way from its next run.` : undefined,
@@ -218,18 +201,18 @@ function AgentEditor({ agent, department }: { agent: AgentDefinition; department
             className="flex flex-col gap-8"
             noValidate
           >
-            {stale ? (
+            {dirty && editor.changedElsewhere ? (
               <Notice
                 tone="warning"
                 title={`${agent.name} changed while you were editing`}
                 action={
                   <Button size="sm" onClick={discard}>
-                    Load version {agent.activeVersion}
+                    Discard mine
                   </Button>
                 }
               >
-                It’s on version {agent.activeVersion} now. Saving puts your changes in a new version on top of
-                it.
+                It’s on version {agent.activeVersion} now, shown here with your changes to{' '}
+                {formatList(agentFieldNames(changes))} on top. Saving sends only those.
               </Notice>
             ) : null}
             {failure ? (
@@ -402,6 +385,7 @@ function AgentEditor({ agent, department }: { agent: AgentDefinition; department
               toast.success(`${agent.name} is archived`);
               navigate(
                 department ? `/departments/${encodeURIComponent(department.slug)}?tab=team` : '/departments',
+                { state: pastUnsaved },
               );
             },
             onError: () => setArchiveOpen(false),

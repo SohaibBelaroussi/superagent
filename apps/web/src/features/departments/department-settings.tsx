@@ -1,12 +1,13 @@
 import type { AgentDefinition, Department } from '@superagent/shared';
 import { Archive } from 'lucide-react';
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { errorMessage } from '../../api/client';
 import { useArchiveDepartment, useCapabilities, useUpdateDepartment } from '../../api/org';
 import { Loaded } from '../../layout/loaded';
 import { formatList } from '../../lib/format';
-import { useReportUnsaved } from '../../lib/unsaved';
+import { useServerDraft } from '../../lib/server-draft';
+import { pastUnsaved, useReportUnsaved } from '../../lib/unsaved';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/dialog';
 import { Notice } from '../../ui/feedback';
@@ -15,7 +16,7 @@ import { Section } from '../../ui/layout';
 import { SaveBar, SettingRow, SettingsList, settingLabels } from '../../ui/settings';
 import { SwitchControl } from '../../ui/switch';
 import { toast } from '../../ui/toast';
-import { type DepartmentDraft, departmentChanges, departmentDraft } from '../agents/draft';
+import { departmentChanges, departmentDraft, departmentFieldNames } from '../agents/draft';
 import { McpGrants, SkillGrants } from '../agents/grants';
 
 /** A department's settings: its name and purpose, review, what all its agents get, and archiving it. */
@@ -34,28 +35,27 @@ export function DepartmentSettings({
   const capabilities = useCapabilities();
   const update = useUpdateDepartment(department.id);
   const archive = useArchiveDepartment(department.id);
-  const [draft, setDraft] = useState<DepartmentDraft>(() => departmentDraft(department));
+  // What you change is the difference from where you started: a save elsewhere is taken in, with your
+  // changes kept on top.
+  const editor = useServerDraft({
+    server: department,
+    revision: department.updatedAt,
+    toDraft: departmentDraft,
+    diff: departmentChanges,
+  });
+  const { draft, patch, changes, dirty } = editor;
   const [errors, setErrors] = useState<{ name?: string; mcp?: string }>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
-  const changes = departmentChanges(department, draft);
-  const dirty = Object.keys(changes).length > 0;
   useReportUnsaved(dirty, onUnsavedChange);
   const ids = { name: useId(), description: useId(), autoClose: useId() };
 
-  // Saved here or elsewhere: take the new state in, unless you're in the middle of changes.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: on a new saved state only
-  useEffect(() => {
-    if (!dirty) setDraft(departmentDraft(department));
-  }, [department.updatedAt]);
-
-  const patch = (next: Partial<DepartmentDraft>) => setDraft((current) => ({ ...current, ...next }));
   const discard = () => {
-    setDraft(departmentDraft(department));
+    editor.discard();
     setErrors({});
     setFailure(null);
   };
-  const save = () => {
+  const save = async () => {
     const empty = draft.mcp.find((grant) => grant.tools?.length === 0);
     const found = {
       name: draft.name.trim() ? undefined : 'Give it a name.',
@@ -64,14 +64,30 @@ export function DepartmentSettings({
     setErrors(found);
     if (found.name || found.mcp) return;
     setFailure(null);
-    update.mutate(changes, {
-      onSuccess: (saved) => toast.success('Saved', `${saved.name}’s agents use it from their next run.`),
-      onError: (error) => setFailure(errorMessage(error)),
-    });
+    try {
+      const saved = await editor.save((sent) => update.mutateAsync(sent));
+      toast.success('Saved', `${saved.name}’s agents use it from their next run.`);
+    } catch (error) {
+      setFailure(errorMessage(error));
+    }
   };
 
   return (
     <div className="flex flex-col gap-8">
+      {dirty && editor.changedElsewhere ? (
+        <Notice
+          tone="warning"
+          title={`${department.name} changed while you were editing`}
+          action={
+            <Button size="sm" onClick={discard}>
+              Discard mine
+            </Button>
+          }
+        >
+          It’s shown here as it is now, with your changes to {formatList(departmentFieldNames(changes))} on
+          top. Saving sends only those.
+        </Notice>
+      ) : null}
       {failure ? (
         <Notice tone="destructive" title="Couldn’t save">
           {failure}
@@ -89,6 +105,7 @@ export function DepartmentSettings({
                 value={draft.name}
                 maxLength={100}
                 aria-invalid={errors.name ? true : undefined}
+                aria-describedby={errors.name ? `${ids.name}-description` : undefined}
                 onChange={(event) => patch({ name: event.target.value })}
               />
             }
@@ -180,7 +197,7 @@ export function DepartmentSettings({
         saving={update.isPending}
         message="Unsaved changes to the department."
         onDiscard={discard}
-        onSave={save}
+        onSave={() => void save()}
       />
       <ConfirmDialog
         open={archiveOpen}
@@ -195,7 +212,7 @@ export function DepartmentSettings({
             onSuccess: () => {
               setArchiveOpen(false);
               toast.success(`${department.name} is archived`);
-              navigate('/departments');
+              navigate('/departments', { state: pastUnsaved });
             },
             onError: () => setArchiveOpen(false),
           })

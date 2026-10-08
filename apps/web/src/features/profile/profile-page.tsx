@@ -1,19 +1,22 @@
 import type { OwnerProfile, OwnerProfilePatch } from '@superagent/shared';
 import { Plus, X } from 'lucide-react';
-import { useEffect, useId, useState } from 'react';
+import { useId } from 'react';
 import { useUpdateProfile } from '../../api/memory';
 import { useProfile } from '../../api/queries';
 import { Loaded } from '../../layout/loaded';
+import { formatList } from '../../lib/format';
+import { useServerDraft } from '../../lib/server-draft';
 import { timezones } from '../../lib/timezones';
 import { useDocumentTitle } from '../../lib/title';
 import { UnsavedChangesDialog, useUnsavedChanges } from '../../lib/unsaved';
 import { Button } from '../../ui/button';
+import { Notice } from '../../ui/feedback';
 import { Field, Input, Textarea } from '../../ui/field';
 import { Page, PageHeader, Panel, Section } from '../../ui/layout';
 import { SaveBar } from '../../ui/settings';
 import { toast } from '../../ui/toast';
 
-interface ProfileDraft {
+export interface ProfileDraft {
   name: string;
   language: string;
   timezone: string;
@@ -24,7 +27,7 @@ interface ProfileDraft {
 
 const TEXT_FIELDS = ['name', 'language', 'timezone', 'communicationStyle', 'about'] as const;
 
-function profileDraft(profile: OwnerProfile): ProfileDraft {
+export function profileDraft(profile: OwnerProfile): ProfileDraft {
   return {
     name: profile.name ?? '',
     language: profile.language ?? '',
@@ -35,20 +38,34 @@ function profileDraft(profile: OwnerProfile): ProfileDraft {
   };
 }
 
-/** What saving the draft sends: changed fields only, an emptied one as null (which removes it). */
-export function profileChanges(profile: OwnerProfile, draft: ProfileDraft): OwnerProfilePatch {
+const tidy = (items: readonly string[]) => items.map((item) => item.trim()).filter(Boolean);
+
+/**
+ * What you changed in `draft` from `base`: those fields only, an emptied one as null (which removes
+ * it). Both sides are trimmed: the chief may store a value with spaces around it.
+ */
+export function profileChanges(base: ProfileDraft, draft: ProfileDraft): OwnerProfilePatch {
   const patch: OwnerProfilePatch = {};
   for (const field of TEXT_FIELDS) {
     const next = draft[field].trim();
-    if (next !== (profile[field] ?? '')) patch[field] = next || null;
+    if (next !== base[field].trim()) patch[field] = next || null;
   }
-  const preferences = draft.preferences.map((item) => item.trim()).filter(Boolean);
-  const current = profile.preferences ?? [];
+  const preferences = tidy(draft.preferences);
+  const current = tidy(base.preferences);
   if (preferences.length !== current.length || preferences.some((item, index) => item !== current[index])) {
     patch.preferences = preferences.length > 0 ? preferences : null;
   }
   return patch;
 }
+
+const PROFILE_FIELDS: Record<keyof OwnerProfilePatch, string> = {
+  name: 'name',
+  language: 'language',
+  timezone: 'timezone',
+  communicationStyle: 'how you like answers',
+  preferences: 'preferences',
+  about: 'about you',
+};
 
 /** What your agents know about you: the chief keeps it as you talk, you correct it here. */
 export function ProfilePage() {
@@ -77,33 +94,53 @@ export function ProfilePage() {
 
 function ProfileForm({ profile }: { profile: OwnerProfile }) {
   const update = useUpdateProfile();
-  const [draft, setDraft] = useState(() => profileDraft(profile));
-  const changes = profileChanges(profile, draft);
-  const dirty = Object.keys(changes).length > 0;
+  // The chief writes it too: what you change is the difference from where you started, and its changes
+  // meanwhile are taken in with yours on top.
+  const editor = useServerDraft({
+    server: profile,
+    revision: profile,
+    toDraft: profileDraft,
+    diff: profileChanges,
+  });
+  const { draft, patch, changes, dirty } = editor;
   const blocker = useUnsavedChanges(dirty);
   const zones = useId();
 
-  // The chief saved something while you weren't editing: show it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: on a new saved profile only
-  useEffect(() => {
-    if (!dirty) setDraft(profileDraft(profile));
-  }, [profile]);
-
-  const patch = (next: Partial<ProfileDraft>) => setDraft((current) => ({ ...current, ...next }));
-  const save = () =>
-    update.mutate(changes, {
-      onSuccess: () => toast.success('Profile saved', 'Your agents read it from their next turn.'),
-    });
+  const save = async () => {
+    try {
+      await editor.save((sent) => update.mutateAsync(sent));
+      toast.success('Profile saved', 'Your agents read it from their next turn.');
+    } catch {
+      // The mutation's own toast says what went wrong.
+    }
+  };
 
   return (
     <form
       className="flex flex-col gap-8"
       onSubmit={(event) => {
         event.preventDefault();
-        if (dirty) save();
+        if (dirty) void save();
       }}
       noValidate
     >
+      {dirty && editor.changedElsewhere ? (
+        <Notice
+          tone="warning"
+          title="Your chief of staff updated your profile while you were editing"
+          action={
+            <Button size="sm" onClick={editor.discard}>
+              Discard mine
+            </Button>
+          }
+        >
+          It’s shown here as it is now, with your changes to{' '}
+          {formatList(
+            (Object.keys(changes) as (keyof OwnerProfilePatch)[]).map((field) => PROFILE_FIELDS[field]),
+          )}{' '}
+          on top. Saving sends only those.
+        </Notice>
+      ) : null}
       <Section title="You">
         <Panel className="grid gap-4 p-4 sm:grid-cols-2">
           <Field label="Name">
@@ -182,8 +219,8 @@ function ProfileForm({ profile }: { profile: OwnerProfile }) {
         open={dirty}
         saving={update.isPending}
         message="Unsaved changes to your profile."
-        onDiscard={() => setDraft(profileDraft(profile))}
-        onSave={save}
+        onDiscard={editor.discard}
+        onSave={() => void save()}
       />
       <UnsavedChangesDialog blocker={blocker} what="your profile" />
     </form>

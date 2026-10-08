@@ -208,7 +208,7 @@ function VersionDialog({
 export function InstructionsDiff({ before, after }: { before: string; after: string }) {
   const hunks = foldDiff(diffLines(before, after));
   return (
-    <div className="max-h-96 overflow-auto rounded-lg bg-fill-subtle py-1.5 font-mono text-[0.75rem] leading-relaxed shadow-rim">
+    <div className="max-h-96 overflow-auto rounded-lg bg-fill-subtle py-1.5 font-mono text-caption shadow-rim">
       {hunks.map((hunk, index) =>
         hunk.kind === 'gap' ? (
           // biome-ignore lint/suspicious/noArrayIndexKey: hunks have no identity beyond their place

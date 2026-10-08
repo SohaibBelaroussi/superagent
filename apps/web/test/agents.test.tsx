@@ -183,6 +183,84 @@ describe('an agent', () => {
     );
   });
 
+  it('keeps a change made elsewhere while you edit, and saves only yours', async () => {
+    const v1: AgentVersion = { ...ada.current, version: 1, tools: [] };
+    const v2: AgentVersion = {
+      ...ada.current,
+      version: 2,
+      tools: [{ key: 'current_time', requireApproval: false }],
+    };
+    const { state, handlers } = adaServer([v2, v1]);
+    state.agent = { ...ada, activeVersion: 2, current: v2 };
+    server.use(...handlers, ...signedInHandlers());
+    const { queryClient } = renderApp('/agents/research-lead');
+    const user = userEvent.setup();
+    expect(await screen.findByRole('switch', { name: /^current time/i })).toBeChecked();
+    await user.type(screen.getByLabelText('How Ada works'), ' Be brief.');
+
+    // Version 1 is put back in use on another device.
+    state.agent = { ...ada, activeVersion: 1, current: v1, updatedAt: '2026-10-08T12:00:00.000Z' };
+    await queryClient.invalidateQueries({ queryKey: ['agents'] });
+    expect(await screen.findByText('Ada changed while you were editing')).toBeVisible();
+    // Shown as it is now, with your change on top.
+    expect(screen.getByRole('switch', { name: /^current time/i })).not.toBeChecked();
+    expect(screen.getByLabelText('How Ada works')).toHaveValue('Lead. Be brief.');
+
+    await user.click(
+      within(screen.getByRole('region', { name: 'Unsaved changes' })).getByRole('button', { name: /save/i }),
+    );
+    await waitFor(() => expect(state.patches).toEqual([{ instructions: 'Lead. Be brief.' }]));
+    expect(screen.queryByText('Ada changed while you were editing')).not.toBeInTheDocument();
+  });
+
+  it('lets its own MCP grant replace its department’s, or go back to the department’s', async () => {
+    const { state, handlers } = adaServer();
+    state.agent = {
+      ...ada,
+      current: {
+        ...ada.current,
+        mcp: [{ server: 'github', requireApproval: false, tools: ['search_code'] }],
+      },
+    };
+    server.use(
+      http.get(api('/v1/departments'), () =>
+        HttpResponse.json({ items: [{ ...research, mcp: [{ server: 'github', requireApproval: true }] }] }),
+      ),
+      http.get(api('/v1/capabilities'), () =>
+        HttpResponse.json({
+          ...CAPABILITIES,
+          mcpServers: [
+            {
+              slug: 'github',
+              name: 'GitHub',
+              transport: 'http',
+              status: 'ready',
+              enabled: true,
+              tools: [{ name: 'search_code', key: 'github_search_code', description: 'Search code.' }],
+            },
+          ],
+        }),
+      ),
+      ...handlers,
+      ...signedInHandlers(),
+    );
+    renderApp('/agents/research-lead');
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText('Its own grant, in place of Research’s (all its tools, asking you first).'),
+    ).toBeVisible();
+    // Its own grant is what applies, and you can change it here.
+    expect(screen.getByRole('checkbox', { name: /ask me before each call/i })).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'Use Research’s grant instead' }));
+    expect(screen.getByText('Given by Research: all its tools, asking you first.')).toBeVisible();
+    expect(screen.getByRole('switch', { name: /^github/i })).toHaveAttribute('aria-disabled', 'true');
+    await user.click(
+      within(screen.getByRole('region', { name: 'Unsaved changes' })).getByRole('button', { name: /save/i }),
+    );
+    await waitFor(() => expect(state.patches).toEqual([{ mcp: [] }]));
+  });
+
   it('archives it, and goes back to its team', async () => {
     const deleted: string[] = [];
     const { handlers } = adaServer();

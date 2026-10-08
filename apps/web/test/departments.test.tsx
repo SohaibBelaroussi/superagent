@@ -192,6 +192,85 @@ describe('a department', () => {
     expect(screen.getByRole('button', { name: 'Archive…' })).toBeDisabled();
   });
 
+  it('keeps settings changed elsewhere while you edit, and saves only yours', async () => {
+    let current = research;
+    const patches: unknown[] = [];
+    server.use(
+      http.get(api('/v1/departments'), () => HttpResponse.json({ items: [current] })),
+      http.patch(api(`/v1/departments/${research.id}`), async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        patches.push(body);
+        current = { ...current, ...body, updatedAt: new Date().toISOString() };
+        return HttpResponse.json(current);
+      }),
+      ...signedInHandlers(),
+    );
+    const { queryClient } = renderApp('/departments/research?tab=settings');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('switch', { name: /close finished tasks/i }));
+
+    // Its purpose is rewritten on another device.
+    current = { ...research, description: 'Finds and checks things.', updatedAt: '2026-10-08T12:00:00.000Z' };
+    await queryClient.invalidateQueries({ queryKey: ['departments'] });
+    expect(await screen.findByText('Research changed while you were editing')).toBeVisible();
+    expect(screen.getByLabelText('What it’s for')).toHaveValue('Finds and checks things.');
+
+    await user.click(
+      within(screen.getByRole('region', { name: 'Unsaved changes' })).getByRole('button', { name: 'Save' }),
+    );
+    await waitFor(() => expect(patches).toEqual([{ autoClose: true }]));
+  });
+
+  it('opens a new department at once, before the list comes back', async () => {
+    const market: Department = {
+      ...finance,
+      id: '0199a000-0000-7000-8000-000000000009',
+      slug: 'market',
+      name: 'Market',
+    };
+    let created = false;
+    server.use(
+      http.get(api('/v1/departments'), async () => {
+        // The list is slow to come back once the department exists.
+        if (created) await new Promise((resolve) => setTimeout(resolve, 3_000));
+        return HttpResponse.json({ items: created ? [research, market] : [research] });
+      }),
+      http.post(api('/v1/departments'), () => {
+        created = true;
+        return HttpResponse.json(market, { status: 201 });
+      }),
+      ...signedInHandlers(),
+    );
+    renderApp('/departments?new=1');
+    const dialog = await screen.findByRole('dialog', { name: 'New department' });
+    const user = userEvent.setup();
+    await user.type(within(dialog).getByLabelText('Name'), 'Market');
+    await user.click(within(dialog).getByRole('button', { name: 'Create department' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Market' }, { timeout: 1000 })).toBeVisible();
+    expect(screen.queryByText('No such department')).not.toBeInTheDocument();
+  });
+
+  it('writes the first notes over empty ones without seeing a conflict', async () => {
+    const saved: unknown[] = [];
+    server.use(
+      http.get(api(`/v1/departments/${research.id}/memory`), () =>
+        HttpResponse.json({ departmentId: research.id, notes: '' }),
+      ),
+      http.put(api(`/v1/departments/${research.id}/memory`), async ({ request }) => {
+        saved.push(await request.json());
+        return HttpResponse.json({ departmentId: research.id, notes: '- Short answers.' });
+      }),
+      ...signedInHandlers(),
+    );
+    renderApp('/departments/research?tab=notes');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Write the first notes' }));
+    await user.type(screen.getByLabelText('Research’s notes'), '- Short answers.');
+    await user.click(screen.getByRole('button', { name: 'Save notes' }));
+    await waitFor(() => expect(saved).toEqual([{ notes: '- Short answers.' }]));
+    expect(screen.queryByText(/changed these notes/)).not.toBeInTheDocument();
+  });
+
   it('saves notes you corrected, unless its lead changed them meanwhile', async () => {
     let notes: string | null = '- Cite sources.';
     const saved: unknown[] = [];
