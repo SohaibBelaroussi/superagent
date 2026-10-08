@@ -12,3 +12,5 @@ data/
 .idea/
 backups/
 release/
+test-results/
+playwright-report/

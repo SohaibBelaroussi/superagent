@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>superagent</title>
+  <rect width="32" height="32" rx="8" fill="#151515"/>
+  <g fill="none" stroke="#a5a0ff" stroke-width="2" stroke-linecap="round">
+    <path d="M16 11.5 10 20.5M16 11.5l6 9"/>
+  </g>
+  <circle cx="16" cy="10" r="3.5" fill="#a5a0ff"/>
+  <circle cx="9.5" cy="21.5" r="3" fill="#f5f5f5"/>
+  <circle cx="22.5" cy="21.5" r="3" fill="#f5f5f5"/>
+</svg>
