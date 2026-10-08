@@ -1,6 +1,19 @@
 import { Dialog as Base } from '@base-ui/react/dialog';
 import { X } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { type ReactNode, useRef } from 'react';
+
+/**
+ * A dialog opens on its first field, not on the close button before it (whose tooltip would also open
+ * and take the first Escape). On touch, it keeps the default: a field would raise the keyboard.
+ */
+function firstField(type: string, popup: HTMLElement | null): HTMLElement | true {
+  if (type === 'touch') return true;
+  return (
+    popup?.querySelector<HTMLElement>('input:not([type="hidden"]), textarea, select, [role="combobox"]') ??
+    true
+  );
+}
+
 import { cn } from '../lib/cn';
 import { Button } from './button';
 import { dialogSurface } from './recipes';
@@ -28,11 +41,14 @@ export function Dialog({
   size?: 'sm' | 'md' | 'lg';
   className?: string;
 }) {
+  const popup = useRef<HTMLDivElement>(null);
   return (
     <Base.Root open={open} onOpenChange={(next) => onOpenChange(next)}>
       <Base.Portal>
         <Base.Backdrop className={backdrop} />
         <Base.Popup
+          ref={popup}
+          initialFocus={(type) => firstField(type, popup.current)}
           className={cn(
             'fixed top-1/2 left-1/2 z-50 flex max-h-[min(85dvh,52rem)] w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl outline-hidden',
             dialogSurface,

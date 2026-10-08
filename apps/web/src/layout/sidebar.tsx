@@ -1,24 +1,29 @@
 import type { Department } from '@superagent/shared';
 import { OPEN_PHASES } from '@superagent/shared/phases';
 import {
+  Bell,
+  BellOff,
   ChevronsUpDown,
   House,
+  Inbox,
   LogOut,
   MessagesSquare,
-  Monitor,
-  Moon,
+  Search,
   SquareKanban,
-  Sun,
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
 import { useLiveStatus } from '../api/live';
-import { useBoard, useDepartments, useProfile } from '../api/queries';
+import { useAttention, useBoard, useDepartments, useProfile } from '../api/queries';
 import { useMe, useSession } from '../api/session';
+import { toggleNotifications } from '../features/inbox/notify';
 import { cn } from '../lib/cn';
-import { type ThemeChoice, useTheme } from '../lib/theme';
+import { paletteShortcut } from '../lib/keys';
+import { notificationsSupported, useNotificationsOn } from '../lib/notifications';
+import { THEME_CHOICES, useTheme } from '../lib/theme';
 import { departmentTone, TONE_DOT } from '../lib/tones';
 import { Avatar } from '../ui/avatar';
+import { Kbd } from '../ui/feedback';
 import { LogoMark } from '../ui/icons';
 import { Menu, MenuGroup, MenuItem, MenuLabel, MenuRadioGroup, MenuSeparator } from '../ui/menu';
 import { colorTransition, focusRingInset } from '../ui/recipes';
@@ -121,17 +126,18 @@ function LiveIndicator() {
   );
 }
 
-const THEMES: { value: ThemeChoice; label: string; icon: ReactNode }[] = [
-  { value: 'system', label: 'System', icon: <Monitor aria-hidden /> },
-  { value: 'light', label: 'Light', icon: <Sun aria-hidden /> },
-  { value: 'dark', label: 'Dark', icon: <Moon aria-hidden /> },
-];
+const THEMES = THEME_CHOICES.map(({ value, label, icon: Icon }) => ({
+  value,
+  label,
+  icon: <Icon aria-hidden />,
+}));
 
 function AccountMenu() {
   const me = useMe();
   const { signOut } = useSession();
   const profile = useProfile();
   const { choice, setChoice } = useTheme();
+  const notifying = useNotificationsOn();
   const name = profile.data?.name?.trim() || me.name;
   return (
     <Menu
@@ -158,6 +164,14 @@ function AccountMenu() {
         <MenuRadioGroup value={choice} onValueChange={setChoice} options={THEMES} />
       </MenuGroup>
       <MenuSeparator />
+      {notificationsSupported() ? (
+        <MenuItem
+          icon={notifying ? <BellOff aria-hidden /> : <Bell aria-hidden />}
+          onClick={() => void toggleNotifications(notifying)}
+        >
+          {notifying ? 'Stop notifying me' : 'Notify me when something needs me'}
+        </MenuItem>
+      ) : null}
       <MenuItem icon={<LogOut aria-hidden />} onClick={() => void signOut()}>
         Sign out of this browser
       </MenuItem>
@@ -166,7 +180,7 @@ function AccountMenu() {
 }
 
 /** The rail: navigation, departments, the live connection and the account. */
-export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+export function Sidebar({ onNavigate, onSearch }: { onNavigate?: () => void; onSearch?: () => void }) {
   const departments = useDepartments();
   const board = useBoard();
   const openByDepartment = new Map<string, number>();
@@ -177,6 +191,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     }
   }
   const active = (departments.data ?? []).filter((department) => !department.archivedAt);
+  const waiting = useAttention().data?.length ?? 0;
   const { pathname } = useLocation();
   const [params] = useSearchParams();
 
@@ -187,8 +202,31 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <span className="text-[0.9375rem] font-[560] tracking-[-0.01em] text-foreground">superagent</span>
       </div>
 
+      {onSearch ? (
+        <button type="button" onClick={onSearch} className={cn(navRow, 'bg-fill-subtle shadow-rim')}>
+          <Search aria-hidden />
+          <span className="min-w-0 flex-1 truncate text-left">Search</span>
+          <Kbd className="hidden lg:inline-flex">{paletteShortcut()}</Kbd>
+        </button>
+      ) : null}
+
       <ul className="flex flex-col gap-0.5">
         <NavItem to="/" icon={House} label="Home" active={pathname === '/'} onNavigate={onNavigate} />
+        <NavItem
+          to="/inbox"
+          icon={Inbox}
+          label="Inbox"
+          active={pathname === '/inbox'}
+          onNavigate={onNavigate}
+          trailing={
+            waiting > 0 ? (
+              <span className="min-w-5 rounded-full bg-badge-orange-strong px-1.5 text-center text-meta leading-5 text-badge-orange-foreground tabular-nums">
+                {waiting}
+                <span className="sr-only"> waiting</span>
+              </span>
+            ) : null
+          }
+        />
         <NavItem
           to="/chief"
           icon={MessagesSquare}

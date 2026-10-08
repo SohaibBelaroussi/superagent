@@ -1,9 +1,11 @@
 import { Menu as MenuIcon } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router';
 import { LiveEventsProvider } from '../api/live';
 import { useSession } from '../api/session';
+import { useAttentionNotifications } from '../features/inbox/attention-notifications';
 import { cn } from '../lib/cn';
+import { isApple } from '../lib/keys';
 import { Button } from '../ui/button';
 import { Sheet } from '../ui/dialog';
 import { Spinner } from '../ui/feedback';
@@ -40,9 +42,59 @@ export function RequireSession() {
   );
 }
 
-/** The frame: the rail on the left (a drawer on phones) and the page in a rounded card beside it. */
+/** The command palette, loaded the first time it opens: most visits never use it. */
+const CommandPalette = lazy(async () => ({
+  default: (await import('../features/palette/command-palette')).CommandPalette,
+}));
+
+/**
+ * The frame: the rail on the left (a drawer on phones) and the page in a rounded card beside it. It
+ * also answers ⌘K with the command palette, and tells you of new things that need you (if you asked).
+ */
 export function AppShell() {
+  useAttentionNotifications();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteLoaded, setPaletteLoaded] = useState(false);
+  const openPalette = () => {
+    setDrawerOpen(false);
+    setPaletteLoaded(true);
+    setPaletteOpen(true);
+  };
+
+  const paletteOpenNow = useRef(paletteOpen);
+  paletteOpenNow.current = paletteOpen;
+
+  // ⌘K on a Mac, Ctrl+K elsewhere, opens the palette from anywhere and closes it again. Not over
+  // another dialog: going somewhere from the palette would throw away what was being written there.
+  useEffect(() => {
+    const apple = isApple();
+    const onKey = (event: KeyboardEvent) => {
+      const modifier = apple ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      // A layout whose K key types another script's letter: go by the key's place.
+      const k = event.key.toLowerCase() === 'k' || (!/^[a-z]$/i.test(event.key) && event.code === 'KeyK');
+      if (!modifier || !k || event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      if (event.repeat || (!paletteOpenNow.current && anotherDialogOpen())) return;
+      setPaletteLoaded(true);
+      setPaletteOpen((open) => !open);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // The palette's code, fetched once the app is idle: the first ⌘K opens it at once, with what you
+  // type straight away in it.
+  useEffect(() => {
+    const load = () => void import('../features/palette/command-palette').catch(() => {});
+    if ('requestIdleCallback' in window) {
+      const id = window.requestIdleCallback(load, { timeout: 5_000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const timer = setTimeout(load, 2_000);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <div className="flex h-dvh flex-col bg-sidebar lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
       <a
@@ -52,7 +104,7 @@ export function AppShell() {
         Skip to content
       </a>
       <aside className="hidden min-h-0 lg:block">
-        <Sidebar />
+        <Sidebar onSearch={openPalette} />
       </aside>
 
       <header className="flex h-12 shrink-0 items-center gap-1.5 px-2 lg:hidden">
@@ -67,7 +119,7 @@ export function AppShell() {
         label="Navigation"
         className="bg-sidebar shadow-overlay"
       >
-        <Sidebar onNavigate={() => setDrawerOpen(false)} />
+        <Sidebar onNavigate={() => setDrawerOpen(false)} onSearch={openPalette} />
       </Sheet>
 
       <div className="flex min-h-0 flex-1 flex-col px-1.5 pb-1.5 lg:py-2 lg:pr-2 lg:pl-0">
@@ -81,6 +133,18 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      {paletteLoaded ? (
+        <Suspense fallback={null}>
+          <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        </Suspense>
+      ) : null}
     </div>
+  );
+}
+
+/** A dialog other than the palette is open (a new task being written, a confirmation). */
+function anotherDialogOpen(): boolean {
+  return [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].some(
+    (dialog) => dialog.getAttribute('aria-label') !== 'Command palette',
   );
 }

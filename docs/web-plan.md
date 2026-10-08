@@ -10,14 +10,18 @@
   - light and dark themes, and a phone's width.
 
   Browser tests run the same checks against the release image in CI, and fail on any CSP violation. That check caught zod probing for `eval`, which the CSP refuses, so zod runs `jitless`. In W2 it caught that setting arriving too late once the bundler moved the schemas into a shared chunk: `public/boot.js` now sets it before any module runs.
-- W2 (conversations): in review. Verified in a browser against an API driven by a scripted model (answers streamed word by word, a step slowed down to watch it):
+- W2 (conversations): merged in PR #12. Verified in a browser against an API driven by a scripted model (answers streamed word by word, a step slowed down to watch it):
   - the chief's answer streamed in, its tool calls showed as rows, and the stored answer took its place without a flicker or a repeat;
   - a message sent while the chief was answering waited for its turn;
   - leads' reports appeared as cards linked to their tasks, and notices of reports on the way as notes;
   - a task's transcript showed the brief, the lead's tool calls and its specialist's answer; it stayed whole while a call waited for approval, and after the approval the rest of the turn streamed in.
+- W3 (the inbox): in review. Verified in a browser against the same scripted API:
+  - the inbox put the calls to approve first, and accepting a result took it off the list at once;
+  - the rail counted what waits;
+  - the command palette (Ctrl+K) found pages and tasks, and a question typed into it opened the chief's conversation with the question sent.
 
 **Related docs:**
-- [decisions.md](decisions.md): D06 and D43–D47 cover the web app.
+- [decisions.md](decisions.md): D06 and D43–D48 cover the web app.
 - [api-plan.md](api-plan.md): the API it talks to.
 
 ## 1. Goal and scope
@@ -207,6 +211,19 @@ Each milestone ends like the API's: tests pass, a PR, one review, fixes, CI gree
 - A command palette (⌘K).
 - Opt-in browser notifications.
 - A web manifest, so the app can be added to a phone's home screen.
+
+**Built:**
+- **The inbox** (`/inbox`) puts what stops an agent first (calls to approve, questions, tasks stuck or stopped), then results to review and setup, newest first within each kind. A filter by kind lives in the URL (`?kind=`). Each item carries its action:
+  - approvals: the approval card, with its task;
+  - questions: an answer, which sends the task back to its lead;
+  - reviews: accept, or send back with the changes you want;
+  - problems: a task stuck in the inbox goes to its lead, and one that stopped takes a message telling the lead how to go on;
+  - setup: what is wrong, and what to do.
+
+  An item leaves the list as soon as its action goes through. The rail counts everything waiting, and the home page links to the inbox.
+- **The command palette** (⌘K, Ctrl+K, or Search in the rail) finds pages, departments and the board's tasks. It also holds actions: a new task, the theme, and "Ask the chief", which opens the conversation with what you typed sent. It loads the first time it opens.
+- **Notifications** are opt-in, from the account menu or the inbox (D48), and work in desktop browsers: a phone's browser refuses them from a page, and the app says so. While the app's tab is hidden, a new item that needs you shows as a notification (task items as they happen, setup items within a minute), and a click brings the app to its task. Turning them on shows a first one, so a browser that can't show them is found out then.
+- **The web manifest and icons** let a phone add the app to its home screen. The PNG icons are rendered from `favicon.svg` (`pnpm --filter @superagent/web icons`).
 
 ### W4: the organization
 

@@ -52,6 +52,7 @@ export const routes: RouteObject[] = [
             errorElement: <RouteError />,
             children: [
               { index: true, ...page(async () => (await import('./features/home/home-page')).HomePage) },
+              { path: 'inbox', ...page(async () => (await import('./features/inbox/inbox-page')).InboxPage) },
               {
                 path: 'chief',
                 ...page(async () => (await import('./features/conversations/chief-page')).ChiefPage),

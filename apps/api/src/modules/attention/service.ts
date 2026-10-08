@@ -132,7 +132,7 @@ export class AttentionService {
           ? `#${task.number} ${task.title} waits in the inbox`
           : `#${task.number} ${task.title} has nobody to work on it`,
         detail: hasLead
-          ? `${data.cause === 'no_lead' ? 'Its department has a lead now' : `It could not be sent: ${text(data.reason) ?? 'unknown error'}`}. Send it to the lead (phase "queued").`
+          ? `${data.cause === 'no_lead' ? 'Its department has a lead now' : `It could not be sent: ${text(data.reason) ?? 'unknown error'}`}. Send it to its lead.`
           : 'Its department has no lead',
         since: createdAt.toISOString(),
       };

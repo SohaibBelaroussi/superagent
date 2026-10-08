@@ -1,6 +1,6 @@
 import type { AttentionItem } from '@superagent/shared';
 import { ShieldCheck, ShieldQuestion, ShieldX } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { type ReactNode, useRef, useState } from 'react';
 import { decisionKey, useDecide } from '../../api/queries';
 import { Button } from '../../ui/button';
 import { CodeBlock } from '../../ui/code-block';
@@ -24,7 +24,14 @@ function prettyArgs(args: unknown): string | null {
 }
 
 /** A tool call waiting for you, with what it would do and the two answers. */
-export function ApprovalCard({ item }: { item: AttentionItem }) {
+export function ApprovalCard({
+  item,
+  context,
+}: {
+  item: AttentionItem;
+  /** What it's about (the task), under the title: the inbox shows calls from every task. */
+  context?: ReactNode;
+}) {
   const decide = useDecide();
   const [declineOpen, setDeclineOpen] = useState(false);
   const [reason, setReason] = useState('');
@@ -54,13 +61,14 @@ export function ApprovalCard({ item }: { item: AttentionItem }) {
 
   return (
     <section
-      aria-label="Waiting for your approval"
+      aria-label={`${item.title}${item.taskNumber ? ` on #${item.taskNumber}` : ''}: waiting for your approval`}
       className="flex flex-col gap-3 rounded-xl bg-warning-subtle px-4 py-3.5 shadow-[inset_0_0_0_1px_var(--warning-edge)]"
     >
       <div className="flex items-start gap-3">
         <ShieldQuestion aria-hidden className="mt-0.5 size-4 shrink-0 text-warning-indicator" />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <p className="text-label text-foreground">{item.title}</p>
+          {context}
           <p className="text-caption text-muted-foreground">
             Waiting since <RelativeTime iso={item.since} />. The task carries on once you decide.
           </p>
