@@ -16,6 +16,7 @@ import {
 } from '@superagent/shared';
 import { streamSSE } from 'hono/streaming';
 import type { ArtifactRow, TaskRow } from '../../db/schema';
+import { currentUser } from '../../http/auth';
 import { ApiError, problem, problemResponse } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 import { matchesFilter } from '../../modules/ledger/events';
@@ -337,6 +338,7 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
       });
     }
     const filter = parsed.data;
+    const tokenId = currentUser(c).tokenId;
     return streamSSE(c, async (stream) => {
       // Events at or below the floor are not sent: the client has them (Last-Event-ID) or, for a fresh
       // client, they predate the moment it connected.
@@ -364,6 +366,13 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
       });
       const heartbeat = setInterval(() => void stream.write(': keep-alive\n\n'), HEARTBEAT_MS);
       const closed = new Promise<void>((resolve) => stream.onAbort(resolve));
+      // The stream ends when its token is revoked: a revoked device must stop hearing about tasks (D45).
+      let stopWatchingRevocation = () => {};
+      const revoked = new Promise<void>((resolve) => {
+        stopWatchingRevocation = deps.tokens.onRevoked((id) => {
+          if (id === tokenId) resolve();
+        });
+      });
       try {
         if (lastEventId === undefined) {
           // Events commit in seq order (see TaskService), so everything after this one is still to come.
@@ -401,10 +410,11 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
           event: 'ready',
           data: JSON.stringify({ lastEventId: lastSent }),
         });
-        await closed;
+        await Promise.race([closed, revoked]);
       } finally {
         clearInterval(heartbeat);
         unsubscribe();
+        stopWatchingRevocation();
       }
     });
   });

@@ -54,6 +54,7 @@ export class TokenService {
   private readonly adminHash: Buffer;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly lastTouched = new Map<string, number>();
+  private readonly revokedListeners = new Set<(tokenId: string) => void>();
   private readonly cacheTtlMs: number;
   private readonly negativeCacheTtlMs: number;
   /** Bumped on every revocation so in-flight lookups know their result may be stale. */
@@ -128,6 +129,17 @@ export class TokenService {
     return this.db.select().from(apiTokens).orderBy(desc(apiTokens.createdAt));
   }
 
+  /**
+   * Calls `listener` with the id of each token this process revokes, so connections opened with it (the
+   * event stream, live views) close instead of outliving the token. One API process (D23) revokes them all.
+   */
+  onRevoked(listener: (tokenId: string) => void): () => void {
+    this.revokedListeners.add(listener);
+    return () => {
+      this.revokedListeners.delete(listener);
+    };
+  }
+
   /** Returns false when no token has this id. Revoking an already revoked token is a no-op that returns true. */
   async revoke(id: string): Promise<boolean> {
     const revoked = await this.db
@@ -138,6 +150,13 @@ export class TokenService {
     if (revoked.length > 0) {
       this.revocations++;
       this.cache.clear();
+      for (const listener of [...this.revokedListeners]) {
+        try {
+          listener(id);
+        } catch (error) {
+          this.options.logger?.warn('Closing connections of a revoked token failed', { tokenId: id, error });
+        }
+      }
       return true;
     }
     const [existing] = await this.db

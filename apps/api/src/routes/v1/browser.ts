@@ -8,6 +8,7 @@ import {
 } from '@superagent/shared';
 import type { MiddlewareHandler } from 'hono';
 import type { UpgradeWebSocket, WSContext } from 'hono/ws';
+import { currentUser } from '../../http/auth';
 import { ApiError, problemResponse } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 
@@ -189,7 +190,13 @@ export function registerBrowserRoutes(
   const live = () =>
     upgradeWebSocket((c) => {
       const key = c.req.param('id') as string;
+      const tokenId = currentUser(c).tokenId;
       let viewer: ReturnType<typeof browsers.attach> | undefined;
+      let stopWatchingRevocation = () => {};
+      const end = () => {
+        stopWatchingRevocation();
+        viewer?.detach();
+      };
       return {
         onOpen(_event, ws: WSContext) {
           viewer = browsers.attach(key, {
@@ -198,16 +205,16 @@ export function registerBrowserRoutes(
               if (data.startsWith('{') || (raw?.bufferedAmount ?? 0) < MAX_BUFFERED_BYTES) ws.send(data);
             },
           });
+          // A revoked token's live view closes: it could still watch and drive the browser otherwise.
+          stopWatchingRevocation = deps.tokens.onRevoked((id) => {
+            if (id === tokenId) ws.close(1008, 'Token revoked');
+          });
         },
         onMessage(event) {
           if (typeof event.data === 'string') viewer?.receive(event.data);
         },
-        onClose() {
-          viewer?.detach();
-        },
-        onError() {
-          viewer?.detach();
-        },
+        onClose: end,
+        onError: end,
       };
     });
 
