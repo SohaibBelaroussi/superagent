@@ -3,18 +3,22 @@ import { OPEN_PHASES } from '@superagent/shared/phases';
 import {
   Bell,
   BellOff,
+  CalendarClock,
   ChevronsUpDown,
+  CircleUserRound,
   House,
   Inbox,
+  Library,
   LogOut,
   MessagesSquare,
+  Plus,
   Search,
   SquareKanban,
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
-import { Link, useLocation, useSearchParams } from 'react-router';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useLiveStatus } from '../api/live';
-import { useAttention, useBoard, useDepartments, useProfile } from '../api/queries';
+import { useAgents, useAttention, useBoard, useDepartments, useProfile } from '../api/queries';
 import { useMe, useSession } from '../api/session';
 import { toggleNotifications } from '../features/inbox/notify';
 import { cn } from '../lib/cn';
@@ -75,19 +79,19 @@ function NavItem({
 function DepartmentLink({
   department,
   openTasks,
+  active,
   onNavigate,
 }: {
   department: Department;
   openTasks: number;
+  /** You're on its page, its board, or one of its agents. */
+  active: boolean;
   onNavigate?: () => void;
 }) {
-  const { pathname } = useLocation();
-  const [params] = useSearchParams();
-  const active = pathname === '/board' && params.get('department') === department.slug;
   return (
     <li>
       <Link
-        to={`/board?department=${encodeURIComponent(department.slug)}`}
+        to={`/departments/${encodeURIComponent(department.slug)}`}
         onClick={onNavigate}
         className={cn(navRow, active && navRowActive)}
         aria-current={active ? 'page' : undefined}
@@ -132,8 +136,9 @@ const THEMES = THEME_CHOICES.map(({ value, label, icon: Icon }) => ({
   icon: <Icon aria-hidden />,
 }));
 
-function AccountMenu() {
+function AccountMenu({ onNavigate }: { onNavigate?: () => void }) {
   const me = useMe();
+  const navigate = useNavigate();
   const { signOut } = useSession();
   const profile = useProfile();
   const { choice, setChoice } = useTheme();
@@ -164,6 +169,15 @@ function AccountMenu() {
         <MenuRadioGroup value={choice} onValueChange={setChoice} options={THEMES} />
       </MenuGroup>
       <MenuSeparator />
+      <MenuItem
+        icon={<CircleUserRound aria-hidden />}
+        onClick={() => {
+          onNavigate?.();
+          navigate('/settings/profile');
+        }}
+      >
+        Your profile
+      </MenuItem>
       {notificationsSupported() ? (
         <MenuItem
           icon={notifying ? <BellOff aria-hidden /> : <Bell aria-hidden />}
@@ -192,8 +206,16 @@ export function Sidebar({ onNavigate, onSearch }: { onNavigate?: () => void; onS
   }
   const active = (departments.data ?? []).filter((department) => !department.archivedAt);
   const waiting = useAttention().data?.length ?? 0;
+  const agents = useAgents();
   const { pathname } = useLocation();
   const [params] = useSearchParams();
+  const currentDepartment = pathname.startsWith('/departments/')
+    ? active.find((department) => pathname === `/departments/${encodeURIComponent(department.slug)}`)?.id
+    : pathname === '/board'
+      ? active.find((department) => department.slug === params.get('department'))?.id
+      : pathname.startsWith('/agents/')
+        ? agents.data?.find((agent) => pathname === `/agents/${encodeURIComponent(agent.key)}`)?.departmentId
+        : undefined;
 
   return (
     <nav aria-label="Main" className="flex h-full min-h-0 flex-col gap-5 px-2.5 py-3">
@@ -241,14 +263,63 @@ export function Sidebar({ onNavigate, onSearch }: { onNavigate?: () => void; onS
           active={pathname === '/board' && !params.get('department')}
           onNavigate={onNavigate}
         />
+        <NavItem
+          to="/schedules"
+          icon={CalendarClock}
+          label="Schedules"
+          active={pathname === '/schedules'}
+          onNavigate={onNavigate}
+        />
+        <NavItem
+          to="/knowledge"
+          icon={Library}
+          label="Knowledge"
+          active={pathname === '/knowledge'}
+          onNavigate={onNavigate}
+        />
       </ul>
 
       <section aria-labelledby="sidebar-departments" className="flex min-h-0 flex-col gap-1">
-        <h2 id="sidebar-departments" className="px-2.5 text-eyebrow text-placeholder uppercase">
-          Departments
-        </h2>
+        <div className="flex h-6 items-center justify-between pr-1 pl-2.5">
+          <h2 id="sidebar-departments" className="text-eyebrow text-placeholder uppercase">
+            <Link
+              to="/departments"
+              onClick={onNavigate}
+              aria-current={pathname === '/departments' ? 'page' : undefined}
+              className={cn(
+                'rounded-sm outline-hidden hover:text-foreground',
+                colorTransition,
+                focusRingInset,
+              )}
+            >
+              Departments
+            </Link>
+          </h2>
+          <Link
+            to="/departments?new=1"
+            onClick={onNavigate}
+            aria-label="New department"
+            title="New department"
+            className={cn(
+              'flex size-6 items-center justify-center rounded-md text-placeholder outline-hidden hover:bg-fill-subtle hover:text-foreground [&_svg]:size-icon-sm',
+              colorTransition,
+              focusRingInset,
+            )}
+          >
+            <Plus aria-hidden />
+          </Link>
+        </div>
         {active.length === 0 && departments.isSuccess ? (
-          <p className="px-2.5 py-1 text-caption text-muted-foreground">None yet.</p>
+          <p className="px-2.5 py-1 text-caption text-muted-foreground">
+            None yet.{' '}
+            <Link
+              to="/departments?new=1"
+              onClick={onNavigate}
+              className="text-foreground underline underline-offset-2"
+            >
+              Set one up
+            </Link>
+          </p>
         ) : (
           <ul className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
             {active.map((department) => (
@@ -256,6 +327,7 @@ export function Sidebar({ onNavigate, onSearch }: { onNavigate?: () => void; onS
                 key={department.id}
                 department={department}
                 openTasks={openByDepartment.get(department.id) ?? 0}
+                active={department.id === currentDepartment}
                 onNavigate={onNavigate}
               />
             ))}
@@ -265,7 +337,7 @@ export function Sidebar({ onNavigate, onSearch }: { onNavigate?: () => void; onS
 
       <div className="mt-auto flex flex-col gap-1">
         <LiveIndicator />
-        <AccountMenu />
+        <AccountMenu onNavigate={onNavigate} />
       </div>
     </nav>
   );

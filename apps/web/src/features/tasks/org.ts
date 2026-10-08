@@ -8,8 +8,17 @@ export interface OrgLookup {
   agent(id: string | null): AgentDefinition | undefined;
   /** An agent by its key ("research-lead"): events name agents by key. */
   agentByKey(key: string): AgentDefinition | undefined;
+  /** Active departments: the ones you pick from. */
   departments: Department[];
+  /** Active agents. */
+  agents: AgentDefinition[];
   ready: boolean;
+  /** A list is being fetched (again). */
+  fetching: boolean;
+  /** Why a list failed to load, while it has nothing to show. */
+  error: unknown;
+  /** Fetches both lists again: for a page that names something they don't have (yet). */
+  refetch(): void;
 }
 
 /** Departments and agents by id, slug and key: tasks and events refer to them every way. */
@@ -27,7 +36,25 @@ export function useOrg(): OrgLookup {
       agent: (id) => (id ? agentById.get(id) : undefined),
       agentByKey: (key) => agentByKey.get(key),
       departments: (departments.data ?? []).filter((department) => !department.archivedAt),
+      agents: (agents.data ?? []).filter((agent) => !agent.archivedAt),
       ready: departments.isSuccess && agents.isSuccess,
+      fetching: departments.isFetching || agents.isFetching,
+      error: (departments.data ? null : departments.error) ?? (agents.data ? null : agents.error),
+      refetch: () => {
+        void departments.refetch();
+        void agents.refetch();
+      },
     };
-  }, [departments.data, departments.isSuccess, agents.data, agents.isSuccess]);
+  }, [
+    departments.data,
+    departments.isSuccess,
+    departments.isFetching,
+    departments.error,
+    departments.refetch,
+    agents.data,
+    agents.isSuccess,
+    agents.isFetching,
+    agents.error,
+    agents.refetch,
+  ]);
 }

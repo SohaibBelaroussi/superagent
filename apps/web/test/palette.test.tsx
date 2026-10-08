@@ -106,6 +106,27 @@ describe('the command palette, with words that name an action', () => {
   });
 });
 
+describe('the command palette, for the organization', () => {
+  it('finds agents by name or department, and opens a new department', async () => {
+    server.use(...signedInHandlers());
+    const { router } = renderApp('/');
+    await screen.findByRole('heading', { level: 1, name: /^Good/ });
+    const user = userEvent.setup();
+
+    await user.keyboard('{Control>}k{/Control}');
+    await user.type(await screen.findByRole('combobox', { name: /search pages/i }), 'research lead');
+    expect(screen.getByRole('option', { name: /^Ada/ })).toHaveTextContent('Lead, Research');
+    await user.click(screen.getByRole('option', { name: /^Ada/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/agents/research-lead'));
+
+    await user.keyboard('{Control>}k{/Control}');
+    await user.type(await screen.findByRole('combobox', { name: /search pages/i }), 'new department');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByRole('dialog', { name: 'New department' })).toBeVisible();
+    expect(router.state.location.pathname).toBe('/departments');
+  });
+});
+
 /** A browser's Notification, recorded. */
 class FakeNotification {
   static permission: NotificationPermission = 'default';

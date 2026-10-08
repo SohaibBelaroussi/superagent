@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -98,14 +98,17 @@ describe('the board', () => {
     expect(asked).toContain(research.id);
   });
 
-  it('marks only the department being shown as the current page in the rail', async () => {
+  it.each([
+    ['its board', '/board?department=research'],
+    ['its page', '/departments/research'],
+    ['one of its agents', '/agents/research-lead'],
+  ])('marks only the department as current in the rail on %s', async (_, path) => {
     server.use(...signedInHandlers());
-    renderApp('/board?department=research');
+    renderApp(path);
     const nav = await screen.findByRole('navigation', { name: 'Main' });
-    expect(await within(nav).findByRole('link', { name: /research/i })).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
+    const research = await within(nav).findByRole('link', { name: /^research/i });
+    expect(research).toHaveAttribute('href', '/departments/research');
+    await waitFor(() => expect(research).toHaveAttribute('aria-current', 'page'));
     expect(within(nav).getByRole('link', { name: 'Board' })).not.toHaveAttribute('aria-current');
     expect(within(nav).getByRole('link', { name: 'Home' })).not.toHaveAttribute('aria-current');
   });

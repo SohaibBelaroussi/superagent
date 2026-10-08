@@ -58,9 +58,9 @@ export default defineConfig({
             { name: 'react', test: /node_modules[\\/](react|react-dom|scheduler|react-router)[\\/]/ },
             {
               name: 'ui',
-              // Not the autocomplete (and the combobox it builds on): only the command palette, loaded
-              // when it is first wanted, uses them.
-              test: /node_modules[\\/](@base-ui[\\/]react[\\/](?!(autocomplete|combobox)[\\/])|@floating-ui|tabbable|use-sync-external-store)/,
+              // Not what only pages loaded later use: the autocomplete (and the combobox it builds on)
+              // of the command palette, and the checkbox of the organization's forms.
+              test: /node_modules[\\/](@base-ui[\\/]react[\\/](?!(autocomplete|combobox|checkbox)[\\/])|@floating-ui|tabbable|use-sync-external-store)/,
             },
             { name: 'data', test: /node_modules[\\/](zod|@tanstack)[\\/]/ },
           ],

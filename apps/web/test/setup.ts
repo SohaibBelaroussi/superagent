@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll } from 'vitest';
 import { server } from './msw';
 
@@ -26,6 +26,10 @@ if (!globalThis.ResizeObserver) {
 }
 Element.prototype.scrollIntoView ??= () => {};
 Element.prototype.scrollTo ??= () => {};
+
+// Pages load on first visit: a test's first page waits for its module, which takes longer than the
+// default second when every test file runs at once.
+configure({ asyncUtilTimeout: 3000 });
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {

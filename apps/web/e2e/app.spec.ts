@@ -213,3 +213,67 @@ test('works on a phone: the rail becomes a drawer, and nothing scrolls sideways'
   await expect(page.getByRole('heading', { level: 1, name: 'Board' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
 });
+
+test('sets up a department and its lead, then gives the lead a tool in a new version', async ({ page }) => {
+  const suffix = Date.now().toString(36);
+  await signIn(page);
+  await page.goto('/departments');
+  await page.getByRole('button', { name: 'New department' }).click();
+  const dialog = page.getByRole('dialog', { name: 'New department' });
+  await dialog.getByLabel('Name').fill(`Desk ${suffix}`);
+  await expect(dialog.getByLabel('Slug')).toHaveValue(`desk-${suffix}`);
+  await dialog.getByLabel('What it’s for').fill('Answers questions about the desk.');
+  await dialog.getByRole('button', { name: 'Create department' }).click();
+  await expect(page).toHaveURL(new RegExp(`/departments/desk-${suffix}\\?tab=team$`));
+
+  await page.getByRole('button', { name: 'Add the lead' }).click();
+  const lead = page.getByRole('dialog', { name: `A lead for Desk ${suffix}` });
+  await lead.getByLabel('Name').fill('Dana');
+  await lead.getByLabel('What it does').fill('Plans the desk’s work.');
+  await lead.getByLabel('Instructions').fill('Answer briefly.');
+  await lead.getByRole('button', { name: 'Add the lead' }).click();
+  await expect(page).toHaveURL(new RegExp(`/agents/desk-${suffix}-dana$`));
+  await expect(page.getByRole('heading', { level: 1, name: 'Dana' })).toBeVisible();
+
+  await page.getByRole('switch', { name: /^Web search/ }).click();
+  await page.getByRole('button', { name: 'Save as version 2' }).click();
+  await expect(page.getByText('Saved as version 2')).toBeVisible();
+  await page.getByRole('tab', { name: /Versions/ }).click();
+  await expect(page.getByRole('list', { name: 'Dana’s versions' }).getByRole('listitem')).toHaveCount(2);
+  await expect(page.getByText('Changed tools.')).toBeVisible();
+});
+
+test('sets up a schedule in words, with its next runs', async ({ page, request }) => {
+  const team = await department(request);
+  await signIn(page);
+  await page.goto(`/departments/${team.slug}?tab=schedules`);
+  await page.getByRole('button', { name: 'New schedule' }).click();
+  const dialog = page.getByRole('dialog', { name: 'New schedule' });
+  await dialog.getByLabel('Title').fill('Morning check');
+  await dialog.getByLabel('Brief').fill('Look at what changed overnight.');
+  await expect(dialog.getByRole('group', { name: 'When' }).getByRole('note')).toContainText(
+    'Every weekday at',
+  );
+  await expect(dialog.getByRole('group', { name: 'When' }).getByRole('note')).toContainText('Next:');
+  await dialog.getByRole('button', { name: 'Set up schedule' }).click();
+  await expect(page.getByText('Schedule set up')).toBeVisible();
+  const row = page.getByRole('listitem').filter({ hasText: 'Morning check' });
+  await expect(row).toContainText('Every weekday at');
+  await expect(row).toContainText('Set up by you');
+});
+
+test('uploads a document, then finds it as an agent would', async ({ page }) => {
+  const word = `zebra${Date.now().toString(36)}`;
+  await signIn(page);
+  await page.goto('/knowledge');
+  await page.locator('input[type="file"]').setInputFiles({
+    name: `${word}.md`,
+    mimeType: 'text/markdown',
+    buffer: Buffer.from(`# Field notes\n\nThe ${word} only shows up on Tuesdays.`),
+  });
+  await expect(page.getByRole('list', { name: 'Uploads' })).toContainText('to search');
+  await page.getByRole('searchbox', { name: 'Search the documents' }).fill(word);
+  const results = page.getByRole('list', { name: 'Search results' });
+  await expect(results).toContainText(`${word}.md`);
+  await expect(results.locator('mark').first()).toHaveText(word);
+});
