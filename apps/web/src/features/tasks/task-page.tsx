@@ -2,7 +2,7 @@ import type { Task } from '@superagent/shared';
 import { canTransition } from '@superagent/shared/phases';
 import { Check, ChevronRight, CircleSlash, Ellipsis, Pencil, RotateCcw, Send } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { errorMessage, ProblemError } from '../../api/client';
 import { useAttention, useCancelTask, useTask, useUpdateTask } from '../../api/queries';
 import { useDocumentTitle } from '../../lib/title';
@@ -13,8 +13,10 @@ import { Field, Textarea } from '../../ui/field';
 import { Page, Panel } from '../../ui/layout';
 import { Markdown } from '../../ui/markdown';
 import { Menu, MenuItem, MenuSeparator } from '../../ui/menu';
+import { TabPanel, Tabs } from '../../ui/tabs';
 import { RelativeTime } from '../../ui/time';
 import { toast } from '../../ui/toast';
+import { TaskTranscript } from '../conversations/task-transcript';
 import { ApprovalCard } from './approval-card';
 import { attentionLine } from './attention';
 import { EditTaskDialog } from './edit-task-dialog';
@@ -23,6 +25,12 @@ import { TaskActivity } from './task-activity';
 import { DepartmentLabel, DueBadge, PhaseBadge, PriorityBadge, SourceBadge } from './task-bits';
 import { TaskComposer } from './task-composer';
 import { TaskArtifacts, TaskChecklist, TaskDetails, TaskUsage } from './task-rail';
+
+/** What happened on a task: its history (who did what), or the lead's own thread. */
+const VIEWS = [
+  { value: 'activity', label: 'Activity' },
+  { value: 'transcript', label: 'Transcript' },
+] as const;
 
 /** Task ids are UUIDs; anything else in the URL is a bad link, never part of a request path. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -87,6 +95,8 @@ function TaskView({ task, org }: { task: Task; org: OrgLookup }) {
   const update = useUpdateTask(task.id);
   const cancel = useCancelTask(task.id);
   const [cancelReason, setCancelReason] = useState('');
+  const [params, setParams] = useSearchParams();
+  const view = params.get('view') === 'transcript' ? 'transcript' : 'activity';
 
   const canAccept = canTransition('owner', task.phase, 'done');
   const canQueue = canTransition('owner', task.phase, 'queued') && Boolean(department?.lead);
@@ -220,12 +230,20 @@ function TaskView({ task, org }: { task: Task; org: OrgLookup }) {
             <Markdown className="text-foreground/90">{task.brief}</Markdown>
           </section>
 
-          <section aria-labelledby="activity-title" className="flex flex-col gap-3">
-            <h2 id="activity-title" className="text-subheading text-foreground">
-              Activity
-            </h2>
-            <TaskActivity taskId={task.id} org={org} />
-          </section>
+          <Tabs
+            value={view}
+            onValueChange={(next) =>
+              setParams(next === 'transcript' ? { view: next } : {}, { replace: true })
+            }
+            items={VIEWS}
+          >
+            <TabPanel value="activity" className="pt-4">
+              <TaskActivity taskId={task.id} org={org} />
+            </TabPanel>
+            <TabPanel value="transcript" className="pt-4">
+              <TaskTranscript task={task} org={org} />
+            </TabPanel>
+          </Tabs>
 
           <TaskComposer task={task} inputRef={composerRef} waitingForApproval={approvals.length > 0} />
         </div>

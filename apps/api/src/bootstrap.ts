@@ -31,6 +31,7 @@ import { PluginFetcher } from './modules/capabilities/plugins/fetch';
 import { PluginService } from './modules/capabilities/plugins/service';
 import { SecretService } from './modules/capabilities/secrets';
 import { SkillStore } from './modules/capabilities/skills';
+import { ConversationService } from './modules/conversations/service';
 import { DecisionLog } from './modules/dispatch/decisions';
 import { DispatchService } from './modules/dispatch/service';
 import { type BlobStore, S3BlobStore } from './modules/knowledge/blobs';
@@ -355,6 +356,12 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       keyCheck,
     });
     const decisions = new DecisionService(decisionLog, attention, dispatch, logger);
+    const conversations = new ConversationService({
+      mastra,
+      memory,
+      tasks,
+      approvals: (task) => dispatch.pendingApprovals(task),
+    });
 
     const http = await createApp({
       config,
@@ -368,6 +375,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       catalog,
       tasks,
       dispatch,
+      conversations,
       bus,
       knowledge,
       memory: memoryService,

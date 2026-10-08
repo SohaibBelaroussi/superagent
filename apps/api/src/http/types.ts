@@ -13,6 +13,7 @@ import type { McpService } from '../modules/capabilities/mcp/service';
 import type { PluginService } from '../modules/capabilities/plugins/service';
 import type { SecretService } from '../modules/capabilities/secrets';
 import type { SkillStore } from '../modules/capabilities/skills';
+import type { ConversationService } from '../modules/conversations/service';
 import type { DispatchService } from '../modules/dispatch/service';
 import type { KnowledgeService } from '../modules/knowledge/service';
 import type { EventBus } from '../modules/ledger/events';
@@ -42,6 +43,7 @@ export interface AppDeps {
   catalog: ToolCatalog;
   tasks: TaskService;
   dispatch: DispatchService;
+  conversations: ConversationService;
   bus: EventBus;
   knowledge: KnowledgeService;
   memory: MemoryService;

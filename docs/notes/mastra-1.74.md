@@ -637,6 +637,23 @@ All of these are verified in [../spikes/server/agent-spike.ts](../spikes/server/
 - Rootless Docker without cgroup delegation accepts `--memory`, `--cpus` and `--pids-limit` and ignores them: check `MemoryLimit`, `CpuCfsQuota` and `PidsLimit` in `docker info`.
 - Compose `!reset` (`ports: !reset []`, `build: !reset null`) clears a list or key in an override file.
 
-## 22. From earlier research, needed in later milestones
+## 22. Learned while building W2 (2026-10-08)
+
+**Following a thread** (`subscribeToThread`, experimental) [spike, int tests]:
+- It follows every run on the thread, whoever started it: `agent.stream`, a signal that woke the thread, a resumed approval. The thread runtime is shared, so subscribing through the chief works for any thread (pass its `resourceId`). `unsubscribe()` ends the stream; the generator finishes.
+- A stream that joins a run midway gets the run's current segment again from its `start` chunk. A run waiting for an approval counts as active, and joining it gives only its last step (the tool call and the approval prompt), not the steps before.
+- A signal that wakes no run is broadcast as a short run of its own: `start` (`payload.messageId: "persisted-signal:<id>"`), a `data-signal` or `data-user-message` part, then `finish`. Signals delivered into a running turn come as the same `data-*` parts.
+- `start`, `step-start`, `step-finish` and `finish` carry `payload.messageId`: the id the turn's answer is stored under (a step after a delivered signal can move to a new one). `start.payload.id` is the agent's id.
+- A run that stops for an approval ends its stream after the `tool-call-approval` chunk with no `finish`, `error` or `abort`. Once the call is decided, the run carries on under the same `runId`, on the same subscription or on one opened meanwhile.
+- `agent.stream` on a thread where another agent's run is active waits for it to end (`waitForCrossAgentThreadRun`): a turn the owner starts and one a notification wakes never overlap.
+
+**Stored messages:**
+- Mastra stores a turn's answer as it goes, step by step: a history read during a turn sees a half-written message.
+- Signals are stored with `role: 'signal'` and `type` set to their tag name (`notification`, `notification-summary`, `user`); `content.metadata.signal` holds `{ type, tagName, attributes, metadata }`. `sendNotificationSignal({ metadata })` lands in that `metadata`, which the model doesn't see; `attributes` it does.
+- A notification that reaches a busy thread is summed up for it first (`notification-summary`, text like `dept:research: 1`) and delivered later. The summary can wake the agent, so it answers it.
+- Mastra merges tool calls that share an id across the whole thread, not just a run: a second `call_1` shows the first one's stored result. Fake models need ids unique across restarts.
+- `memory.recall({ threadId, resourceId, perPage, page, filter: { dateRange: { end } }, hideSignals: false, includeTotal: false })` gives the newest page, oldest first (`end` is inclusive). It throws for a thread that doesn't exist.
+
+## 23. From earlier research, needed in later milestones
 
 - **Factory patterns to reuse:** phase kinds (resting, working, terminal), seats, decisions outbox with idempotency keys, change-hint SSE.

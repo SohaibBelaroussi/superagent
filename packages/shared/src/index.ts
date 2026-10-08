@@ -1130,3 +1130,149 @@ export const CapabilitiesSchema = z.object({
   ),
 });
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;
+
+// --- Conversations (W2) ---
+
+/**
+ * Where a tool call stands. `pending`: called, with no result yet (it may still be running, or its run
+ * ended without one); `approval`: waiting for the owner; `declined`: the owner said no.
+ */
+export const ToolCallStatusSchema = z.enum(['pending', 'approval', 'done', 'failed', 'declined']);
+export type ToolCallStatus = z.infer<typeof ToolCallStatusSchema>;
+
+export const ToolCallPartSchema = z.object({
+  type: z.literal('tool'),
+  callId: z.string(),
+  tool: z.string(),
+  delegate: z
+    .string()
+    .nullable()
+    .describe('The specialist a lead delegated to (tool agent-<key>), else null'),
+  args: z.unknown().describe('The arguments; a string preview when they are very large'),
+  status: ToolCallStatusSchema,
+  result: z
+    .unknown()
+    .optional()
+    .describe("The result (a delegation's: the specialist's answer); a string preview when very large"),
+  error: z.string().nullable(),
+});
+export type ToolCallPart = z.infer<typeof ToolCallPartSchema>;
+
+export const MessagePartSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), text: z.string() }),
+  z.object({ type: z.literal('reasoning'), text: z.string() }),
+  ToolCallPartSchema,
+  z.object({ type: z.literal('source'), url: z.string(), title: z.string().nullable() }),
+  z.object({ type: z.literal('file'), name: z.string().nullable(), mediaType: z.string() }),
+  z.object({ type: z.literal('error'), message: z.string() }),
+]);
+export type MessagePart = z.infer<typeof MessagePartSchema>;
+
+export const ConversationReportSchema = z.object({
+  kind: z
+    .string()
+    .describe('task-done, task-blocked, task-failed, approval-needed, task-stalled, task-interrupted, …'),
+  source: z.string().describe('Who sent it: dept:<slug>'),
+  priority: z.enum(['low', 'medium', 'high', 'urgent']).nullable(),
+  taskId: z.string().nullable(),
+  taskNumber: z.number().int().nullable(),
+  taskTitle: z
+    .string()
+    .nullable()
+    .describe('The text starts "#<number> <title>: ", so the title tells where the summary begins'),
+});
+export type ConversationReport = z.infer<typeof ConversationReportSchema>;
+
+export const ConversationRoleSchema = z
+  .enum(['owner', 'agent', 'report', 'brief', 'note'])
+  .describe(
+    "owner: from you · agent: an agent's answer (see author) · report: a lead's report to the chief · " +
+      'brief: a task as its lead got it · note: anything else worth showing',
+  );
+export type ConversationRole = z.infer<typeof ConversationRoleSchema>;
+
+export const ConversationMessageSchema = z.object({
+  id: z.string(),
+  createdAt: z.iso.datetime(),
+  role: ConversationRoleSchema,
+  author: z
+    .string()
+    .nullable()
+    .describe('For agent messages, the agent\'s key ("chief" for the chief of staff), else null'),
+  parts: z.array(MessagePartSchema),
+  report: ConversationReportSchema.nullable(),
+});
+export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
+
+export const ConversationPageSchema = z.object({
+  items: z.array(ConversationMessageSchema).describe('Oldest first'),
+  nextCursor: z.string().nullable().describe('Pass as ?before= for older messages; null when there are none'),
+});
+export type ConversationPage = z.infer<typeof ConversationPageSchema>;
+
+export const ConversationQuerySchema = z.object({
+  before: z.iso.datetime().optional().describe("The previous page's nextCursor"),
+  limit: z.coerce.number().int().min(1).max(100).default(40),
+});
+export type ConversationQuery = z.infer<typeof ConversationQuerySchema>;
+
+export const ChiefMessageInputSchema = z.object({ message: z.string().trim().min(1).max(20_000) });
+export type ChiefMessageInput = z.infer<typeof ChiefMessageInputSchema>;
+
+export const ChiefMessageResultSchema = z.object({
+  delivery: z
+    .enum(['started', 'queued'])
+    .describe('started: the chief is answering · queued: it answers once its current turn is over'),
+});
+export type ChiefMessageResult = z.infer<typeof ChiefMessageResultSchema>;
+
+export const ChiefStopResultSchema = z.object({
+  stopped: z.boolean().describe('False when the chief was not answering'),
+});
+export type ChiefStopResult = z.infer<typeof ChiefStopResultSchema>;
+
+/**
+ * What a conversation's live stream sends (the SSE event name is the type). A turn is `run-start`, then
+ * its text, reasoning, tool calls and the messages that reach it, then `run-end`; afterwards its
+ * messages are in the conversation's history.
+ */
+export const LiveEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('ready'), running: z.boolean() }),
+  z.object({
+    type: z.literal('run-start'),
+    runId: z.string(),
+    agent: z.string().nullable().describe('The agent taking the turn (its key), when known'),
+  }),
+  z.object({
+    type: z.literal('text'),
+    runId: z.string(),
+    id: z.string().describe('The block the text belongs to; a new id starts a new block'),
+    delta: z.string(),
+  }),
+  z.object({ type: z.literal('reasoning'), runId: z.string(), id: z.string(), delta: z.string() }),
+  z.object({
+    type: z.literal('tool'),
+    runId: z.string(),
+    part: ToolCallPartSchema.describe('The call as it stands; replaces an earlier one with the same callId'),
+  }),
+  z.object({
+    type: z.literal('answer'),
+    runId: z.string(),
+    messageId: z
+      .string()
+      .describe(
+        "The history message the turn's answer is stored as while it is written; the turn shows it live",
+      ),
+  }),
+  z.object({ type: z.literal('message'), runId: z.string(), message: ConversationMessageSchema }),
+  z.object({
+    type: z.literal('run-end'),
+    runId: z.string(),
+    outcome: z.enum(['finished', 'failed', 'stopped', 'suspended']),
+    error: z.string().nullable(),
+    messageIds: z
+      .array(z.string())
+      .describe("The ids of the turn's answers in the history: once they are there, the turn is"),
+  }),
+]);
+export type LiveEvent = z.infer<typeof LiveEventSchema>;

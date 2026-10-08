@@ -25,6 +25,7 @@ import { PhaseIcon } from '../../ui/icons';
 import { Page, Panel, ProgressBar, Section } from '../../ui/layout';
 import { colorTransition, focusRingInset } from '../../ui/recipes';
 import { RelativeTime } from '../../ui/time';
+import { QuickAsk } from '../conversations/quick-ask';
 import { NewTaskDialog } from '../tasks/new-task-dialog';
 import { type OrgLookup, useOrg } from '../tasks/org';
 import { DepartmentLabel, taskProgress } from '../tasks/task-bits';
@@ -118,6 +119,7 @@ export function HomePage() {
       </header>
 
       <div className="flex flex-col gap-10">
+        <QuickAsk />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Stat label="Need you" value={attention.isSuccess ? String(needs.length) : null} />
           <Stat label="In progress" value={board.isSuccess ? String(running.length) : null} />

@@ -1,6 +1,15 @@
 import type { Department } from '@superagent/shared';
 import { OPEN_PHASES } from '@superagent/shared/phases';
-import { ChevronsUpDown, House, LogOut, Monitor, Moon, SquareKanban, Sun } from 'lucide-react';
+import {
+  ChevronsUpDown,
+  House,
+  LogOut,
+  MessagesSquare,
+  Monitor,
+  Moon,
+  SquareKanban,
+  Sun,
+} from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
 import { useLiveStatus } from '../api/live';
@@ -180,6 +189,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       <ul className="flex flex-col gap-0.5">
         <NavItem to="/" icon={House} label="Home" active={pathname === '/'} onNavigate={onNavigate} />
+        <NavItem
+          to="/chief"
+          icon={MessagesSquare}
+          label="Chief of staff"
+          active={pathname === '/chief'}
+          onNavigate={onNavigate}
+        />
         <NavItem
           to="/board"
           icon={SquareKanban}

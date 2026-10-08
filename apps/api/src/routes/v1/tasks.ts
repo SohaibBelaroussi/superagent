@@ -3,6 +3,8 @@ import {
   type Artifact,
   ArtifactListSchema,
   BoardSchema,
+  ConversationPageSchema,
+  ConversationQuerySchema,
   CreateTaskInputSchema,
   type Task,
   type TaskEvent,
@@ -14,9 +16,8 @@ import {
   UpdateTaskInputSchema,
   type UsageTotals,
 } from '@superagent/shared';
-import { streamSSE } from 'hono/streaming';
 import type { ArtifactRow, TaskRow } from '../../db/schema';
-import { currentUser } from '../../http/auth';
+import { LIVE_EVENTS_DESCRIPTION, liveStream, untilAborted } from '../../http/live';
 import { ApiError, problem, problemResponse } from '../../http/problem';
 import type { AppDeps, AppEnv } from '../../http/types';
 import { matchesFilter } from '../../modules/ledger/events';
@@ -182,6 +183,19 @@ const listEvents = createRoute({
   responses: { 200: json(TaskEventListSchema, 'Events, oldest first'), 404: notFound },
 });
 
+const getTranscript = createRoute({
+  method: 'get',
+  path: '/tasks/{id}/transcript',
+  tags,
+  summary: "A task's transcript: its lead's thread",
+  description:
+    'The brief as the lead got it, its answers, its tool calls (a delegation to a specialist, `agent-<key>`, ' +
+    "comes with the specialist's answer) and the messages it was sent, oldest first. Go back with " +
+    '?before=<nextCursor>. Large arguments and results come as previews. Follow it live: GET /tasks/{id}/stream.',
+  request: { params, query: ConversationQuerySchema },
+  responses: { 200: json(ConversationPageSchema, 'Messages, oldest first'), 404: notFound },
+});
+
 const listArtifacts = createRoute({
   method: 'get',
   path: '/tasks/{id}/artifacts',
@@ -203,7 +217,6 @@ const getBoard = createRoute({
 const CancelBodySchema = z.object({ reason: z.string().max(500).optional() });
 const EventFilterSchema = z.object({ departmentId: z.uuid().optional(), taskId: z.uuid().optional() });
 
-const HEARTBEAT_MS = 25_000;
 const REPLAY_PAGE = 500;
 /** Past this many missed events a client is better off reloading the board (it gets a `reset` event). */
 const REPLAY_MAX = 5000;
@@ -302,6 +315,33 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
     return c.json({ items: await tasks.events(c.req.valid('param').id, { after, limit }) }, 200);
   });
 
+  v1.openapi(getTranscript, async (c) => {
+    const task = await tasks.get(c.req.valid('param').id);
+    return c.json(await deps.conversations.taskPage(task, c.req.valid('query')), 200);
+  });
+
+  // The lead's runs on the task, live (SSE): the transcript's newest part as it is written.
+  v1.get('/tasks/:id/stream', async (c) => {
+    const id = c.req.param('id');
+    if (!z.uuid().safeParse(id).success) throw new ApiError(404, 'task_not_found', `No task with id ${id}`);
+    const task = await tasks.get(id);
+    return liveStream(c, deps, async (stream, signal) => {
+      for await (const event of deps.conversations.followTask(task, signal)) {
+        await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
+      }
+    });
+  });
+
+  v1.openAPIRegistry.registerPath({
+    method: 'get',
+    path: '/tasks/{id}/stream',
+    tags,
+    summary: "A task's transcript, live (Server-Sent Events)",
+    description: LIVE_EVENTS_DESCRIPTION,
+    request: { params },
+    responses: { 200: { description: 'text/event-stream' }, 404: notFound },
+  });
+
   v1.openapi(listArtifacts, async (c) => {
     const rows = await tasks.artifacts(c.req.valid('param').id);
     return c.json({ items: rows.map(toArtifact) }, 200);
@@ -338,8 +378,7 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
       });
     }
     const filter = parsed.data;
-    const tokenId = currentUser(c).tokenId;
-    return streamSSE(c, async (stream) => {
+    return liveStream(c, deps, async (stream, signal) => {
       // Events at or below the floor are not sent: the client has them (Last-Event-ID) or, for a fresh
       // client, they predate the moment it connected.
       let floor = lastEventId ?? 0;
@@ -363,15 +402,6 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
         if (!matchesFilter(event, filter)) return;
         if (replaying) buffered.push(event);
         else void send(event);
-      });
-      const heartbeat = setInterval(() => void stream.write(': keep-alive\n\n'), HEARTBEAT_MS);
-      const closed = new Promise<void>((resolve) => stream.onAbort(resolve));
-      // The stream ends when its token is revoked: a revoked device must stop hearing about tasks (D45).
-      let stopWatchingRevocation = () => {};
-      const revoked = new Promise<void>((resolve) => {
-        stopWatchingRevocation = deps.tokens.onRevoked((id) => {
-          if (id === tokenId) resolve();
-        });
       });
       try {
         if (lastEventId === undefined) {
@@ -410,11 +440,10 @@ export function registerTaskRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void
           event: 'ready',
           data: JSON.stringify({ lastEventId: lastSent }),
         });
-        await Promise.race([closed, revoked]);
+        // Until the client leaves, or its token is revoked: a revoked device stops hearing about tasks.
+        await untilAborted(signal);
       } finally {
-        clearInterval(heartbeat);
         unsubscribe();
-        stopWatchingRevocation();
       }
     });
   });

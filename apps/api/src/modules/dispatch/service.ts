@@ -3,16 +3,19 @@ import type { IMastraLogger } from '@mastra/core/logger';
 import type { Mastra } from '@mastra/core/mastra';
 import type { DecisionRow, TaskRow } from '../../db/schema';
 import { ApiError } from '../../http/problem';
+import { Mutex } from '../../util/mutex';
 import { truncate } from '../../util/text';
 import { type PhaseActor, TERMINAL_PHASES } from '../ledger/phases';
 import type { TaskService } from '../ledger/service';
 import type { MemoryProfiles } from '../memory/profiles';
 import type { AgentEntry, OrgDirectory } from '../org/directory';
 import type { DecisionLog } from './decisions';
+import { briefFor, relayedMessage } from './wording';
 
 /** The owner's conversation with the chief of staff. */
 export const CHIEF_THREAD = 'chief:main';
 export const OWNER_RESOURCE = 'owner';
+const CHIEF = { resourceId: OWNER_RESOURCE, threadId: CHIEF_THREAD };
 
 const FAILED_FINISH_REASONS = new Set(['error', 'retry', 'aborted', 'other', 'unknown']);
 /** How often a supervised task thread is checked, and how long it must stay idle before deciding. */
@@ -22,6 +25,8 @@ const IDLE_CONFIRM_MS = 600;
 const APPROVAL_CHECK_POLLS = 25;
 /** What a lead is told about a call its cancelled task was waiting for. */
 const CANCELLED_REASON = 'The task was cancelled';
+/** How many times the owner's queued messages to the chief are tried before they are given up. */
+const CHIEF_SEND_ATTEMPTS = 5;
 
 export interface DispatchDeps {
   mastra: Mastra;
@@ -84,17 +89,6 @@ type RunOutput = {
   runId?: string;
 };
 
-function briefFor(task: TaskRow, note?: string): string {
-  return [
-    `Task #${task.number}: ${task.title}`,
-    '',
-    task.brief,
-    ...(note ? ['', `Note from the owner: ${note}`] : []),
-    '',
-    'Work on it with your team: mark progress with update_task (a checklist and a percentage), delegate to your specialists, and finish with report_to_chief: outcome "done" with the result, "blocked" with your question when you need the owner, or "failed".',
-  ].join('\n');
-}
-
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -109,6 +103,10 @@ export class DispatchService {
    * a resumed run ends, so a run's tool calls wait for the owner only once we have let go of it.
    */
   private readonly holding = new Set<string>();
+  /** The owner's messages to the chief, one turn at a time: see messageChief. */
+  private readonly chiefLock = new Mutex();
+  private readonly chiefQueue: string[] = [];
+  private chiefDraining = false;
   private closing = false;
 
   constructor(private readonly deps: DispatchDeps) {}
@@ -120,6 +118,11 @@ export class DispatchService {
    */
   async close(timeoutMs: number): Promise<void> {
     this.closing = true;
+    if (this.chiefQueue.length > 0) {
+      this.deps.logger.warn("The server stopped before the chief of staff read the owner's messages", {
+        count: this.chiefQueue.length,
+      });
+    }
     for (const supervision of this.supervisions.values()) supervision.stopped = true;
     this.supervisions.clear();
     const runtime = this.runtime();
@@ -160,6 +163,94 @@ export class DispatchService {
         title: 'Chief of staff',
       });
     }
+  }
+
+  /**
+   * The owner's message to the chief of staff. It starts the chief's next turn: right away when the
+   * chief is idle, else once its current turn is over (messages sent meanwhile go out together). A
+   * message isn't delivered into a running turn: one that lands just as the turn ends can be lost.
+   */
+  async messageChief(text: string): Promise<'started' | 'queued'> {
+    return this.chiefLock.run(async () => {
+      if (this.closing) throw new ApiError(503, 'shutting_down', 'The server is shutting down');
+      if (this.chiefQueue.length === 0 && !this.chiefBusy()) {
+        await this.startChiefTurn([text]);
+        return 'started';
+      }
+      this.chiefQueue.push(text);
+      this.drainChiefQueue();
+      return 'queued';
+    });
+  }
+
+  /** Stops the chief's running turn (messages waiting for it then start the next one). */
+  stopChief(): boolean {
+    return this.runtime().abortThreadStream({ ...CHIEF });
+  }
+
+  private chiefBusy(): boolean {
+    return this.runtime().getActiveThreadRunId(CHIEF) !== undefined;
+  }
+
+  private async startChiefTurn(messages: string[]): Promise<void> {
+    const output = await this.agent('chief').stream(messages, {
+      memory: { thread: CHIEF_THREAD, resource: OWNER_RESOURCE },
+    });
+    // Nobody reads the output here: the owner follows the thread, where the turn ends either way.
+    Promise.resolve(output.text).catch((error: unknown) =>
+      this.deps.logger.warn("A chief of staff's turn failed", { error }),
+    );
+  }
+
+  /** Waits for the chief's thread to stay idle for a moment, then sends what is queued as one turn. */
+  private drainChiefQueue(): void {
+    if (this.chiefDraining) return;
+    this.chiefDraining = true;
+    void (async () => {
+      let idleSince: number | undefined;
+      let failures = 0;
+      while (this.chiefQueue.length > 0 && !this.closing) {
+        // After a failed send, back off: 3.2 s, then twice as long each time.
+        await sleep(failures === 0 ? POLL_MS : Math.min(POLL_MS * 2 ** (failures + 3), 30_000));
+        if (this.chiefBusy()) {
+          idleSince = undefined;
+          continue;
+        }
+        idleSince ??= Date.now();
+        if (Date.now() - idleSince < IDLE_CONFIRM_MS) continue;
+        idleSince = undefined;
+        try {
+          await this.chiefLock.run(async () => {
+            if (this.chiefBusy() || this.closing) return;
+            const messages = [...this.chiefQueue];
+            await this.startChiefTurn(messages);
+            // Only once they went out: a turn that couldn't start leaves them queued.
+            this.chiefQueue.splice(0, messages.length);
+          });
+          failures = 0;
+        } catch (error) {
+          failures += 1;
+          if (failures < CHIEF_SEND_ATTEMPTS) {
+            this.deps.logger.warn("Could not send the owner's messages to the chief of staff; retrying", {
+              error,
+            });
+          } else {
+            const dropped = this.chiefQueue.splice(0);
+            this.deps.logger.error("Gave up sending the owner's messages to the chief of staff", {
+              count: dropped.length,
+              error,
+            });
+          }
+        }
+      }
+    })()
+      .catch((error: unknown) => {
+        this.deps.logger.error("Could not send the owner's messages to the chief of staff", { error });
+      })
+      .finally(() => {
+        this.chiefDraining = false;
+        if (this.chiefQueue.length > 0 && !this.closing) this.drainChiefQueue();
+      });
   }
 
   /** The lead a department's tasks go to. Check before creating a task that will be dispatched. */
@@ -242,7 +333,7 @@ export class DispatchService {
     const from = actorLabel === 'chief' ? 'chief' : 'owner';
     const pending: Pending = {
       message: {
-        contents: `Message from the ${from === 'chief' ? 'chief of staff' : 'owner'} about task #${task.number}:\n\n${text}`,
+        contents: relayedMessage(from, task.number, text),
         attributes: { from, task: `#${task.number}` },
       },
       actorLabel,
@@ -647,7 +738,7 @@ export class DispatchService {
   private async run(
     task: TaskRow,
     lead: AgentEntry,
-    contents: string,
+    contents: string | string[],
     supervision: Supervision,
   ): Promise<void> {
     supervision.problem = undefined;
@@ -871,7 +962,13 @@ export class DispatchService {
       });
     }
     supervision.generation += 1;
-    await this.run(current, lead, pending.map((p) => p.message.contents).join('\n\n'), supervision);
+    // One message each, so the transcript reads each back as it was sent.
+    await this.run(
+      current,
+      lead,
+      pending.map((p) => p.message.contents),
+      supervision,
+    );
     return true;
   }
 
@@ -911,6 +1008,8 @@ export class DispatchService {
           summary: truncate(summary, 500),
           priority,
           payload: { taskId: task.id, number: task.number, phase: task.phase },
+          // Kept on the message the chief's thread stores (the model doesn't see it): reports link to tasks.
+          metadata: { taskId: task.id, taskNumber: task.number, taskTitle: task.title },
           dedupeKey: `task:${task.id}:${task.revision}`,
         },
         { resourceId: OWNER_RESOURCE, threadId: CHIEF_THREAD },

@@ -158,6 +158,30 @@ export class TaskService {
     return new Map(rows.map((row) => [row.id, row]));
   }
 
+  /** Tasks' ids and titles by number, for these numbers (missing ones left out). */
+  async refsByNumber(numbers: number[]): Promise<Map<number, { id: string; title: string }>> {
+    const unique = [...new Set(numbers)].filter((n) => Number.isSafeInteger(n) && n > 0);
+    if (unique.length === 0) return new Map();
+    const rows = await this.db
+      .select({ id: tasks.id, number: tasks.number, title: tasks.title })
+      .from(tasks)
+      .where(inArray(tasks.number, unique));
+    return new Map(rows.map((row) => [row.number, { id: row.id, title: row.title }]));
+  }
+
+  /**
+   * Who led a task, and from when, oldest first: every event that named its lead (a dispatch, a
+   * reassignment). A lead's messages on the task's thread are attributed with it.
+   */
+  async leads(taskId: string): Promise<Array<{ lead: string; since: Date }>> {
+    const rows = await this.db
+      .select({ lead: sql<string>`${taskEvents.data}->>'lead'`, since: taskEvents.createdAt })
+      .from(taskEvents)
+      .where(and(eq(taskEvents.taskId, taskId), sql`${taskEvents.data} ? 'lead'`))
+      .orderBy(asc(taskEvents.seq));
+    return rows.filter((row) => typeof row.lead === 'string' && row.lead !== '');
+  }
+
   /** The tasks on these threads, by thread id. */
   async byThreads(threadIds: string[]): Promise<Map<string, TaskRow>> {
     if (threadIds.length === 0) return new Map();

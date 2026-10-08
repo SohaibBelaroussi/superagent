@@ -3,16 +3,21 @@
 **Status:** started 2026-10-08. Builds on the API of [api-plan.md](api-plan.md) (M0–M9 merged).
 
 **Progress:**
-- W1 (foundation and the board): in review. Verified in a browser against an API driven by a scripted model:
+- W1 (foundation and the board): merged in PR #11. Verified in a browser against an API driven by a scripted model:
   - sign-in swapped the admin token for a device token;
   - the board and home page followed the tasks live;
   - an approval made on the task page let the lead finish, its report appeared without a reload, and accepting closed the task;
   - light and dark themes, and a phone's width.
 
-  Browser tests run the same checks against the release image in CI, and fail on any CSP violation. That check caught zod probing for `eval`, which the CSP refuses, so zod now runs `jitless`.
+  Browser tests run the same checks against the release image in CI, and fail on any CSP violation. That check caught zod probing for `eval`, which the CSP refuses, so zod runs `jitless`. In W2 it caught that setting arriving too late once the bundler moved the schemas into a shared chunk: `public/boot.js` now sets it before any module runs.
+- W2 (conversations): in review. Verified in a browser against an API driven by a scripted model (answers streamed word by word, a step slowed down to watch it):
+  - the chief's answer streamed in, its tool calls showed as rows, and the stored answer took its place without a flicker or a repeat;
+  - a message sent while the chief was answering waited for its turn;
+  - leads' reports appeared as cards linked to their tasks, and notices of reports on the way as notes;
+  - a task's transcript showed the brief, the lead's tool calls and its specialist's answer; it stayed whole while a call waited for approval, and after the approval the rest of the turn streamed in.
 
 **Related docs:**
-- [decisions.md](decisions.md): D06 and D43–D46 cover the web app.
+- [decisions.md](decisions.md): D06 and D43–D47 cover the web app.
 - [api-plan.md](api-plan.md): the API it talks to.
 
 ## 1. Goal and scope
@@ -101,6 +106,12 @@ The design follows Mastra Factory, Mastra's agent-run software factory (open sou
 - Each task event refreshes the queries it affects: the board, that task, its events, the attention inbox.
 - The sidebar shows whether the connection is live.
 
+**Conversations (D47):**
+- The chief's conversation and each task's transcript come from `/v1` in our own shapes (`ConversationMessage`, `LiveEvent` in `@superagent/shared`), never Mastra's.
+- History comes in pages (`GET /v1/chief/messages`, `/v1/tasks/{id}/transcript`, newest first, `?before=` for older).
+- While a conversation is on screen, its own stream (`GET /v1/chief/stream`, `/v1/tasks/{id}/stream`) sends the turn being taken: text as it is written, tool calls as they run, the messages that reach the agent.
+- Mastra stores a turn's answer as it goes, and a stream that joins a turn midway sees only its latest step. So the history stays whole, its tool calls take their live status, and the live turn shows only what the history doesn't have yet. A turn that has ended gives way to its stored answer once a history fetched after its end has it (the stream names the answer's message ids).
+
 **Sign-in (D45):**
 - You paste a token once.
 - An admin token is exchanged for a device token named after the browser (`POST /v1/tokens`). Only the device token is kept, in local storage. The admin token is never stored.
@@ -115,7 +126,7 @@ The design follows Mastra Factory, Mastra's agent-run software factory (open sou
 
 **Security headers on the app's pages:**
 - `Content-Security-Policy: default-src 'self'`, no inline scripts, `frame-ancestors 'none'`, `object-src 'none'`.
-- The theme is applied before the first paint by a small script file, not an inline one.
+- A small script file (`boot.js`, not an inline script) runs before the app: it applies the theme before the first paint, and switches zod to `jitless` parsing before any schema is made.
 - `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
 
 **Tests:**
@@ -166,6 +177,22 @@ Each milestone ends like the API's: tests pass, a PR, one review, fixes, CI gree
   - Both return a normalized message shape from `@superagent/shared`, so clients don't depend on Mastra's internal formats.
   - Live following of a thread goes through our own module (D22).
 - Web: the chief page; the task transcript; tool calls and delegations as activity rows; leads' reports as notification cards linking to their tasks.
+
+**Built:**
+- API:
+  - `GET`/`POST /v1/chief/messages`, `POST /v1/chief/stop`, `GET /v1/chief/stream`;
+  - `GET /v1/tasks/{id}/transcript` and `/stream`.
+  - `ConversationService` reads the threads (the only module that subscribes to them) and normalizes:
+    - stored messages into owner, agent, report, brief and note messages;
+    - tool calls into rows with a status (a delegation carries its specialist's answer);
+    - stream chunks into live events.
+  - A message to a busy chief waits for its turn to end, then goes out with any others as one turn (`DispatchService.messageChief`).
+  - Reports carry their task's id in the notification's metadata; older ones are matched by their number.
+  - Live streams close when their token is revoked, through one helper that `/v1/events` now uses too.
+- Web:
+  - the chief page (`/chief`): streaming answers, tool rows that open to their arguments and results, report cards, notes, a stop button, earlier messages on demand, and a composer that holds a message until the current answer is done;
+  - a quick line to the chief on the home page;
+  - the transcript as a tab of the task page (`?view=transcript`).
 
 ### W3: the inbox
 

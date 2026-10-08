@@ -9,6 +9,7 @@ import { APP_VERSION } from '../../version';
 import { registerAttentionRoutes } from './attention';
 import { registerBrowserRoutes } from './browser';
 import { registerCapabilityRoutes } from './capabilities';
+import { registerChiefRoutes } from './chief';
 import { isUpload, MAX_UPLOAD_BYTES, registerKnowledgeRoutes } from './knowledge';
 import { registerMeRoutes } from './me';
 import { registerMemoryRoutes } from './memory';
@@ -46,6 +47,7 @@ export function createV1Router(deps: AppDeps, upgradeWebSocket: UpgradeWebSocket
   registerSettingsRoutes(v1, deps);
   registerOrgRoutes(v1, deps);
   registerTaskRoutes(v1, deps);
+  registerChiefRoutes(v1, deps);
   registerKnowledgeRoutes(v1, deps);
   registerMemoryRoutes(v1, deps);
   registerScheduleRoutes(v1, deps);

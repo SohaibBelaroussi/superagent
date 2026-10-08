@@ -3,6 +3,7 @@ import { ShieldCheck, ShieldQuestion, ShieldX } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { decisionKey, useDecide } from '../../api/queries';
 import { Button } from '../../ui/button';
+import { CodeBlock } from '../../ui/code-block';
 import { Dialog } from '../../ui/dialog';
 import { Spinner } from '../../ui/feedback';
 import { Field, Textarea } from '../../ui/field';
@@ -65,11 +66,7 @@ export function ApprovalCard({ item }: { item: AttentionItem }) {
           </p>
         </div>
       </div>
-      {args ? (
-        <pre className="max-h-56 overflow-auto rounded-lg bg-fill-subtle px-3 py-2 font-mono text-[0.75rem] leading-relaxed text-foreground/90 shadow-rim">
-          {args}
-        </pre>
-      ) : null}
+      {args ? <CodeBlock value={args} className="max-h-56" /> : null}
       {decided ? (
         <p role="status" className="flex items-center justify-end gap-1.5 text-caption text-muted-foreground">
           {decided === 'approve' ? (
