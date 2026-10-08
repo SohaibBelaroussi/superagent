@@ -1,5 +1,5 @@
 import type { WorkspaceEntry } from '@superagent/shared';
-import { useQuery } from '@tanstack/react-query';
+import { useIsFetching, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ChevronRight,
   Download,
@@ -12,14 +12,14 @@ import {
   Link2,
   RefreshCw,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { errorMessage, ProblemError } from '../../api/client';
-import { fetchTaskFile, useTaskFiles } from '../../api/workspaces';
+import { fetchTaskFile, useTaskFolder, workspaceKeys } from '../../api/workspaces';
 import { cn } from '../../lib/cn';
-import { formatBytes, plural } from '../../lib/format';
+import { formatBytes } from '../../lib/format';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
-import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
+import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';
 import { Panel } from '../../ui/layout';
 import { Markdown } from '../../ui/markdown';
 import { colorTransition, focusRingInset } from '../../ui/recipes';
@@ -27,82 +27,54 @@ import { Segmented } from '../../ui/tabs';
 import { RelativeTime } from '../../ui/time';
 import { toast } from '../../ui/toast';
 
-/** A file or folder of the workspace, with what's in it. */
+/** A file or folder of the workspace. */
 export interface FileNode {
   name: string;
   path: string;
   type: WorkspaceEntry['type'];
   size: number | null;
   modifiedAt: string | null;
-  children: FileNode[];
 }
 
 /**
- * The listing as a tree: folders first, then files, by name (numbers in order). A folder the listing
- * left out (past its depth) is filled in from the paths under it.
+ * What is directly in a folder ("" for the workspace's own), from its listing: folders first, then
+ * files, by name with numbers in order.
  */
-export function fileTree(entries: readonly WorkspaceEntry[]): FileNode[] {
-  const root: FileNode = {
-    name: '',
-    path: '',
-    type: 'directory',
-    size: null,
-    modifiedAt: null,
-    children: [],
-  };
-  const byPath = new Map<string, FileNode>([['', root]]);
-  const folder = (path: string): FileNode => {
-    const found = byPath.get(path);
-    if (found) return found;
-    const slash = path.lastIndexOf('/');
-    const node: FileNode = {
-      name: path.slice(slash + 1),
-      path,
-      type: 'directory',
-      size: null,
-      modifiedAt: null,
-      children: [],
-    };
-    folder(slash < 0 ? '' : path.slice(0, slash)).children.push(node);
-    byPath.set(path, node);
-    return node;
-  };
+export function folderEntries(entries: readonly WorkspaceEntry[], folder: string): FileNode[] {
+  const prefix = folder ? `${folder}/` : '';
+  const seen = new Set<string>();
+  const nodes: FileNode[] = [];
   for (const entry of entries) {
     const path = entry.path.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
-    if (!path || path === '.') continue;
-    if (entry.type === 'directory') {
-      folder(path).modifiedAt = entry.modifiedAt;
-      continue;
-    }
-    if (byPath.has(path)) continue;
-    const slash = path.lastIndexOf('/');
-    const node: FileNode = {
-      name: path.slice(slash + 1),
-      path,
-      type: entry.type,
-      size: entry.size,
-      modifiedAt: entry.modifiedAt,
-      children: [],
-    };
-    folder(slash < 0 ? '' : path.slice(0, slash)).children.push(node);
-    byPath.set(path, node);
+    if (!path || path === '.' || !path.startsWith(prefix) || seen.has(path)) continue;
+    const name = path.slice(prefix.length);
+    if (!name || name.includes('/')) continue;
+    seen.add(path);
+    nodes.push({ name, path, type: entry.type, size: entry.size, modifiedAt: entry.modifiedAt });
   }
-  const order = (nodes: FileNode[]) => {
-    nodes.sort((a, b) =>
-      (a.type === 'directory') !== (b.type === 'directory')
-        ? a.type === 'directory'
-          ? -1
-          : 1
-        : a.name.localeCompare(b.name, undefined, { numeric: true }),
-    );
-    for (const node of nodes) order(node.children);
-  };
-  order(root.children);
-  return root.children;
+  return nodes.sort((a, b) =>
+    (a.type === 'directory') !== (b.type === 'directory')
+      ? a.type === 'directory'
+        ? -1
+        : 1
+      : a.name.localeCompare(b.name, undefined, { numeric: true }),
+  );
 }
 
-const count = (nodes: readonly FileNode[]): number =>
-  nodes.reduce((sum, node) => sum + (node.type === 'directory' ? count(node.children) : 1), 0);
+/** Folders that hold what tools installed or kept, not what agents wrote: they start closed. */
+const HEAVY = new Set([
+  'node_modules',
+  '.git',
+  '.venv',
+  'venv',
+  '__pycache__',
+  '.cache',
+  'dist',
+  'build',
+  'target',
+]);
+/** With this few folders at the top, they start open. */
+const OPEN_FOLDERS = 4;
 
 const extension = (name: string) => {
   const dot = name.lastIndexOf('.');
@@ -195,13 +167,22 @@ async function download(taskId: string, node: FileNode): Promise<void> {
   }
 }
 
-/** What the agents working on a task wrote in its workspace: browse, preview, download. */
+/**
+ * What the agents working on a task wrote in its workspace: browse, preview, download. Listed a folder
+ * at a time, so what tools installed (a node_modules) never crowds out the rest.
+ */
 export function TaskFiles({ taskId }: { taskId: string }) {
-  const files = useTaskFiles(taskId);
-  const tree = useMemo(() => fileTree(files.data?.items ?? []), [files.data]);
+  const root = useTaskFolder(taskId, '');
+  const queryClient = useQueryClient();
+  const refreshing = useIsFetching({ queryKey: workspaceKeys.files(taskId) }) > 0;
   const [previewing, setPreviewing] = useState<FileNode | null>(null);
+  const actions = {
+    taskId,
+    onPreview: setPreviewing,
+    onDownload: (node: FileNode) => void download(taskId, node),
+  };
 
-  if (files.isPending) {
+  if (root.isPending) {
     return (
       <div role="status" className="flex flex-col gap-2">
         <span className="sr-only">Loading the files…</span>
@@ -209,53 +190,49 @@ export function TaskFiles({ taskId }: { taskId: string }) {
       </div>
     );
   }
-  if (files.isError) {
-    const problem = files.error instanceof ProblemError ? files.error : null;
+  if (root.isError) {
+    const problem = root.error instanceof ProblemError ? root.error : null;
     if (problem?.status === 404) return <NoFiles />;
     return (
       <Notice
         tone={problem?.status === 503 ? 'warning' : 'destructive'}
         title={problem?.status === 503 ? 'Workspaces can’t be read now' : 'Couldn’t load the files'}
         action={
-          <Button size="sm" onClick={() => files.refetch()}>
+          <Button size="sm" onClick={() => root.refetch()}>
             Retry
           </Button>
         }
       >
-        {errorMessage(files.error)}
+        {errorMessage(root.error)}
       </Notice>
     );
   }
-  if (tree.length === 0) return <NoFiles />;
+  const nodes = folderEntries(root.data.items, '');
+  if (nodes.length === 0) return <NoFiles />;
+  const folders = nodes.filter((node) => node.type === 'directory').length;
 
-  const total = count(tree);
   return (
     <>
       <Panel className="flex flex-col">
         <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-          <p className="text-label text-foreground">{plural(total, 'file')}</p>
+          <p className="text-label text-foreground">Workspace</p>
           <Button
             size="icon-sm"
             variant="ghost"
             tooltip="Look again"
-            disabled={files.isFetching}
-            onClick={() => files.refetch()}
+            disabled={refreshing}
+            onClick={() => void queryClient.invalidateQueries({ queryKey: workspaceKeys.files(taskId) })}
           >
-            <RefreshCw aria-hidden className={cn(files.isFetching && 'motion-safe:animate-spin')} />
+            <RefreshCw aria-hidden className={cn(refreshing && 'motion-safe:animate-spin')} />
           </Button>
         </div>
         <FileList
-          nodes={tree}
+          {...actions}
+          nodes={nodes}
           depth={0}
-          openAll={total <= 40}
-          onPreview={setPreviewing}
-          onDownload={(node) => void download(taskId, node)}
+          openFolders={folders <= OPEN_FOLDERS}
+          truncated={root.data.truncated}
         />
-        {files.data.truncated ? (
-          <p className="border-t border-border px-4 py-2 text-caption text-muted-foreground">
-            There are more files than shown here.
-          </p>
-        ) : null}
       </Panel>
       <FilePreview
         taskId={taskId}
@@ -284,19 +261,26 @@ const rowClass = cn(
   colorTransition,
   focusRingInset,
 );
+const indent = (depth: number) => ({ paddingLeft: `${0.5 + depth * 1.25}rem` });
+
+interface ListActions {
+  taskId: string;
+  onPreview: (node: FileNode) => void;
+  onDownload: (node: FileNode) => void;
+}
 
 function FileList({
   nodes,
   depth,
-  openAll,
-  onPreview,
-  onDownload,
-}: {
+  openFolders,
+  truncated,
+  ...actions
+}: ListActions & {
   nodes: readonly FileNode[];
   depth: number;
-  openAll: boolean;
-  onPreview: (node: FileNode) => void;
-  onDownload: (node: FileNode) => void;
+  /** Whether its folders start open (heavy ones never do). */
+  openFolders: boolean;
+  truncated: boolean;
 }) {
   return (
     <ul
@@ -306,20 +290,19 @@ function FileList({
       {nodes.map((node) =>
         node.type === 'directory' ? (
           <FolderRow
+            {...actions}
             key={node.path}
             node={node}
             depth={depth}
-            openAll={openAll}
-            onPreview={onPreview}
-            onDownload={onDownload}
+            startOpen={openFolders && !HEAVY.has(node.name)}
           />
         ) : (
           <li key={node.path} className="flex items-center gap-1">
             <button
               type="button"
               className={rowClass}
-              style={{ paddingLeft: `${0.5 + depth * 1.25}rem` }}
-              onClick={() => onPreview(node)}
+              style={indent(depth)}
+              onClick={() => actions.onPreview(node)}
             >
               <FileIcon node={node} />
               <span className="min-w-0 flex-1 truncate">{node.name}</span>
@@ -338,13 +321,18 @@ function FileList({
               size="icon-sm"
               variant="ghost"
               tooltip={`Download ${node.name}`}
-              onClick={() => onDownload(node)}
+              onClick={() => actions.onDownload(node)}
             >
               <Download aria-hidden />
             </Button>
           </li>
         ),
       )}
+      {truncated ? (
+        <li className="py-1.5 text-caption text-muted-foreground" style={indent(depth)}>
+          There’s more here than can be listed.
+        </li>
+      ) : null}
     </ul>
   );
 }
@@ -352,24 +340,17 @@ function FileList({
 function FolderRow({
   node,
   depth,
-  openAll,
-  onPreview,
-  onDownload,
-}: {
-  node: FileNode;
-  depth: number;
-  openAll: boolean;
-  onPreview: (node: FileNode) => void;
-  onDownload: (node: FileNode) => void;
-}) {
-  const [open, setOpen] = useState(openAll);
+  startOpen,
+  ...actions
+}: ListActions & { node: FileNode; depth: number; startOpen: boolean }) {
+  const [open, setOpen] = useState(startOpen);
   return (
     <li className="flex flex-col">
       <button
         type="button"
         aria-expanded={open}
         className={cn(rowClass, 'pr-10')}
-        style={{ paddingLeft: `${0.5 + depth * 1.25}rem` }}
+        style={indent(depth)}
         onClick={() => setOpen((shown) => !shown)}
       >
         <ChevronRight
@@ -381,20 +362,56 @@ function FolderRow({
         />
         <FileIcon node={node} open={open} />
         <span className="min-w-0 flex-1 truncate">{node.name}</span>
-        <span className="shrink-0 text-caption text-muted-foreground tabular-nums">
-          {node.children.length}
-        </span>
       </button>
-      {open && node.children.length > 0 ? (
-        <FileList
-          nodes={node.children}
-          depth={depth + 1}
-          openAll={openAll}
-          onPreview={onPreview}
-          onDownload={onDownload}
-        />
-      ) : null}
+      {open ? <FolderContents {...actions} path={node.path} depth={depth + 1} /> : null}
     </li>
+  );
+}
+
+/** An open folder's contents, listed when it opens. */
+function FolderContents({ path, depth, ...actions }: ListActions & { path: string; depth: number }) {
+  const listing = useTaskFolder(actions.taskId, path);
+  if (listing.isPending) {
+    return (
+      <p
+        role="status"
+        className="flex items-center gap-2 py-1.5 text-caption text-muted-foreground"
+        style={indent(depth)}
+      >
+        <Spinner className="size-3.5" />
+        Listing it…
+      </p>
+    );
+  }
+  if (listing.isError) {
+    return (
+      <p
+        className="flex items-center gap-2 py-1.5 text-caption text-destructive-foreground"
+        style={indent(depth)}
+      >
+        Couldn’t list it: {errorMessage(listing.error)}
+        <Button size="sm" variant="ghost" onClick={() => listing.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  }
+  const nodes = folderEntries(listing.data.items, path);
+  if (nodes.length === 0) {
+    return (
+      <p className="py-1.5 text-caption text-muted-foreground" style={indent(depth)}>
+        Empty
+      </p>
+    );
+  }
+  return (
+    <FileList
+      {...actions}
+      nodes={nodes}
+      depth={depth}
+      openFolders={false}
+      truncated={listing.data.truncated}
+    />
   );
 }
 
@@ -411,6 +428,8 @@ async function previewOf(taskId: string, node: FileNode, signal: AbortSignal): P
   const limit = image ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES;
   if (node.size !== null && node.size > limit) return { kind: 'large' };
   const blob = await fetchTaskFile(taskId, node.path, signal);
+  // The listing's size can be a link's, or out of date: the bytes are what count.
+  if (blob.size > limit) return { kind: 'large' };
   if (image) return { kind: 'image', blob: new Blob([blob], { type: image }) };
   const bytes = new Uint8Array(await blob.arrayBuffer());
   // A NUL in the first few kilobytes: not text.

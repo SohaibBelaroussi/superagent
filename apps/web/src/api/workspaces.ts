@@ -16,12 +16,15 @@ export const workspaceKeys = {
 
 const taskPath = (id: string, rest = '') => `/v1/tasks/${encodeURIComponent(id)}${rest}`;
 
-/** Every file and folder of a task's workspace, down to the API's deepest listing. */
-export function useTaskFiles(taskId: string) {
+/** What is directly in a folder of a task's workspace ("" for its own). */
+export function useTaskFolder(taskId: string, path: string) {
   return useQuery({
-    queryKey: workspaceKeys.files(taskId),
+    queryKey: [...workspaceKeys.files(taskId), path],
     queryFn: ({ signal }) =>
-      api(WorkspaceListingSchema, taskPath(taskId, '/files'), { signal, query: { depth: 10 } }),
+      api(WorkspaceListingSchema, taskPath(taskId, '/files'), {
+        signal,
+        query: { path: path || undefined, depth: 1 },
+      }),
   });
 }
 

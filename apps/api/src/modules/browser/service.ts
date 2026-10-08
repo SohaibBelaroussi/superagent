@@ -47,6 +47,9 @@ interface Session {
   stream?: ScreencastStream;
   streaming?: Promise<void>;
   viewport?: { width: number; height: number };
+  /** The page and the last frame: what a viewer that joins sees first. */
+  url?: string;
+  frame?: string;
 }
 
 /** A live view's socket: text messages out, closed by the server when the session can't be shown. */
@@ -264,7 +267,16 @@ export class BrowserService {
     this.send(viewer, { status: 'connected' });
     const session = this.sessions.get(key);
     if (session) {
+      // A viewer that joins (or comes back) hears how things are: who has the browser, and, while it
+      // streams, what it shows. The stream only says what changes.
       if (session.takenOver) this.send(viewer, { status: 'taken_over' });
+      else if (session.kind === 'task') this.send(viewer, { status: 'released' });
+      if (session.stream?.isActive()) {
+        this.send(viewer, { status: 'streaming' });
+        if (session.viewport) this.send(viewer, { viewport: session.viewport });
+        if (session.url) this.send(viewer, { url: session.url });
+        if (session.frame) this.sendRaw(viewer, session.frame);
+      }
       void this.startStream(session);
     } else {
       this.send(viewer, { status: 'browser_closed' });
@@ -577,16 +589,23 @@ export class BrowserService {
             session.viewport = { width, height };
             this.broadcast(session.key, { viewport: { width, height } });
           }
+          session.frame = frame.data;
           this.broadcastRaw(session.key, frame.data);
         });
-        stream.on('url', (url: string) => this.broadcast(session.key, { url }));
+        stream.on('url', (url: string) => {
+          session.url = url;
+          this.broadcast(session.key, { url });
+        });
         stream.on('stop', () => {
           if (session.stream === stream) session.stream = undefined;
         });
         stream.on('error', () => {});
         this.broadcast(session.key, { status: 'streaming' });
         const url = await session.browser.getCurrentUrl().catch(() => null);
-        if (url) this.broadcast(session.key, { url });
+        if (url) {
+          session.url = url;
+          this.broadcast(session.key, { url });
+        }
       } catch (error) {
         this.deps.logger.debug('Live view could not start', { key: session.key, error });
       } finally {
@@ -661,8 +680,12 @@ export class BrowserService {
   }
 
   private send(viewer: Viewer, event: BrowserViewerEvent): void {
+    this.sendRaw(viewer, JSON.stringify(event));
+  }
+
+  private sendRaw(viewer: Viewer, data: string): void {
     try {
-      viewer.socket.send(JSON.stringify(event));
+      viewer.socket.send(data);
     } catch {
       // the viewer left
     }

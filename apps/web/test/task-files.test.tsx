@@ -3,7 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fileTree } from '../src/features/tasks/task-files';
+import { folderEntries } from '../src/features/tasks/task-files';
 import { api, server, signedInHandlers, task } from './msw';
 import { renderApp } from './render';
 
@@ -17,27 +17,38 @@ const problem = (status: number, detail: string) =>
     { status, headers: { 'content-type': 'application/problem+json' } },
   );
 
-/** A task, its files (or the problem listing them answers), and the bytes of each file by path. */
+/**
+ * A task, its workspace (or the problem listing it answers), and the bytes of each file by path. The
+ * workspace is listed as the API does with depth 1: what is directly in the folder asked for.
+ */
 function withFiles(
   current: Task,
-  listing: { items: WorkspaceEntry[]; truncated?: boolean } | (() => Response),
+  workspace: { items: WorkspaceEntry[]; truncated?: string[] } | (() => Response),
   contents: Record<string, Uint8Array | string> = {},
-  fetched: string[] = [],
+  seen: { listed: string[]; fetched: string[] } = { listed: [], fetched: [] },
 ) {
   return [
     http.get(api(`/v1/tasks/${current.id}`), () => HttpResponse.json(current)),
     http.get(api(`/v1/tasks/${current.id}/events`), () => HttpResponse.json({ items: [] })),
     http.get(api(`/v1/tasks/${current.id}/artifacts`), () => HttpResponse.json({ items: [] })),
-    http.get(api(`/v1/tasks/${current.id}/files`), () =>
-      typeof listing === 'function' ? listing() : HttpResponse.json({ truncated: false, ...listing }),
-    ),
+    http.get(api(`/v1/tasks/${current.id}/files`), ({ request }) => {
+      if (typeof workspace === 'function') return workspace();
+      const params = new URL(request.url).searchParams;
+      const path = params.get('path') ?? '';
+      seen.listed.push(`${path || '.'}@${params.get('depth')}`);
+      const prefix = path ? `${path}/` : '';
+      const items = workspace.items.filter(
+        (entry) => entry.path.startsWith(prefix) && !entry.path.slice(prefix.length).includes('/'),
+      );
+      return HttpResponse.json({ items, truncated: workspace.truncated?.includes(path) ?? false });
+    }),
     http.get(api(`/v1/tasks/${current.id}/files/*`), ({ request }) => {
       const path = new URL(request.url).pathname
         .split('/files/')[1]
         ?.split('/')
         .map(decodeURIComponent)
         .join('/');
-      fetched.push(path ?? '');
+      seen.fetched.push(path ?? '');
       const body = path === undefined ? undefined : contents[path];
       if (body === undefined) return problem(404, 'No such file or folder in the workspace');
       return new HttpResponse(body, { headers: { 'content-type': 'application/octet-stream' } });
@@ -65,30 +76,38 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('a workspace as a tree', () => {
-  it('puts folders first, in name order with numbers in order, and fills in folders left out', () => {
-    const tree = fileTree([
+describe('a workspace folder', () => {
+  it('holds what is directly in it: folders first, in name order with numbers in order', () => {
+    const entries = [
       file('b.txt'),
       file('a10.txt'),
       file('a2.txt'),
-      file('src/lib/util.ts'),
       folder('src'),
       folder('data'),
       file('./notes.md'),
       folder('.'),
+      // Deeper: not in this folder.
+      file('src/lib/util.ts'),
+    ];
+    expect(folderEntries(entries, '').map((node) => node.name)).toEqual([
+      'data',
+      'src',
+      'a2.txt',
+      'a10.txt',
+      'b.txt',
+      'notes.md',
     ]);
-    expect(tree.map((node) => node.name)).toEqual(['data', 'src', 'a2.txt', 'a10.txt', 'b.txt', 'notes.md']);
-    const src = tree[1];
-    expect(src?.modifiedAt).toBe(AT);
-    // "src/lib" wasn't listed: it is there, with its file.
-    expect(src?.children.map((node) => `${node.type}:${node.path}`)).toEqual(['directory:src/lib']);
-    expect(src?.children[0]?.children.map((node) => node.path)).toEqual(['src/lib/util.ts']);
+    expect(folderEntries([file('src/main.ts'), folder('src/lib'), file('src/lib/util.ts')], 'src')).toEqual([
+      { name: 'lib', path: 'src/lib', type: 'directory', size: null, modifiedAt: AT },
+      { name: 'main.ts', path: 'src/main.ts', type: 'file', size: 10, modifiedAt: AT },
+    ]);
   });
 });
 
 describe('a task’s files', () => {
-  it('lists them, and shows text and markdown files', async () => {
+  it('lists them a folder at a time, and shows text and markdown files', async () => {
     const current = task({ title: 'Score frameworks' });
+    const seen = { listed: [] as string[], fetched: [] as string[] };
     server.use(
       ...withFiles(
         current,
@@ -97,27 +116,31 @@ describe('a task’s files', () => {
             file('README.md', 52),
             folder('data'),
             file('data/scores.csv', 41),
-            file('src/hello.js', 19),
+            folder('node_modules'),
+            folder('node_modules/left-pad'),
           ],
         },
         {
           'README.md': '# Framework comparison\n\nScores from the **shortlist**.\n',
           'data/scores.csv': 'framework,score\nmastra,9\n',
         },
+        seen,
       ),
     );
     renderApp(`/tasks/${current.id}?view=files`);
     const user = userEvent.setup();
 
-    expect(await screen.findByText('3 files')).toBeVisible();
-    const list = screen.getByRole('list', { name: 'Files' });
-    const names = within(list)
-      .getAllByRole('button')
-      .map((button) => button.textContent ?? '')
-      .filter((text) => text.length > 0);
-    expect(names[0]).toMatch(/^data/);
-    expect(names[1]).toMatch(/^scores\.csv/);
+    const list = await screen.findByRole('list', { name: 'Files' });
+    // A few folders at the top start open, but not what tools installed.
+    expect(await within(list).findByRole('button', { name: /^scores\.csv/ })).toBeVisible();
     expect(within(list).getByRole('button', { name: /^data/ })).toHaveAttribute('aria-expanded', 'true');
+    const modules = within(list).getByRole('button', { name: /^node_modules/ });
+    expect(modules).toHaveAttribute('aria-expanded', 'false');
+    expect(seen.listed).toEqual(['.@1', 'data@1']);
+    // Opening one lists it then.
+    await user.click(modules);
+    expect(await within(list).findByRole('button', { name: /^left-pad/ })).toBeVisible();
+    expect(seen.listed).toContain('node_modules@1');
 
     await user.click(within(list).getByRole('button', { name: /^README\.md/ }));
     const dialog = await screen.findByRole('dialog', { name: 'README.md' });
@@ -134,15 +157,50 @@ describe('a task’s files', () => {
     await waitFor(() => expect(csv.querySelector('pre')).toHaveTextContent('framework,score mastra,9'));
   });
 
+  it('keeps folders closed when there are many, and says when a folder holds more than listed', async () => {
+    const current = task();
+    server.use(
+      ...withFiles(current, {
+        items: ['a', 'b', 'c', 'd', 'e'].map((name) => folder(name)).concat([file('e/1.txt')]),
+        truncated: ['e'],
+      }),
+    );
+    renderApp(`/tasks/${current.id}?view=files`);
+    const user = userEvent.setup();
+    const list = await screen.findByRole('list', { name: 'Files' });
+    for (const name of ['a', 'b', 'c', 'd', 'e']) {
+      expect(within(list).getByRole('button', { name: new RegExp(`^${name}`) })).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      );
+    }
+    await user.click(within(list).getByRole('button', { name: /^e/ }));
+    expect(await within(list).findByText('There’s more here than can be listed.')).toBeVisible();
+    await user.click(within(list).getByRole('button', { name: /^a/ }));
+    expect(await within(list).findByText('Empty')).toBeVisible();
+  });
+
   it('shows an image, and says when a file can’t be shown here', async () => {
     const current = task();
-    const fetched: string[] = [];
+    const seen = { listed: [] as string[], fetched: [] as string[] };
     server.use(
       ...withFiles(
         current,
-        { items: [file('chart.png', 2048), file('archive.bin', 64), file('huge.log', 5 * 1024 * 1024)] },
-        { 'chart.png': new Uint8Array([137, 80, 78, 71]), 'archive.bin': new Uint8Array([80, 75, 0, 3, 4]) },
-        fetched,
+        {
+          items: [
+            file('chart.png', 2048),
+            file('archive.bin', 64),
+            file('huge.log', 5 * 1024 * 1024),
+            // Listed small (a link), but more than a preview takes.
+            { path: 'latest.log', type: 'symlink', size: 12, modifiedAt: AT },
+          ],
+        },
+        {
+          'chart.png': new Uint8Array([137, 80, 78, 71]),
+          'archive.bin': new Uint8Array([80, 75, 0, 3, 4]),
+          'latest.log': 'x'.repeat(1024 * 1024 + 1),
+        },
+        seen,
       ),
     );
     renderApp(`/tasks/${current.id}?view=files`);
@@ -163,10 +221,16 @@ describe('a task’s files', () => {
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
-    // Too large to show: it isn't even fetched.
+    // Too large by its listing: not even fetched.
     await user.click(within(list).getByRole('button', { name: /^huge\.log/ }));
     expect(await screen.findByText('Too large to show here: download it.')).toBeVisible();
-    expect(fetched).toEqual(['chart.png', 'archive.bin']);
+    expect(seen.fetched).toEqual(['chart.png', 'archive.bin']);
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    // Too large by what came: not shown.
+    await user.click(within(list).getByRole('button', { name: /^latest\.log/ }));
+    expect(await screen.findByText('Too large to show here: download it.')).toBeVisible();
   });
 
   it('downloads a file through the browser’s own download', async () => {
@@ -174,7 +238,7 @@ describe('a task’s files', () => {
     server.use(
       ...withFiles(
         current,
-        { items: [file('src/hello.js', 19)] },
+        { items: [folder('src'), file('src/hello.js', 19)] },
         { 'src/hello.js': 'console.log(6 * 7)\n' },
       ),
     );
@@ -204,13 +268,6 @@ describe('a task’s files', () => {
     expect(await screen.findByText('Workspaces can’t be read now', {}, { timeout: 8_000 })).toBeVisible();
     expect(screen.getByText('Sandboxes are off: set RUNNER_URL and RUNNER_TOKEN')).toBeVisible();
   });
-
-  it('says when there are more files than listed', async () => {
-    const current = task();
-    server.use(...withFiles(current, { items: [file('a.txt')], truncated: true }));
-    renderApp(`/tasks/${current.id}?view=files`);
-    expect(await screen.findByText('There are more files than shown here.')).toBeVisible();
-  });
 });
 
 describe('a task’s tabs', () => {
@@ -222,7 +279,7 @@ describe('a task’s tabs', () => {
     expect(await screen.findByRole('tab', { name: 'Activity', selected: true })).toBeVisible();
     await user.click(screen.getByRole('tab', { name: 'Files' }));
     await waitFor(() => expect(router.state.location.search).toBe('?view=files'));
-    expect(await screen.findByText('1 file')).toBeVisible();
+    expect(await screen.findByRole('button', { name: /^notes\.txt/ })).toBeVisible();
     await user.click(screen.getByRole('tab', { name: 'Activity' }));
     await waitFor(() => expect(router.state.location.search).toBe(''));
   });

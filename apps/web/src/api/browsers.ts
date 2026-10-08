@@ -111,7 +111,8 @@ export function useCloseTaskBrowser(taskId: string) {
     mutationFn: () => apiVoid(`/v1/tasks/${encodeURIComponent(taskId)}/browser`, { method: 'DELETE' }),
     onSuccess: () => {
       queryClient.setQueryData(browserKeys.ofTask(taskId), null);
-      void queryClient.invalidateQueries({ queryKey: browserKeys.open });
+      // Its identity is free again, as well as gone from the open browsers.
+      refreshBrowsers(queryClient);
     },
     meta: { failure: 'Couldn’t close the browser' },
   });

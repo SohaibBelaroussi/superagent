@@ -20,13 +20,15 @@ const VIRTUAL_KEYS: Record<string, number> = {
 
 /**
  * A key's Windows virtual key code, which Chromium needs to act on a key that types nothing and to run
- * a shortcut (Ctrl+A, Ctrl+C): the named keys above, and letters and digits by their place on the
- * keyboard (`code`), or by the character when there is no code.
+ * a shortcut (Ctrl+A, Ctrl+C), as Windows reports it:
+ * - the named keys above;
+ * - a letter or digit by what it is on the layout in use, so Ctrl+A selects all on AZERTY and Ctrl+Z
+ *   undoes on QWERTZ;
+ * - on a layout without Latin letters (Cyrillic, Greek), by the key's place (`code`).
  */
 export function virtualKey(key?: string, code?: string): number | undefined {
-  if (key !== undefined && VIRTUAL_KEYS[key] !== undefined) return VIRTUAL_KEYS[key];
-  const physical = code ? (/^Key([A-Z])$/.exec(code)?.[1] ?? /^Digit([0-9])$/.exec(code)?.[1]) : undefined;
-  if (physical) return physical.charCodeAt(0);
+  if (key !== undefined && Object.hasOwn(VIRTUAL_KEYS, key)) return VIRTUAL_KEYS[key];
   if (key && /^[a-z0-9]$/i.test(key)) return key.toUpperCase().charCodeAt(0);
-  return undefined;
+  const physical = code ? (/^Key([A-Z])$/.exec(code)?.[1] ?? /^Digit([0-9])$/.exec(code)?.[1]) : undefined;
+  return physical?.charCodeAt(0);
 }

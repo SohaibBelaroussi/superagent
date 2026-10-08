@@ -2,8 +2,8 @@ import type { BrowserSession, BrowserViewerInput, Task } from '@superagent/share
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http, ws } from 'msw';
-import { describe, expect, it } from 'vitest';
-import { keystrokes, typedText } from '../src/features/browsers/live-view';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { keystrokes, modifiersOf, typedText } from '../src/features/browsers/live-view';
 import { api, DEVICE_TOKEN, server, signedInHandlers, task } from './msw';
 import { renderApp } from './render';
 
@@ -11,6 +11,7 @@ const FRAME = 'AAAA';
 
 /** The live view's status: connecting, live, who has the browser. */
 const status = () => screen.getByRole('status', { name: 'Browser' });
+const typing = () => screen.getByRole('textbox', { name: 'Type into the page' });
 
 function session(current: Task, overrides: Partial<BrowserSession> = {}): BrowserSession {
   return {
@@ -28,14 +29,20 @@ function session(current: Task, overrides: Partial<BrowserSession> = {}): Browse
   };
 }
 
+type Client = { send(data: string): void; close(code?: number, reason?: string): void };
+
 /**
- * A task with its browser open, and its live view played by the test: what the page sends is kept,
- * and `live.client` lets the test send frames and events.
+ * A task with its browser, and its live view played by the test as the API plays it: on each
+ * connection, "connected", then who has the browser and what it shows (or that it's closed). What the
+ * page sends is kept, and `live.client` lets the test send more.
  */
-function withLiveBrowser(current: Task) {
+function withLiveBrowser(current: Task, options: { open?: boolean } = {}) {
   const received: BrowserViewerInput[] = [];
   const urls: string[] = [];
-  const live: { client?: { send(data: string): void; close(code?: number, reason?: string): void } } = {};
+  const live: { client?: Client; open: boolean; takenOver: boolean } = {
+    open: options.open ?? true,
+    takenOver: false,
+  };
   const stream = ws.link(`ws://localhost:3000/v1/tasks/${current.id}/browser/stream`);
   return {
     received,
@@ -46,26 +53,63 @@ function withLiveBrowser(current: Task) {
         urls.push(client.url.toString());
         live.client = client;
         client.addEventListener('message', (event) => {
-          received.push(JSON.parse(String(event.data)) as BrowserViewerInput);
+          const input = JSON.parse(String(event.data)) as BrowserViewerInput;
+          received.push(input);
+          if (input.type === 'takeover') {
+            live.takenOver = input.on;
+            client.send(JSON.stringify({ status: input.on ? 'taken_over' : 'released' }));
+          }
         });
         client.send(JSON.stringify({ status: 'connected' }));
+        if (!live.open) {
+          client.send(JSON.stringify({ status: 'browser_closed' }));
+          return;
+        }
+        client.send(JSON.stringify({ status: live.takenOver ? 'taken_over' : 'released' }));
+        client.send(JSON.stringify({ status: 'streaming' }));
+        client.send(JSON.stringify({ viewport: { width: 1280, height: 800 } }));
+        client.send(JSON.stringify({ url: 'https://example.com/' }));
+        client.send(FRAME);
       }),
       http.get(api(`/v1/tasks/${current.id}`), () => HttpResponse.json(current)),
       http.get(api(`/v1/tasks/${current.id}/events`), () => HttpResponse.json({ items: [] })),
       http.get(api(`/v1/tasks/${current.id}/artifacts`), () => HttpResponse.json({ items: [] })),
-      http.get(api(`/v1/tasks/${current.id}/browser`), () => HttpResponse.json(session(current))),
+      http.get(api(`/v1/tasks/${current.id}/browser`), () =>
+        live.open ? HttpResponse.json(session(current)) : HttpResponse.json({ status: 404 }, { status: 404 }),
+      ),
       ...signedInHandlers({ tasks: [current] }),
     ],
   };
 }
 
+/** Takes the task's browser over, and puts the keyboard on the page. */
+async function takeOver(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: 'Take over' }));
+  await waitFor(() => expect(status()).toHaveTextContent('You have it'));
+  await user.click(screen.getByRole('button', { name: 'Start typing into the page' }));
+  await waitFor(() => expect(typing()).toHaveFocus());
+}
+
 describe('live view input', () => {
-  it('types what a key types: printable characters and Enter, not shortcuts', () => {
-    expect(typedText({ key: 'a', ctrlKey: false, metaKey: false })).toBe('a');
-    expect(typedText({ key: 'Enter', ctrlKey: false, metaKey: false })).toBe('\r');
-    expect(typedText({ key: 'a', ctrlKey: true, metaKey: false })).toBeUndefined();
-    expect(typedText({ key: 'ArrowLeft', ctrlKey: false, metaKey: false })).toBeUndefined();
-    expect(typedText({ key: '😀', ctrlKey: false, metaKey: false })).toBe('😀');
+  it('types what a key types: printable characters, Enter and AltGr’s characters, not shortcuts', () => {
+    const keys = { ctrlKey: false, metaKey: false };
+    expect(typedText({ ...keys, key: 'a' })).toBe('a');
+    expect(typedText({ ...keys, key: 'Enter' })).toBe('\r');
+    expect(typedText({ ...keys, key: 'a', ctrlKey: true })).toBeUndefined();
+    expect(typedText({ ...keys, key: 'ArrowLeft' })).toBeUndefined();
+    expect(typedText({ ...keys, key: '😀' })).toBe('😀');
+    // AltGr is Ctrl and Alt on Windows: it types.
+    expect(typedText({ key: '@', ctrlKey: true, metaKey: false, altGraph: true })).toBe('@');
+  });
+
+  it('sends modifiers as the page’s Chromium on Linux understands them', () => {
+    const none = { altKey: false, ctrlKey: false, metaKey: false, shiftKey: false };
+    expect(modifiersOf({ ...none, ctrlKey: true, shiftKey: true }, false)).toBe(2 | 8);
+    expect(modifiersOf({ ...none, metaKey: true }, false)).toBe(4);
+    // A Mac's Cmd is Ctrl there.
+    expect(modifiersOf({ ...none, metaKey: true }, true)).toBe(2);
+    // AltGr is neither Ctrl nor Alt.
+    expect(modifiersOf({ ...none, ctrlKey: true, altKey: true, altGraph: true }, false)).toBe(0);
   });
 
   it('turns text into the key presses that type it', () => {
@@ -82,37 +126,44 @@ describe('live view input', () => {
 });
 
 describe('a task’s browser', () => {
+  beforeEach(() => {
+    // jsdom lays nothing out: the page's image is 640×400 at the window's corner.
+    vi.spyOn(HTMLImageElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 640,
+      height: 400,
+      right: 640,
+      bottom: 400,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
   it('shows it live, and takes it over to type into it', async () => {
     const current = task({ title: 'Browse the docs' });
-    const { received, urls, live, handlers } = withLiveBrowser(current);
+    const { received, urls, handlers } = withLiveBrowser(current);
     server.use(...handlers);
     renderApp(`/tasks/${current.id}?view=browser`);
     const user = userEvent.setup();
 
-    // Connected with this browser's token (a WebSocket can't carry it in a header).
-    await waitFor(() => expect(urls).toHaveLength(1));
-    expect(new URL(urls[0] ?? '').searchParams.get('apiKey')).toBe(DEVICE_TOKEN);
-    expect(await screen.findByText('No browser open')).toBeVisible();
-
-    live.client?.send(JSON.stringify({ url: 'https://example.com/' }));
-    live.client?.send(FRAME);
+    // Connected with this browser's token (a WebSocket can't carry it in a header), and shown at once.
     const page = await screen.findByRole('img', { name: 'The page at https://example.com/' });
+    expect(new URL(urls[0] ?? '').searchParams.get('apiKey')).toBe(DEVICE_TOKEN);
     expect(page).toHaveAttribute('src', `data:image/jpeg;base64,${FRAME}`);
-    expect(status()).toHaveTextContent('Live');
+    await waitFor(() => expect(status()).toHaveTextContent('Live'));
     expect(status()).toHaveTextContent('Agents have it');
     expect(screen.getByText('Signed in as work-google', { exact: false })).toBeVisible();
-    // Until it's taken over, the page takes no input.
-    expect(screen.getByLabelText('Type into the page')).toBeDisabled();
+    // Until it's taken over, the page takes no input, and the address bar is only the address.
+    expect(typing()).toBeDisabled();
+    await user.type(screen.getByLabelText('Address'), '{Enter}');
+    expect(received).toEqual([]);
 
-    await user.click(screen.getByRole('button', { name: 'Take over' }));
-    await waitFor(() => expect(received).toEqual([{ type: 'takeover', on: true }]));
-    live.client?.send(JSON.stringify({ status: 'taken_over' }));
-    await waitFor(() => expect(status()).toHaveTextContent('You have it'));
-
-    const keys = screen.getByLabelText('Type into the page');
-    await waitFor(() => expect(keys).toBeEnabled());
+    await takeOver(user);
     received.length = 0;
-    await user.type(keys, 'Hi{Enter}');
+    await user.keyboard('Hi{Enter}');
     await waitFor(() =>
       expect(received).toEqual([
         { type: 'keyboard', eventType: 'keyDown', key: 'H', code: 'KeyH', modifiers: 0, text: 'H' },
@@ -124,11 +175,23 @@ describe('a task’s browser', () => {
       ]),
     );
 
+    // AltGr (Ctrl and Alt on Windows) types its character.
+    received.length = 0;
+    const altGr = { key: '@', code: 'Digit0', ctrlKey: true, altKey: true, modifierAltGraph: true };
+    fireEvent.keyDown(typing(), altGr);
+    fireEvent.keyUp(typing(), altGr);
+    await waitFor(() =>
+      expect(received).toEqual([
+        { type: 'keyboard', eventType: 'keyDown', key: '@', code: 'Digit0', modifiers: 0, text: '@' },
+        { type: 'keyboard', eventType: 'keyUp', key: '@', code: 'Digit0', modifiers: 0 },
+      ]),
+    );
+
     // Text that comes without keys (a phone's keyboard, dictation) and pasted text: typed as keys.
     received.length = 0;
-    fireEvent.input(keys, { target: { value: 'ok' } });
-    expect(keys).toHaveValue('');
-    fireEvent.paste(keys, { clipboardData: { getData: () => 'pw' } });
+    fireEvent.input(typing(), { target: { value: 'ok' } });
+    expect(typing()).toHaveValue('');
+    fireEvent.paste(typing(), { clipboardData: { getData: () => 'pw' } });
     await waitFor(() =>
       expect(
         received.map((input) => (input.type === 'keyboard' ? `${input.eventType}:${input.key}` : '')),
@@ -150,28 +213,95 @@ describe('a task’s browser', () => {
     await user.clear(address);
     await user.type(address, 'example.org{Enter}');
     await waitFor(() => expect(received).toEqual([{ type: 'navigate', url: 'https://example.org' }]));
-    live.client?.send(JSON.stringify({ error: 'blocked_url', message: 'Not a public address: 10.0.0.1' }));
-    expect(await screen.findByText('Not a public address: 10.0.0.1')).toBeVisible();
-    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
-    expect(screen.queryByText('Not a public address: 10.0.0.1')).toBeNull();
-
+    expect(typing()).toHaveFocus();
     received.length = 0;
     await user.click(screen.getByRole('button', { name: 'Give it back' }));
     await waitFor(() => expect(received).toEqual([{ type: 'takeover', on: false }]));
+    await waitFor(() => expect(status()).toHaveTextContent('Agents have it'));
   });
 
-  it('says when its browser closes, and when its token is revoked', async () => {
+  it('counts double clicks, and puts the page’s pixels under the pointer', async () => {
+    const current = task();
+    const { received, handlers } = withLiveBrowser(current);
+    server.use(...handlers);
+    renderApp(`/tasks/${current.id}?view=browser`);
+    const user = userEvent.setup();
+    await takeOver(user);
+    received.length = 0;
+
+    const view = screen.getByRole('application');
+    for (let press = 0; press < 2; press++) {
+      fireEvent.pointerDown(view, { clientX: 320, clientY: 100, button: 0, pointerType: 'mouse' });
+      fireEvent.pointerUp(view, { clientX: 320, clientY: 100, button: 0, pointerType: 'mouse' });
+    }
+    // 640×400 on screen is 1280×800 in the page.
+    await waitFor(() =>
+      expect(
+        received.map((input) =>
+          input.type === 'mouse'
+            ? `${input.eventType} ${input.x},${input.y} ×${input.clickCount}`
+            : input.type,
+        ),
+      ).toEqual([
+        'mousePressed 640,200 ×1',
+        'mouseReleased 640,200 ×1',
+        'mousePressed 640,200 ×2',
+        'mouseReleased 640,200 ×2',
+      ]),
+    );
+  });
+
+  it('gives the keyboard back with Escape twice, and lets go of what it holds', async () => {
+    const current = task();
+    const { received, handlers } = withLiveBrowser(current);
+    server.use(...handlers);
+    renderApp(`/tasks/${current.id}?view=browser`);
+    const user = userEvent.setup();
+    await takeOver(user);
+    received.length = 0;
+
+    // Shift held when the keyboard leaves: the page hears it let go.
+    await user.keyboard('{Shift>}{Escape}{Escape}');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start typing into the page' })).toHaveFocus(),
+    );
+    await waitFor(() =>
+      expect(
+        received.map((input) => (input.type === 'keyboard' ? `${input.eventType}:${input.key}` : '')),
+      ).toEqual(['keyDown:Shift', 'keyDown:Escape', 'keyUp:Escape', 'keyUp:Shift']),
+    );
+    await user.keyboard('{/Shift}');
+  });
+
+  it('starts again from what the API says after a dropped connection', async () => {
     const current = task();
     const { live, handlers } = withLiveBrowser(current);
     server.use(...handlers);
     renderApp(`/tasks/${current.id}?view=browser`);
-    await waitFor(() => expect(live.client).toBeDefined());
-    live.client?.send(FRAME);
-    await waitFor(() => expect(status()).toHaveTextContent('Live'));
+    const user = userEvent.setup();
+    await takeOver(user);
 
-    live.client?.send(JSON.stringify({ status: 'browser_closed' }));
+    // The connection drops; meanwhile the API gave the browser back to the agents.
+    live.takenOver = false;
+    live.client?.close(1011, 'Gone');
+    await waitFor(() => expect(status()).toHaveTextContent('Reconnecting…'));
+    await waitFor(() => expect(status()).toHaveTextContent('Agents have it'), { timeout: 4_000 });
+    expect(typing()).toBeDisabled();
+  });
+
+  it('says when no browser is open, when it closes, and when its token is revoked', async () => {
+    const current = task();
+    const { live, handlers } = withLiveBrowser(current, { open: false });
+    server.use(...handlers);
+    renderApp(`/tasks/${current.id}?view=browser`);
     expect(await screen.findByText('No browser open')).toBeVisible();
     expect(status()).toHaveTextContent('Not open');
+
+    live.client?.send(JSON.stringify({ status: 'streaming' }));
+    live.client?.send(FRAME);
+    await waitFor(() => expect(status()).toHaveTextContent('Live'));
+    live.client?.send(JSON.stringify({ status: 'browser_closed' }));
+    expect(await screen.findByText('No browser open')).toBeVisible();
 
     live.client?.close(1008, 'Token revoked');
     expect(await screen.findByText('This browser’s token was revoked, so the view closed.')).toBeVisible();

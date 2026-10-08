@@ -309,12 +309,19 @@ Each milestone ends like the API's: tests pass, a PR, one review, fixes, CI gree
   - identities and their sign-in sessions, over the live-view WebSocket (`?apiKey=`, which the request log never records).
 
 **Built:**
-- **A task's files** (the Files tab, `/tasks/:id?view=files`): what its agents wrote in the workspace, as a tree (folders first, numbers in order), refreshed with the task's events. A file opens in a preview: text as it is, Markdown formatted or as source, images; anything else, or too large to show, downloads. Downloads go through the browser's own, from the bytes the API sends with the session's token.
+- **A task's files** (the Files tab, `/tasks/:id?view=files`): what its agents wrote in the workspace, as a tree (folders first, numbers in order) listed a folder at a time, so what tools installed (a `node_modules`, a `.git`) never crowds out the rest; refreshed with the task's events. A file opens in a preview: text as it is, Markdown formatted or as source, images; anything else, or too large to show, downloads. Downloads go through the browser's own, from the bytes the API sends with the session's token.
 - **A task's browser** (the Browser tab): the live view of the browser its agents use, as it browses. Taking it over pauses their browser tools until it's given back; then the address bar navigates, and the mouse, wheel and keyboard go to the page. Closing it saves its identity's cookies.
-- **The live view** (`features/browsers/live-view.tsx`) is a WebSocket of its own while on screen, with the device token as `?apiKey=`: JPEG frames are written straight into an image (no render per frame), and its size comes from the frames, as input is in their pixels. The keyboard goes through a hidden text field: keys as keys, and text that comes without them (a phone's keyboard, an input method, dictation, a paste) as the key presses that type it. On a touch screen a tap clicks and a drag scrolls. It reconnects after a drop, and closes when the token is revoked.
+- **The live view** (`features/browsers/live-view.tsx`) is a WebSocket of its own while on screen, with the device token as `?apiKey=`. A viewer that joins (or reconnects) first hears how things are: who has the browser, and, while it streams, its viewport, address and last frame. JPEG frames are written straight into an image (no render per frame), and its size comes from the frames, as input is in their pixels; clicks are counted for double and triple clicks.
+
+  The keyboard goes to the page through a hidden text field, entered by clicking the page (or the keyboard button) and left with Escape twice:
+  - keys go as keys, with AltGr's characters typed and a Mac's Cmd sent as Ctrl;
+  - text that comes without keys (a phone's keyboard, an input method, dictation, a paste) goes as the key presses that type it;
+  - what is held down is let go when the keyboard leaves.
+
+  On a touch screen a tap clicks and a drag scrolls. It reconnects after a drop, and closes when the token is revoked.
 - **Browsers** (`/settings/browsers`): identities, with who holds each (a task's browser, or your sign-in); making and deleting them; signing one in (`/settings/browsers/:id/sign-in`), its browser yours from the start until Done saves the sign-ins. The browsers open now: tasks', sign-in sessions and the page reader, each with a way to close it.
 - **Sandboxes** (`/settings/sandboxes`): each task's container, running or stopped, linked to its task's files; removing one leaves the files.
-- The API now gives Chromium the key codes shortcuts need (Ctrl+A, Ctrl+C), by the key's place on the keyboard.
+- The API now gives Chromium the key codes shortcuts need (Ctrl+A, Ctrl+C), by what the key is on the layout in use (by its place on a layout without Latin letters), and replays a live view's state to a viewer that joins.
 
 ## 6. Risks
 

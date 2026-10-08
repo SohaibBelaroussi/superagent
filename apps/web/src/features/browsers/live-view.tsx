@@ -3,7 +3,7 @@ import {
   BrowserViewerEventSchema,
   type BrowserViewerInput,
 } from '@superagent/shared';
-import { Globe, Hand, MousePointerClick } from 'lucide-react';
+import { Globe, Hand, Keyboard, MousePointerClick } from 'lucide-react';
 import {
   type ClipboardEvent,
   type CompositionEvent,
@@ -12,6 +12,7 @@ import {
   type PointerEvent,
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
 } from 'react';
@@ -48,12 +49,34 @@ const INITIAL: LiveState = { status: 'connecting', url: null, viewport: null, ta
 const RETRY_MS = [1_000, 2_000, 5_000, 10_000];
 /** The most of a paste typed into the page: it goes a key at a time. */
 export const MAX_TYPED = 2_000;
+/** Two presses of a button this close in time and place make a double click (then a triple). */
+const MULTI_CLICK_MS = 500;
+const MULTI_CLICK_SLOP = 4;
+/** Escape twice within this gives the keyboard back to the app. */
+const LEAVE_MS = 600;
 
-/** CDP's modifier bits: Alt 1, Ctrl 2, Meta 4, Shift 8. */
-function modifiersOf(event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) {
-  return (
-    (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0)
-  );
+/** The page runs Chromium on Linux, where shortcuts take Ctrl: a Mac's Cmd is sent as Ctrl. */
+const MAC =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+interface Keys {
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  /** AltGr, which Windows reports as Ctrl and Alt together. */
+  altGraph?: boolean;
+}
+
+/**
+ * CDP's modifier bits (Alt 1, Ctrl 2, Meta 4, Shift 8) for the page. AltGr is neither Ctrl nor Alt
+ * there (Chromium types nothing with Ctrl down), and a Mac's Cmd is Ctrl.
+ */
+export function modifiersOf(event: Keys, mac = MAC): number {
+  const ctrl = event.altGraph ? false : event.ctrlKey || (mac && event.metaKey);
+  const alt = event.altGraph ? false : event.altKey;
+  const meta = !mac && event.metaKey;
+  return (alt ? 1 : 0) | (ctrl ? 2 : 0) | (meta ? 4 : 0) | (event.shiftKey ? 8 : 0);
 }
 
 const BUTTONS = ['left', 'middle', 'right'] as const;
@@ -70,10 +93,10 @@ const EDITS: Record<string, { key: string; code: string; text?: string }> = {
 
 /**
  * What a key types: a printable character, or a carriage return for Enter. Shortcuts (Ctrl or Cmd
- * with a key) type nothing.
+ * with a key) type nothing; AltGr with a key types its character (@, #, € on many layouts).
  */
-export function typedText(event: { key: string; ctrlKey: boolean; metaKey: boolean }): string | undefined {
-  if (event.ctrlKey || event.metaKey) return undefined;
+export function typedText(event: Pick<Keys, 'ctrlKey' | 'metaKey' | 'altGraph'> & { key: string }) {
+  if ((event.ctrlKey && !event.altGraph) || event.metaKey) return undefined;
   if (event.key === 'Enter') return '\r';
   return [...event.key].length === 1 ? event.key : undefined;
 }
@@ -93,16 +116,29 @@ export function keystrokes(text: string): BrowserViewerInput[] {
   });
 }
 
+/** A paste shortcut, whatever the layout: Ctrl or Cmd with V (or the key in its place), or Shift+Insert. */
+const isPaste = (event: {
+  key: string;
+  code: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}) =>
+  ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'v' || event.code === 'KeyV')) ||
+  (event.shiftKey && event.key === 'Insert');
+
 /**
  * The live view's connection: its state, the image its frames go into, and a way to send input.
  * Frames are written straight into the image, not through React state, so a busy page costs no
- * renders. It connects again after a drop, unless the token was revoked.
+ * renders. It connects again after a drop, unless the token was revoked. Each connection starts from
+ * what the API tells it (who has the browser, what it shows): `connection` counts them.
  */
 export function useLiveView(path: string) {
   const { state: session } = useSession();
   const token = session.status === 'signed-in' ? session.token : null;
   const [state, setState] = useState<LiveState>(INITIAL);
   const [hasFrame, setHasFrame] = useState(false);
+  const [connection, setConnection] = useState(0);
   const image = useRef<HTMLImageElement>(null);
   const socket = useRef<WebSocket | null>(null);
 
@@ -125,9 +161,12 @@ export function useLiveView(path: string) {
         } else if (status === 'streaming') {
           setState((current) => ({ ...current, status: 'live' }));
         } else {
-          // Connected: live once frames come, waiting if the browser isn't open (it says so).
+          // Connected: what follows says whether the browser is open (streaming) or not (closed). Who
+          // has it is said again too: nothing is kept from a connection before.
           failures = 0;
-          setState((current) => ({ ...current, status: framed ? 'live' : 'waiting' }));
+          framed = false;
+          setConnection((count) => count + 1);
+          setState((current) => ({ ...current, status: 'connecting', takenOver: false, error: null }));
         }
       } else if ('url' in event) {
         setState((current) => ({ ...current, url: event.url }));
@@ -166,10 +205,10 @@ export function useLiveView(path: string) {
         if (closed) return;
         // 1008: the token was revoked. The session signs out; there is nothing to reconnect with.
         if (event.code === 1008) {
-          setState((current) => ({ ...current, status: 'refused' }));
+          setState((current) => ({ ...current, status: 'refused', takenOver: false }));
           return;
         }
-        setState((current) => ({ ...current, status: 'reconnecting' }));
+        setState((current) => ({ ...current, status: 'reconnecting', takenOver: false }));
         timer = setTimeout(connect, RETRY_MS[Math.min(failures, RETRY_MS.length - 1)]);
         failures++;
       };
@@ -193,7 +232,7 @@ export function useLiveView(path: string) {
 
   const clearError = useCallback(() => setState((current) => ({ ...current, error: null })), []);
 
-  return { state, hasFrame, image, send, clearError };
+  return { state, hasFrame, connection, image, send, clearError };
 }
 
 const STATUS: Record<LiveStatus, { label: string; tone: 'neutral' | 'green' | 'amber' | 'red' }> = {
@@ -224,18 +263,25 @@ export function LiveView({
   waiting: { title: string; description: string };
   onStatus?: (status: LiveStatus) => void;
 }) {
-  const { state, hasFrame, image, send, clearError } = useLiveView(path);
+  const { state, hasFrame, connection, image, send, clearError } = useLiveView(path);
   const interactive = state.status === 'live' && (kind === 'sign-in' || state.takenOver);
   const screen = useRef<HTMLDivElement>(null);
   /**
-   * Where the keyboard goes: a text field kept empty. Keys are sent as keys; text that comes without
-   * them (a phone's keyboard, an input method, dictation) is sent as typed characters.
+   * Where the keyboard goes: a text field kept empty, out of the tab order, entered by clicking the
+   * page (or the Keyboard button) and left with Escape twice. Keys are sent as keys; text that comes
+   * without them (a phone's keyboard, an input method, dictation) is sent as the keys that type it.
    */
   const keys = useRef<HTMLTextAreaElement>(null);
+  const keyboardButton = useRef<HTMLButtonElement>(null);
+  const hintId = useId();
   const composing = useRef(false);
-  /** Keys pressed while the page had the keyboard: only their releases go to it. */
-  const held = useRef(new Set<string>());
-  const pressed = useRef<(typeof BUTTONS)[number] | null>(null);
+  /** What an input method committed: some browsers send it again as input after it ends. */
+  const committed = useRef<string | null>(null);
+  /** Keys pressed while the page had the keyboard: only their releases go to it, all of them on leaving. */
+  const held = useRef(new Map<string, { key: string; code: string }>());
+  const lastEscape = useRef(0);
+  const pressed = useRef<{ button: (typeof BUTTONS)[number]; count: number } | null>(null);
+  const lastPress = useRef<{ at: number; x: number; y: number; button: number; count: number } | null>(null);
   const moving = useRef<{ x: number; y: number } | null>(null);
   const frame = useRef<number | undefined>(undefined);
   /** A finger down: where, and whether it has become a scroll. */
@@ -243,8 +289,8 @@ export function LiveView({
   const [address, setAddress] = useState('');
   const [editingAddress, setEditingAddress] = useState(false);
   /**
-   * The frames' size, from the frames themselves: input is in their pixels, and a viewer that joins
-   * late never hears the viewport, which is only announced when it changes.
+   * The frames' size, from the frames themselves: input is in their pixels, and the viewport is only
+   * announced when it changes.
    */
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
   const frameSize = size ?? state.viewport;
@@ -256,6 +302,35 @@ export function LiveView({
   useEffect(() => {
     if (!editingAddress) setAddress(state.url ?? '');
   }, [state.url, editingAddress]);
+
+  /** Lets go of every key and button the page still has down (when the keyboard leaves, or the page). */
+  const letGo = useCallback(() => {
+    for (const { key, code } of held.current.values())
+      send({ type: 'keyboard', eventType: 'keyUp', key, code });
+    held.current.clear();
+    const point = moving.current;
+    if (pressed.current && point) {
+      send({
+        type: 'mouse',
+        eventType: 'mouseReleased',
+        ...point,
+        button: pressed.current.button,
+        clickCount: 1,
+      });
+    }
+    pressed.current = null;
+    touch.current = null;
+  }, [send]);
+
+  // A new connection, or the page no longer ours: nothing is still down there.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on each connection, and when the page stops being ours
+  useEffect(() => {
+    held.current.clear();
+    pressed.current = null;
+    touch.current = null;
+    lastPress.current = null;
+    composing.current = false;
+  }, [connection, interactive]);
 
   /** The point on the page under a pointer, in the frames' pixels. */
   const pointAt = useCallback(
@@ -316,6 +391,21 @@ export function LiveView({
 
   useEffect(() => () => cancelAnimationFrame(frame.current ?? 0), []);
 
+  /** How many clicks this press makes: browsers report none on pointer events, so they're counted here. */
+  const clickCount = (event: PointerEvent<HTMLDivElement>): number => {
+    const last = lastPress.current;
+    const now = event.timeStamp;
+    const count =
+      last &&
+      last.button === event.button &&
+      now - last.at < MULTI_CLICK_MS &&
+      Math.hypot(event.clientX - last.x, event.clientY - last.y) <= MULTI_CLICK_SLOP
+        ? Math.min(last.count + 1, 3)
+        : 1;
+    lastPress.current = { at: now, x: event.clientX, y: event.clientY, button: event.button, count };
+    return count;
+  };
+
   const click = (point: { x: number; y: number }, modifiers: number) => {
     send({ type: 'mouse', eventType: 'mousePressed', ...point, button: 'left', clickCount: 1, modifiers });
     send({ type: 'mouse', eventType: 'mouseReleased', ...point, button: 'left', clickCount: 1, modifiers });
@@ -323,23 +413,27 @@ export function LiveView({
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (!interactive) return;
+    // The back and forward buttons are the app's, not the page's.
+    const button = BUTTONS[event.button];
+    if (!button && event.pointerType !== 'touch') return;
     const point = pointAt(event.clientX, event.clientY);
     if (!point) return;
     keys.current?.focus({ preventScroll: true });
     event.preventDefault();
+    moving.current = point;
     if (event.pointerType === 'touch') {
       touch.current = { x: event.clientX, y: event.clientY, scrolled: false };
       return;
     }
-    const button = BUTTONS[event.button] ?? 'left';
-    pressed.current = button;
+    const count = clickCount(event);
+    pressed.current = { button: button ?? 'left', count };
     event.currentTarget.setPointerCapture?.(event.pointerId);
     send({
       type: 'mouse',
       eventType: 'mousePressed',
       ...point,
-      button,
-      clickCount: Math.min(Math.max(event.detail, 1), 3),
+      button: button ?? 'left',
+      clickCount: count,
       modifiers: modifiersOf(event),
     });
   };
@@ -353,17 +447,17 @@ export function LiveView({
       if (start && !start.scrolled && point) click(point, modifiersOf(event));
       return;
     }
-    if (!pressed.current) return;
-    const point = pointAt(event.clientX, event.clientY);
-    const button = pressed.current;
+    const down = pressed.current;
+    if (!down) return;
     pressed.current = null;
+    const point = pointAt(event.clientX, event.clientY);
     if (!point) return;
     send({
       type: 'mouse',
       eventType: 'mouseReleased',
       ...point,
-      button,
-      clickCount: Math.min(Math.max(event.detail, 1), 3),
+      button: down.button,
+      clickCount: down.count,
       modifiers: modifiersOf(event),
     });
   };
@@ -399,32 +493,52 @@ export function LiveView({
         type: 'mouse',
         eventType: 'mouseMoved',
         ...point,
-        button: pressed.current ?? 'none',
+        button: pressed.current?.button ?? 'none',
         modifiers,
       });
     });
   };
 
+  const leaveKeyboard = () => {
+    letGo();
+    keyboardButton.current?.focus();
+  };
+
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>, down: boolean) => {
     if (!interactive) return;
-    // An input method or a phone's keyboard: its text comes as input (below), not as keys.
-    if (composing.current || event.nativeEvent.isComposing) return;
-    if (event.key === 'Unidentified' || event.key === 'Process') return;
+    // An input method, a dead key or a phone's keyboard: the text comes as input (below), not as keys.
+    if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    if (event.key === 'Unidentified' || event.key === 'Process' || event.key === 'Dead') return;
     // Pasting is the browser's own paste event (below), with the text: let it happen.
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') return;
+    if (isPaste(event)) return;
     event.preventDefault();
+    if (down) committed.current = null;
+    // Escape twice gives the keyboard back to the app; once still goes to the page.
+    if (down && event.key === 'Escape' && !event.repeat) {
+      if (event.timeStamp - lastEscape.current < LEAVE_MS) {
+        lastEscape.current = 0;
+        leaveKeyboard();
+        return;
+      }
+      lastEscape.current = event.timeStamp;
+    }
     // A key pressed elsewhere (Enter in the address bar, which hands the keyboard over) is released
     // here: the page never saw it go down.
     const id = event.code || event.key;
-    if (down) held.current.add(id);
+    const key = event.key.slice(0, 32);
+    const code = event.code.slice(0, 32);
+    if (down) held.current.set(id, { key, code });
     else if (!held.current.delete(id)) return;
-    const text = down ? typedText(event) : undefined;
+    const altGraph = event.getModifierState?.('AltGraph') ?? false;
+    const text = down
+      ? typedText({ key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey, altGraph })
+      : undefined;
     send({
       type: 'keyboard',
       eventType: down ? 'keyDown' : 'keyUp',
-      key: event.key.slice(0, 32),
-      code: event.code.slice(0, 32),
-      modifiers: modifiersOf(event),
+      key,
+      code,
+      modifiers: modifiersOf({ ...event, altGraph }),
       ...(text ? { text } : {}),
     });
   };
@@ -438,12 +552,18 @@ export function LiveView({
     if (composing.current) return;
     const text = event.currentTarget.value;
     event.currentTarget.value = '';
+    // What the input method committed, sent again as input once it ended (Safari): typed already.
+    if (text && text === committed.current) {
+      committed.current = null;
+      return;
+    }
     if (interactive && text) typeText(text);
   };
 
   const onCompositionEnd = (event: CompositionEvent<HTMLTextAreaElement>) => {
     composing.current = false;
     event.currentTarget.value = '';
+    committed.current = event.data || null;
     if (interactive && event.data) typeText(event.data);
   };
 
@@ -457,6 +577,8 @@ export function LiveView({
 
   const go = (event: FormEvent) => {
     event.preventDefault();
+    // Read-only until the page is yours: the agents navigate it.
+    if (!interactive) return;
     const target = address.trim();
     if (!target) return;
     clearError();
@@ -499,9 +621,26 @@ export function LiveView({
             onChange={(event) => setAddress(event.target.value)}
           />
         </form>
+        {interactive ? (
+          <Button
+            ref={keyboardButton}
+            size="icon-sm"
+            variant="ghost"
+            tooltip="Start typing into the page"
+            onClick={() => keys.current?.focus({ preventScroll: true })}
+          >
+            <Keyboard aria-hidden />
+          </Button>
+        ) : null}
         {kind === 'task' && state.status === 'live' ? (
           state.takenOver ? (
-            <Button size="sm" onClick={() => send({ type: 'takeover', on: false })}>
+            <Button
+              size="sm"
+              onClick={() => {
+                letGo();
+                send({ type: 'takeover', on: false });
+              }}
+            >
               Give it back
             </Button>
           ) : (
@@ -538,8 +677,9 @@ export function LiveView({
           role="application"
           aria-label={label}
           className={cn(
-            'relative w-full touch-none select-none',
-            interactive ? 'cursor-default' : 'cursor-not-allowed',
+            'relative w-full select-none',
+            // While it's yours, a finger drives the page; otherwise it scrolls this one.
+            interactive ? 'cursor-default touch-none' : 'cursor-not-allowed',
             // Typing goes to the page: the frame says so.
             'has-[textarea:focus]:outline-1 has-[textarea:focus]:-outline-offset-1 has-[textarea:focus]:outline-solid has-[textarea:focus]:outline-border-focus',
             !hasFrame && 'hidden',
@@ -548,10 +688,7 @@ export function LiveView({
           onPointerDown={onPointerDown}
           onPointerUp={onPointerUp}
           onPointerMove={onPointerMove}
-          onPointerCancel={() => {
-            touch.current = null;
-            pressed.current = null;
-          }}
+          onPointerCancel={letGo}
           onContextMenu={(event) => interactive && event.preventDefault()}
         >
           <img
@@ -567,7 +704,8 @@ export function LiveView({
           <textarea
             ref={keys}
             aria-label="Type into the page"
-            tabIndex={interactive ? 0 : -1}
+            aria-describedby={hintId}
+            tabIndex={-1}
             disabled={!interactive}
             autoCapitalize="off"
             autoComplete="off"
@@ -582,6 +720,7 @@ export function LiveView({
             }}
             onCompositionEnd={onCompositionEnd}
             onPaste={onPaste}
+            onBlur={letGo}
           />
         </div>
         {!hasFrame ? (
@@ -600,12 +739,17 @@ export function LiveView({
           Agents are using this browser. Take over to use it yourself: their browser tools wait until you give
           it back.
         </p>
-      ) : interactive ? (
-        <p className="flex items-center gap-2 border-t border-border px-3 py-2 text-caption text-muted-foreground">
-          <MousePointerClick aria-hidden className="size-3.5 shrink-0" />
-          Click the page to type into it; pasting works too.
-        </p>
       ) : null}
+      <p
+        id={hintId}
+        className={cn(
+          'flex items-center gap-2 border-t border-border px-3 py-2 text-caption text-muted-foreground',
+          !interactive && 'hidden',
+        )}
+      >
+        <MousePointerClick aria-hidden className="size-3.5 shrink-0" />
+        Click the page to type into it; pasting works too. Press Esc twice to stop typing into it.
+      </p>
     </Panel>
   );
 }

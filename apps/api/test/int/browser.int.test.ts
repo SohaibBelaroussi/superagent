@@ -337,6 +337,13 @@ describe('browsers', () => {
     await view.next((m) => m === '{"status":"streaming"}', 'streaming');
     await view.next((m) => !m.startsWith('{') && m.length > 1000, 'a frame');
 
+    // A view that joins a streaming browser hears who has it, and sees the page at once.
+    const late = await openLiveView(`ws://${apiUrl}${path}?apiKey=${TEST_ADMIN_TOKEN}`);
+    await late.next((m) => m === '{"status":"released"}', 'who has it');
+    await late.next((m) => m === '{"status":"streaming"}', 'streaming');
+    await late.next((m) => !m.startsWith('{') && m.length > 1000, 'the last frame');
+    late.socket.close();
+
     // Input only reaches the page once the owner has taken over (the agents then wait).
     view.socket.send(JSON.stringify({ type: 'mouse', eventType: 'mouseMoved', x: 10, y: 10 }));
     await view.next((m) => m.includes('"not_taken_over"'), 'a refusal');

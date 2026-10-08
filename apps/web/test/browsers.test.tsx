@@ -102,6 +102,9 @@ function browserHandlers(
     http.delete(api('/v1/tasks/:id/browser'), ({ params }) => {
       seen.push(`close task ${params.id}`);
       state.open = state.open.filter((item) => item.taskId !== params.id);
+      state.identities = state.identities.map((item) =>
+        item.holder?.taskId === params.id ? { ...item, holder: null } : item,
+      );
       return new HttpResponse(null, { status: 204 });
     }),
     ...signedInHandlers(),
@@ -255,8 +258,13 @@ describe('open browsers', () => {
     expect(reader).toHaveTextContent('The page reader');
     expect(within(reader as HTMLElement).queryByRole('button')).toBeNull();
 
+    const identities = screen.getByRole('list', { name: 'Identities' });
+    expect(identities).toHaveTextContent('In use by task #12');
     await user.click(within(task as HTMLElement).getByRole('button', { name: 'Close task #12’s browser' }));
     expect(await screen.findByText('Browser closed')).toBeVisible();
+    // Its identity is free again.
+    await waitFor(() => expect(identities).not.toHaveTextContent('In use by task #12'));
+    expect(screen.getByRole('button', { name: 'Sign in as news-sites' })).toBeEnabled();
     await user.click(
       within(signIn as HTMLElement).getByRole('button', { name: 'Close work-google’s sign-in' }),
     );
