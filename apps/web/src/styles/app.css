@@ -1,0 +1,273 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./theme.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Surfaces. The rim is an inset shadow, not a border, so it can't be clipped by a scroller and a
+ * focused field repaints the same edge instead of drawing a second one. `--surface-tint` is the hover
+ * wash for an element that can't hold a pseudo-element (an input).
+ */
+@utility shadow-raised {
+  --surface-tint: transparent;
+  box-shadow:
+    var(--elevation-lip),
+    inset 0 0 0 1px var(--surface-rim),
+    inset 0 0 0 9999px var(--surface-tint),
+    var(--elevation-raised);
+}
+
+@utility shadow-input {
+  --surface-tint: transparent;
+  --surface-rim: var(--field-rim);
+  box-shadow:
+    var(--elevation-lip),
+    inset 0 0 0 1px var(--surface-rim),
+    inset 0 0 0 9999px var(--surface-tint),
+    var(--elevation-raised);
+}
+
+@utility shadow-overlay {
+  --surface-tint: transparent;
+  box-shadow:
+    var(--elevation-lip),
+    inset 0 0 0 1px var(--surface-rim),
+    inset 0 0 0 9999px var(--surface-tint),
+    var(--elevation-overlay);
+}
+
+@utility shadow-inset {
+  box-shadow:
+    inset 0 1px 0 var(--inset-highlight),
+    inset 0 0 0 1px var(--inset-rim);
+}
+
+@utility shadow-rim {
+  box-shadow: inset 0 0 0 1px var(--surface-rim);
+}
+
+/* The hover and press layer of a surface that already has a fill: layered, never swapped in. */
+@utility state-layer {
+  position: relative;
+  isolation: isolate;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 1px;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    transition: background-color var(--duration-fast) var(--ease-out-custom);
+  }
+
+  &:not(:disabled, [aria-disabled="true"]) {
+    &:hover::before,
+    &:focus-visible::before {
+      background-color: var(--fill-subtle);
+    }
+    &:active::before {
+      background-color: var(--fill);
+    }
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--sidebar);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  :focus-visible {
+    outline: 1px solid var(--border-focus);
+    outline-offset: 0;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--brand) 35%, transparent);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--border-strong);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--border-focus);
+  }
+
+  /* Base UI injects this rule as an inline <style>, which the CSP refuses; app.tsx turns that off. */
+  .base-ui-disable-scrollbar {
+    scrollbar-width: none;
+  }
+  .base-ui-disable-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Reduced motion wins over every component's own transitions and animations, so it must be important. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      /* biome-ignore-start lint/complexity/noImportantStyles: see above */
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      /* biome-ignore-end lint/complexity/noImportantStyles: see above */
+    }
+  }
+}
+
+/* Rendered markdown: reports, briefs and messages. Sized for reading, in the app's own roles. */
+@layer components {
+  .markdown {
+    color: var(--foreground);
+    font-size: var(--text-body);
+    line-height: 1.65;
+    overflow-wrap: anywhere;
+
+    & > :first-child {
+      margin-top: 0;
+    }
+    & > :last-child {
+      margin-bottom: 0;
+    }
+    & p,
+    & ul,
+    & ol,
+    & pre,
+    & blockquote,
+    & table {
+      margin: 0.75em 0;
+    }
+    & h1,
+    & h2,
+    & h3,
+    & h4 {
+      margin: 1.4em 0 0.5em;
+      font-weight: 550;
+      line-height: 1.35;
+    }
+    & h1 {
+      font-size: 1.25rem;
+    }
+    & h2 {
+      font-size: 1.0625rem;
+    }
+    & h3,
+    & h4 {
+      font-size: 0.9375rem;
+    }
+    & ul,
+    & ol {
+      padding-left: 1.4em;
+    }
+    & ul {
+      list-style: disc;
+    }
+    & ol {
+      list-style: decimal;
+    }
+    & li {
+      margin: 0.25em 0;
+    }
+    & li::marker {
+      color: var(--muted-foreground);
+    }
+    & a {
+      color: var(--foreground);
+      text-decoration: underline;
+      text-decoration-color: var(--border-hover);
+      text-underline-offset: 3px;
+    }
+    & a:hover {
+      text-decoration-color: var(--foreground);
+    }
+    & strong {
+      font-weight: 600;
+    }
+    & code {
+      font-family: var(--font-mono);
+      font-size: 0.85em;
+      padding: 0.1em 0.35em;
+      border-radius: var(--radius-sm);
+      background-color: var(--fill);
+    }
+    & pre {
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
+      line-height: 1.55;
+      padding: 0.75rem 0.875rem;
+      border-radius: var(--radius-lg);
+      background-color: var(--fill-subtle);
+      box-shadow: inset 0 0 0 1px var(--border);
+      overflow-x: auto;
+    }
+    /* biome-ignore lint/style/noDescendingSpecificity: nested, this is .markdown pre code (0,1,2), after .markdown code (0,1,1) */
+    & pre code {
+      padding: 0;
+      background: none;
+      font-size: inherit;
+    }
+    & blockquote {
+      padding-left: 0.875rem;
+      border-left: 2px solid var(--border-strong);
+      color: var(--muted-foreground);
+    }
+    & hr {
+      margin: 1.5em 0;
+      border-top: 1px solid var(--border);
+    }
+    & table {
+      display: block;
+      overflow-x: auto;
+      border-collapse: collapse;
+      font-size: var(--text-body-sm);
+    }
+    & th,
+    & td {
+      padding: 0.4em 0.75em;
+      border: 1px solid var(--border);
+      text-align: left;
+    }
+    & th {
+      font-weight: 550;
+      background-color: var(--fill-subtle);
+    }
+    & input[type="checkbox"] {
+      margin-right: 0.4em;
+      vertical-align: -1px;
+    }
+  }
+}

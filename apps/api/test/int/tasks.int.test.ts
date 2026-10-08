@@ -3,6 +3,7 @@ import type {
   AgentDefinition,
   Artifact,
   Board,
+  CreatedToken,
   Department,
   Provider,
   Task,
@@ -587,6 +588,31 @@ describe('tasks, board and dispatch', () => {
     const invalid = await system.app.request('/v1/events?taskId=not-a-uuid', { headers: authHeader() });
     expect(invalid.status).toBe(400);
     expect(await invalid.json()).toMatchObject({ code: 'validation_failed' });
+  });
+
+  it('ends a stream when the token that opened it is revoked', async () => {
+    const created = (await (await send('POST', '/v1/tokens', { name: 'phone' })).json()) as CreatedToken;
+    const headers = { authorization: `Bearer ${created.token}` };
+    const res = await system.app.request('/v1/events', { headers });
+    expect(res.status).toBe(200);
+    const reader = (res.body as ReadableStream<Uint8Array>).pipeThrough(new TextDecoderStream()).getReader();
+    let text = '';
+    while (!text.includes('event: ready')) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error('Stream ended before ready');
+      text += value;
+    }
+
+    expect((await send('DELETE', `/v1/tokens/${created.record.id}`)).status).toBe(204);
+    // The stream ends right away, not at its next heartbeat (25 s).
+    const ended = await Promise.race([
+      (async () => {
+        for (;;) if ((await reader.read()).done) return true;
+      })(),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 5000)),
+    ]);
+    expect(ended).toBe(true);
+    expect((await system.app.request('/v1/events', { headers })).status).toBe(401);
   });
 
   it('streams concurrent changes in commit order, and replays from the very start', async () => {

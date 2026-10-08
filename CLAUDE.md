@@ -1,9 +1,10 @@
 # superagent
 
-Self-hosted personal multi-agent system on Mastra: a chief of staff, departments (lead + specialists) and a task board, behind one HTTP API. One user, the "owner".
+Self-hosted personal multi-agent system on Mastra: a chief of staff, departments (lead + specialists) and a task board, behind one HTTP API, with a web app on top. One user, the "owner".
 
 ## Read first
 - [docs/api-plan.md](docs/api-plan.md): milestones M0–M9 and what each must deliver.
+- [docs/web-plan.md](docs/web-plan.md): the web app's milestones W1–W6 and its design.
 - [docs/decisions.md](docs/decisions.md): settled decisions. Build within them; don't reopen them.
 - [docs/notes/mastra-1.74.md](docs/notes/mastra-1.74.md): verified Mastra behaviour and gotchas. Check it before guessing at a Mastra API.
 - [docs/spikes/](docs/spikes/): runnable reference code for Mastra APIs.
@@ -12,7 +13,8 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 - `apps/api`: the server. Hono app with Mastra mounted on `/api`, our control plane on `/v1`.
 - `apps/runner`: the only Docker client. Keeps one sandbox container per task for agents with workspace grants, and one browser container per task for agents granted the browser.
 - `apps/egress`: the forward proxy that is browsers' and MCP servers' only way out (public addresses only).
-- `packages/shared`: zod schemas for `/v1` requests and responses (future clients reuse them), and the runner's internal API (`@superagent/shared/runner`).
+- `apps/web`: the web app (Vite, React, Tailwind 4, Base UI, TanStack Query). `src/ui` is its design system (tokens in `src/styles/theme.css`, adapted from Mastra's), `src/api` the client, session and live events, `src/features` the pages. The API image serves its build.
+- `packages/shared`: zod schemas for `/v1` requests and responses (the web app parses with them), the task phase machine (`@superagent/shared/phases`), and the runner's internal API (`@superagent/shared/runner`).
 - `infra/sandbox`: the sandbox images the runner may start (`dev`: Node, Python, git).
 - `infra/browser`: the browser image (Chromium) and the seccomp profile it runs under.
 - `infra/mcp`: the image plugins' stdio MCP servers run in (Node, Python, uv).
@@ -23,10 +25,12 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 ## Commands (from the repo root)
 - `pnpm db:up`, then `pnpm dev`: the API on http://127.0.0.1:4111 with reload. Docs UI at `/v1/docs`.
 - `pnpm dev:runner`: the runner on http://127.0.0.1:4120, for agents' sandboxes and browsers in dev. Build the sandbox image first: `docker compose --profile app build sandbox-dev`.
+- `pnpm dev:web`: the web app on http://127.0.0.1:5173, proxying `/v1` and `/api` to :4111 (`SUPERAGENT_API_URL` points it elsewhere).
 - `pnpm browsers:up`: builds the browser image and starts the egress proxy (browsers need both).
 - `pnpm mcp:up`: builds the MCP image and starts the egress proxy (plugins' stdio servers need both).
 - `pnpm check`: EE-import guard, lint, typecheck, unit and integration tests. Integration needs Docker running.
 - `pnpm test` / `pnpm test:int` / `pnpm test:e2e`. e2e needs `pnpm stack:up` (packaged API on :4112).
+- `pnpm test:web`: Playwright against the stack (the image serves the app). `PW_CHANNEL=msedge` uses the installed Edge.
 - `pnpm test:live`: checks against the owner's real provider (`LIVE_LLM_*` in `.env`). Not part of CI.
 - `pnpm db:generate`: new Drizzle migration after editing `apps/api/src/db/schema.ts`.
 - `pnpm stack:up` / `pnpm stack:down`: packaged API plus Postgres in Docker.
@@ -55,8 +59,12 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
 - **Tracing and usage.** Every run our code starts or resumes for a task (`stream`, `approveToolCall`, `declineToolCall`) passes `DispatchService.tracing(task)`: its metadata is how model calls are counted to tasks. Usage rows are written only by `UsageExporter` (one per MODEL_INFERENCE span), priced from `model_prices` when written. Flush tracing before `mastra.shutdown()` (it closes the storage first).
 - **Backups.** New data a restore needs goes into `scripts/backup.sh`; `scripts/restore-drill.sh` must check it (new tables are counted on their own, new volumes aren't). Backups never go into git or an image (`backups/` is ignored by both).
 - **Server.** In `compose.prod.yaml` our images are never built or pulled, and every service has limits and rotated logs: a new service needs both. The runner creates no container where the daemon ignores limits (rootless Docker without cgroup delegation).
+- **Web app.** It reaches the API only through `/v1` with `src/api/client.ts`, parsing every response with the `@superagent/shared` schema (never hand-written types for API data). Its pages run under a strict CSP (`WEB_CSP` in `apps/api/src/http/web.ts`: scripts, styles, fonts and requests from its own origin, no inline script or style, no eval): keep Base UI's `CSPProvider disableStyleElements` and zod's `jitless` on, and never add a third-party script, font or style. Markdown from agents renders with `ui/markdown.tsx` (no raw HTML); links agents wrote are clickable only when http(s). Only a device token is kept in the browser (local storage, D45); an admin token pasted at sign-in is exchanged and dropped. Live data comes from the one `/v1/events` stream (`src/api/live.tsx`), which refreshes queries; don't add polling for task data. Components use the design system's roles (`bg-card`, `text-label`, `TONE_*`), not raw colours or sizes.
+- **Serving the app.** `serveWebApp` answers only paths the API's routes didn't, and never `/api`, `/v1`, `/health` or `/ready`; it serves only files listed from the build at boot (no path from a request touches the filesystem).
+- **Long-lived connections.** The event stream and live views close when the token that opened them is revoked (`TokenService.onRevoked`); a new streaming or WebSocket route must do the same.
 - **Errors.** `/v1` errors are problem+json: throw `ApiError`, or return `problem()`.
 - **Schemas.** zod 4 everywhere. Request and response schemas go in `packages/shared`.
+- **Web tests.** Vitest with jsdom and Testing Library, rendering the whole app (`apps/web/test/render.tsx`) with MSW answering the network (`test/msw.ts`); mock only the network, never our hooks. In one `server.use()` call, earlier handlers win: put a test's overrides before `...signedInHandlers()`. Browser tests (`apps/web/e2e`) run against the stack and fail on any CSP violation.
 - **Tests.** Single-agent checks use the scripted mock model (`apps/api/test/support/mock-model.ts`). Multi-agent flows run against the fake OpenAI server (`apps/api/test/support/fake-openai.ts`), steered by directives in the user message (`[assign]`, `[artifact]`, `[no-report]`, `[slow]`, `[linger]`, `[code]`, `[browse:<url>]`, `[visit:<url>]`, `[skill:<name>]`, `[mcp:<tool> {args}]`). Browser tests need the browser image (`pnpm browsers:up`), capability tests the MCP image (`pnpm mcp:up`). Database tests use `startTestSystem()` from `apps/api/test/int/helpers.ts` (Testcontainers, one database per file).
 
 ## Public repository
@@ -66,7 +74,8 @@ Self-hosted personal multi-agent system on Mastra: a chief of staff, departments
   1. Work on one branch per milestone (`m0-foundation`, `m1-providers`, ...) and commit as you go.
   2. Scan the diff for secrets before pushing.
   3. When the milestone is done, open a PR into `main`, review it, and merge with a merge commit once CI is green.
-- **CI** (`.github/workflows/ci.yml`) runs on every PR and every push to `main`: `pnpm check`, then it builds and tags the images, starts the stack from them with `compose.prod.yaml`, runs the e2e suite against it, and backs it up and restores the backup in a drill.
+- **CI** (`.github/workflows/ci.yml`) runs on every PR and every push to `main`: `pnpm check`, then it builds and tags the images, starts the stack from them with `compose.prod.yaml`, runs the e2e and browser suites against it, and backs it up and restores the backup in a drill.
+- **Workflow for the web app:** the same, one branch per milestone (`w1-web-foundation`, ...).
 
 ## Windows notes
 - A dev server started in the background can outlive its shell. If port 4111 stays busy, stop the leftover `node` process.

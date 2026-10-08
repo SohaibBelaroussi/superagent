@@ -16,6 +16,7 @@ Details and evidence: [api-plan.md](api-plan.md), [notes/mastra-1.74.md](notes/m
 | D03 | No paid third-party SaaS. No Mastra Enterprise code: no `*/ee` imports, no Agent Builder, RBAC, FGA or SSO. | No subscriptions. The EE license (v2.0) only allows dev and test use for free. | you + license check, 2026-10-06 |
 | D04 | No chat channels (Telegram, WhatsApp, Slack) in v1. Keep the option open. | Scope. | you, 2026-10-06 |
 | D05 | No use-case departments (LinkedIn, content studio) yet. Test with simple departments. | Prove the platform first. | you, 2026-10-07 |
+| D06 | The clients start with a web app designed after Mastra Factory's interface. It grows milestone by milestone into the full web app ([web-plan.md](web-plan.md)); the mobile app comes after it. | You asked for a well-designed web client in Factory's style first. | you, 2026-10-08 |
 
 ## Infrastructure
 
@@ -73,3 +74,12 @@ Details and evidence: [api-plan.md](api-plan.md), [notes/mastra-1.74.md](notes/m
 | D21 | Tests: Vitest. Agent flows use scripted mock models (`MockLanguageModelV4` from `ai/test`) with in-memory LibSQL. Integration tests use Testcontainers Postgres. A live suite runs against your LLM server behind a flag. | Deterministic orchestration tests without paying for tokens. Spike-verified on this PC. | proposed, verified |
 | D22 | Experimental Mastra APIs (signals, notifications, thread subscriptions) are called only through our own modules. | They're marked `@experimental` in 1.74, so a breaking change touches one file. | proposed |
 | D23 | A single API process, with Mastra workers running in-process. Split workers and Valkey only if load ever needs it. | Simplest setup that is fully supported. | proposed |
+
+## Clients
+
+| ID | Decision | Why | Origin |
+|---|---|---|---|
+| D43 | The web app is `apps/web`: Vite, React and TypeScript, styled with Tailwind CSS 4 and our own small design system on Base UI primitives. Its tokens (colours, surfaces, type roles, control sizes) are adapted from Mastra's `@mastra/playground-ui` (Apache-2.0, credited in `THIRD-PARTY-NOTICES.md`), with Mona Sans. Server state lives in TanStack Query; responses are parsed with the `@superagent/shared` schemas. | Factory's look without its package: `@mastra/playground-ui` is 19 MB, versioned weekly, depends on Mastra's server packages and ships an `ee/` folder (D03). Parsing with the shared schemas catches drift between the app and the API. | proposed, 2026-10-08 |
+| D44 | The API serves the built app on its own origin: hashed assets under `/assets`, `index.html` for other page paths, never for `/api`, `/v1`, `/health` or `/ready`. The app's pages get a strict CSP (scripts from our origin only, no framing). The API image builds the app in. | One origin needs no CORS and one `tailscale serve`. The CSP is what makes a token in the page's storage acceptable (D45). | proposed, 2026-10-08 |
+| D45 | Sign-in takes a token once. An admin token is exchanged for a device token named after the browser, and only the device token is kept (local storage). Signing out revokes it, and revoking a token closes the event streams and live views it opened. Pages that need the admin token ask for it and keep it in memory only. | The admin token can mint tokens and never expires, so it stays out of the browser. A device token is revocable per browser, and its own sign-out revokes it. | proposed, 2026-10-08 |
+| D46 | Live updates come from one `fetch`-read connection to `GET /v1/events` (the token in a header, not the URL). It resumes with `Last-Event-ID`, and each task event refreshes the queries it affects. | One stream for the whole app, resumable after sleep or a dropped network, and no token in a URL. | proposed, 2026-10-08 |

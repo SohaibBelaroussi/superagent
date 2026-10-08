@@ -139,9 +139,11 @@ Only the API is published, on `127.0.0.1:4112`. Postgres, storage and the web to
 
 The API is then at `https://<server>.<tailnet>.ts.net`, with streaming and WebSockets passed through. `--bg` keeps it across reboots, and `tailscale serve reset` removes it.
 
+The web app is on the same address. Open it on any device on your tailnet (a phone included) and sign in with `SUPERAGENT_ADMIN_TOKEN`. Each browser gets its own device token: the app keeps only that one, and signing out revokes it.
+
 ## 6. After the first start
 
-- Run `GET /v1/attention`: it should list no health problems.
+- Open the web app's home page, or run `GET /v1/attention`: neither should show any health problems.
 - Add your provider and its prices (`PUT /v1/providers/{id}/prices`), so task cards show costs.
 - Set up daily backups and an off-site copy, as described in [backups.md](backups.md).
 - For upgrades, see [upgrade.md](upgrade.md).

@@ -68,6 +68,14 @@ jobs:
         # The API, the runner, the egress proxy, and the sandbox, browser and MCP images the runner starts.
         run: scripts/release.sh ci
 
+      # The web app's libraries belong in its build, not in the API's dependencies (pnpm-workspace.yaml).
+      - name: The API image carries no React
+        run: |
+          if docker run --rm --entrypoint ls superagent-api:ci node_modules/.pnpm | grep -E '^(react|react-dom)@'; then
+            echo "React is in the API image's dependencies" >&2
+            exit 1
+          fi
+
       - name: Start the stack as the server runs it
         # From the tagged images with the production overrides (limits, nothing built): the API with its
         # database, document storage, runner and egress proxy. Web-tool services are faked in tests.
@@ -77,6 +85,22 @@ jobs:
 
       - name: End-to-end tests against the container
         run: pnpm test:e2e
+
+      # A real browser against the same container: the served web app, its CSP, sign-in, live updates.
+      - name: Install Chromium for the browser tests
+        run: pnpm --filter @superagent/web exec playwright install --with-deps chromium
+
+      - name: Browser tests against the container
+        run: pnpm test:web
+
+      - name: Browser test traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces
+          path: apps/web/test-results
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Back up the stack, then restore the backup in a drill
         env:

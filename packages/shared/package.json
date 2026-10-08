@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./phases": "./src/phases.ts",
     "./runner": "./src/runner.ts",
     "./net": "./src/net.ts"
   },
