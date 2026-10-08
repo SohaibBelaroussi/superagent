@@ -9,3 +9,5 @@
 docs
 backups
 release
+**/test-results
+**/playwright-report

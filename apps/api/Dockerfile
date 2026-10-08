@@ -38,7 +38,8 @@ ENV NODE_ENV=production \
     WEB_DIR=/app/web
 WORKDIR /app
 COPY --from=build --chown=node:node /out ./
-COPY --from=build --chown=node:node /repo/apps/web/dist ./web
+# Root-owned and read-only for the node user: the API only ever reads the build.
+COPY --from=build /repo/apps/web/dist ./web
 USER node
 EXPOSE 4111
 HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 \
