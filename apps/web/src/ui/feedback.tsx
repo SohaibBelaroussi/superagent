@@ -80,6 +80,9 @@ const NOTICE = {
   },
 } as const;
 
+/** A notice's surface, for a box of that tone that holds more than a notice does. */
+export const noticeSurface = (tone: keyof typeof NOTICE): string => NOTICE[tone].box;
+
 /** A message in the flow of a page: something went wrong, or something to know. */
 export function Notice({
   tone = 'info',

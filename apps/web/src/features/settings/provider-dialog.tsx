@@ -8,7 +8,7 @@ import { Button } from '../../ui/button';
 import { Checkbox } from '../../ui/checkbox';
 import { Dialog } from '../../ui/dialog';
 import { FormFailure, Spinner } from '../../ui/feedback';
-import { Field, Input } from '../../ui/field';
+import { Field, Input, SecretInput } from '../../ui/field';
 import { Switch } from '../../ui/switch';
 
 interface Header {
@@ -204,13 +204,12 @@ export function ProviderDialog({
           }
         >
           {(control) => (
-            <Input
+            <SecretInput
               {...control}
-              type="password"
-              autoComplete="off"
               value={apiKey}
               disabled={removeKey}
-              placeholder={provider?.hasApiKey ? '•••••••• (unchanged)' : undefined}
+              placeholder={provider?.hasApiKey ? 'Unchanged' : undefined}
+              revealLabel="Show the key"
               onChange={(event) => setApiKey(event.target.value)}
             />
           )}
@@ -245,12 +244,12 @@ export function ProviderDialog({
                   )
                 }
               />
-              <Input
+              <SecretInput
                 aria-label={`Header ${index + 1} value`}
-                type="password"
-                autoComplete="off"
+                className="flex-1"
                 value={header.value}
                 disabled={removeHeaders}
+                revealLabel={`Show header ${index + 1}’s value`}
                 onChange={(event) =>
                   setHeaders(
                     headers.map((row, at) => (at === index ? { ...row, value: event.target.value } : row)),

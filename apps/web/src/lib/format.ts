@@ -7,6 +7,16 @@ export function formatCost(usd: number): string {
   return `$${Math.round(usd).toLocaleString('en-US')}`;
 }
 
+/** A model's price in USD per million tokens, to the hundredth of a cent: "$3.00", "$0.075", "$0.0375". */
+export function formatPrice(usd: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(usd);
+}
+
 /** Token counts, compact: "950", "12.3k", "1.25M". */
 export function formatTokens(count: number): string {
   if (count < 1000) return String(count);

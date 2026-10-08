@@ -288,7 +288,8 @@ Each milestone ends like the API's: tests pass, a PR, one review, fixes, CI gree
 - **MCP servers** (`/settings/mcp`): each with its state, tools and why it can't be reached; add or edit an HTTP one, its credential a secret from the vault; turn one off, list its tools again, delete.
 - **Plugins** (`/settings/plugins`): install from a GitHub repository (its name or address) or an archive with its sha256, after a look at what it brings, the values it needs and its servers' network; uninstall.
 - **Skills** (`/settings/skills`): by plugin, each with what it needs and its files.
-- **Usage** (`/usage`, from the rail): totals, a bar for each day of the period (7, 30 or 90 days, or all time) in the owner's days (the settings' timezone, as the API counts them), and the share of each department, model, agent and task, linked to their pages. Calls to models without a price are counted and pointed out.
+- **Usage** (`/usage`, from the rail): totals, a bar for each day of the period (7, 30 or 90 days, or all time; past 90 days, each bar is a run of days) in the owner's days (the settings' timezone, as the API counts them), and the share of each department, model, agent and task, linked to their pages. Calls to models without a price are counted and pointed out; an empty period points to earlier calls.
+- Keys, tokens and secrets' values are typed into masked text fields, never password fields, which browsers and password managers offer to save (D45); the sign-in page does the same. Requests that carry one are dropped from the query cache as soon as nothing shows them.
 - A form's failure shows at its top, brought into view in a long dialog. Sections are regions named by their headings.
 
 ### W6: workspaces and browsers

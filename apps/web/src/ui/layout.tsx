@@ -58,7 +58,8 @@ export function Page({
 }) {
   const max = width === 'narrow' ? 'max-w-4xl' : width === 'medium' ? 'max-w-6xl' : 'max-w-none';
   return (
-    <div className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto', className)}>
+    // The page scrolls here, not the document: `data-scroll` names it for the browser tests.
+    <div data-scroll="page" className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto', className)}>
       <div
         className={cn(
           'mx-auto flex w-full flex-1 flex-col px-4 pt-5 pb-12 sm:px-8 sm:pt-7',

@@ -11,7 +11,7 @@ import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { ConfirmDialog, Dialog } from '../../ui/dialog';
 import { EmptyState, FormFailure, Spinner } from '../../ui/feedback';
-import { Field, Input } from '../../ui/field';
+import { Field, Input, SecretInput } from '../../ui/field';
 import { Page, PageHeader, Panel } from '../../ui/layout';
 import { raisedSurface } from '../../ui/recipes';
 import { RelativeTime } from '../../ui/time';
@@ -70,7 +70,12 @@ export function SecretsPage() {
                       changed <RelativeTime iso={secret.updatedAt} />
                     </p>
                   </div>
-                  <Button size="sm" variant="ghost" onClick={() => setEditing({ open: true, secret })}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Replace ${secret.name}`}
+                    onClick={() => setEditing({ open: true, secret })}
+                  >
                     Replace
                   </Button>
                   <Button
@@ -90,6 +95,7 @@ export function SecretsPage() {
       <SecretDialog
         open={editing.open}
         secret={editing.secret}
+        taken={secrets.data?.map((secret) => secret.name) ?? []}
         onOpenChange={(open) => setEditing((current) => ({ ...current, open }))}
       />
       <ConfirmDialog
@@ -121,14 +127,19 @@ export function SecretsPage() {
   );
 }
 
-/** Stores a secret's value: a new one, or a replacement (`secret`). */
+/**
+ * Stores a secret's value: a new one, or a replacement (`secret`). A new one can't take a name in use
+ * (`taken`): the API would replace that secret's value for good.
+ */
 function SecretDialog({
   open,
   secret,
+  taken,
   onOpenChange,
 }: {
   open: boolean;
   secret?: Secret;
+  taken: readonly string[];
   onOpenChange: (open: boolean) => void;
 }) {
   const put = usePutSecret();
@@ -151,16 +162,19 @@ function SecretDialog({
   async function submit(event: FormEvent) {
     event.preventDefault();
     const next = {
-      name: SecretNameSchema.safeParse(name.trim()).success
-        ? undefined
-        : 'Upper-case letters, digits and underscores, starting with a letter.',
+      name: !SecretNameSchema.safeParse(name.trim()).success
+        ? 'Upper-case letters, digits and underscores, starting with a letter.'
+        : !secret && taken.includes(name.trim())
+          ? 'There’s a secret with this name: replace it from the list instead.'
+          : undefined,
       value: value ? undefined : 'The value to store.',
     };
     setErrors(next);
     if (next.name || next.value) return;
     setFailure(null);
     try {
-      await put.mutateAsync({ name: name.trim(), value, description: description.trim() || undefined });
+      // An emptied description clears it.
+      await put.mutateAsync({ name: name.trim(), value, description: description.trim() });
       toast.success(secret ? `${name.trim()} replaced` : `${name.trim()} stored`);
       onOpenChange(false);
     } catch (error) {
@@ -203,12 +217,11 @@ function SecretDialog({
         </Field>
         <Field label="Value" error={errors.value}>
           {(control) => (
-            <Input
+            <SecretInput
               {...control}
-              type="password"
-              autoComplete="off"
               value={value}
               maxLength={16_384}
+              revealLabel="Show the value"
               onChange={(event) => setValue(event.target.value)}
             />
           )}

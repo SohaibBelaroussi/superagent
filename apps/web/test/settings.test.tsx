@@ -166,7 +166,7 @@ describe('models', () => {
     const user = userEvent.setup();
     const models = await screen.findByRole('list', { name: 'Models' });
     const row = within(models).getAllByRole('listitem')[1] as HTMLElement;
-    await user.click(within(row).getByRole('button', { name: 'Set price' }));
+    await user.click(within(row).getByRole('button', { name: 'Set price of small-1' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Price of small-1' });
     await user.type(within(dialog).getByLabelText('Input'), '0.5');
@@ -174,6 +174,85 @@ describe('models', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Save price' }));
     await waitFor(() => expect(prices).toEqual([{ modelId: 'small-1', inputUsd: 0.5, outputUsd: 1.5 }]));
     await waitFor(() => expect(row).toHaveTextContent('$0.50 in · $1.50 out'));
+  });
+
+  it('removes a price, and each model’s dialog starts from its own price', async () => {
+    const removed: Array<string | null> = [];
+    server.use(
+      http.delete(api('/v1/providers/:id/prices'), ({ request }) => {
+        removed.push(new URL(request.url).searchParams.get('modelId'));
+        return new HttpResponse(null, { status: 204 });
+      }),
+      ...modelHandlers(),
+      ...signedInHandlers(),
+    );
+    renderApp('/settings/models');
+    const user = userEvent.setup();
+    const models = await screen.findByRole('list', { name: 'Models' });
+
+    await user.click(within(models).getByRole('button', { name: 'Change price of large-1' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Price of large-1' });
+    expect(within(dialog).getByLabelText('Input')).toHaveValue(2);
+    expect(within(dialog).getByLabelText('Output')).toHaveValue(8);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await user.click(within(models).getByRole('button', { name: 'Set price of small-1' }));
+    dialog = await screen.findByRole('dialog', { name: 'Price of small-1' });
+    expect(within(dialog).getByLabelText('Input')).toHaveValue(null);
+    expect(within(dialog).queryByRole('button', { name: 'Remove price' })).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await user.click(within(models).getByRole('button', { name: 'Change price of large-1' }));
+    dialog = await screen.findByRole('dialog', { name: 'Price of large-1' });
+    await user.click(within(dialog).getByRole('button', { name: 'Remove price' }));
+    await waitFor(() => expect(removed).toEqual(['large-1']));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('shows prices to the hundredth of a cent', async () => {
+    server.use(
+      http.get(api('/v1/providers/:id/models'), () =>
+        HttpResponse.json({
+          items: [{ ...small, price: { inputUsd: 0.075, cachedInputUsd: null, outputUsd: 0.3 } }],
+        }),
+      ),
+      ...modelHandlers(),
+      ...signedInHandlers(),
+    );
+    renderApp('/settings/models');
+    expect(await screen.findByRole('list', { name: 'Models' })).toHaveTextContent('$0.075 in · $0.30 out');
+  });
+
+  it('looks for a provider’s new models, and says when it can’t', async () => {
+    let answer: 'list' | 'fail' = 'list';
+    server.use(
+      http.post(api('/v1/providers/:id/refresh-models'), () =>
+        answer === 'list'
+          ? HttpResponse.json({ items: [large, small, embed, { ...small, modelId: 'small-2' }] })
+          : problem(502, 'The provider answered 500.'),
+      ),
+      ...modelHandlers(),
+      ...signedInHandlers(),
+    );
+    renderApp('/settings/models');
+    const user = userEvent.setup();
+    const panel = await screen.findByRole('group', { name: /Acme/ });
+    await within(panel).findByRole('list', { name: 'Models' });
+
+    await user.click(within(panel).getByRole('button', { name: 'More for Acme' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Look for new models' }));
+    expect(await screen.findByText('4 models listed')).toBeVisible();
+    await waitFor(() =>
+      expect(within(panel).getByRole('list', { name: 'Models' })).toHaveTextContent('small-2'),
+    );
+
+    answer = 'fail';
+    await user.click(within(panel).getByRole('button', { name: 'More for Acme' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Look for new models' }));
+    expect(await screen.findByText('Couldn’t list its models')).toBeVisible();
+    expect(screen.getByText('The provider answered 500.')).toBeVisible();
   });
 
   it('adds a provider, then lists its models', async () => {

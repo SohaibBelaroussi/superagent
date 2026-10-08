@@ -34,23 +34,42 @@ export function rangeStart(range: Range, timezone?: string, now = new Date()): s
   return startOfDayIn(addDays(dayIn(now, timezone), -(Number(range) - 1)), timezone).toISOString();
 }
 
+/** The most days the chart covers, the newest kept: about ten years. */
+const MAX_DAYS = 3_660;
+/** The most bars the chart draws: past that, each bar is a run of days. */
+const MAX_BARS = 90;
+
 /**
  * Every day ("YYYY-MM-DD") from `start` (or the first of `days`) to `end` (or the last of them), the
- * ones without calls included.
+ * ones without calls included; at most `MAX_DAYS`, the newest.
  */
 export function fillDays(days: readonly string[], start?: string, end?: string): string[] {
   const sorted = [...days].sort();
-  const first = [start, sorted[0]].filter(Boolean).sort()[0];
   const final = [end, sorted.at(-1)].filter(Boolean).sort().at(-1);
+  let first = [start, sorted[0]].filter(Boolean).sort()[0];
   if (!first || !final) return [];
+  const earliest = addDays(final, -(MAX_DAYS - 1));
+  if (first < earliest) first = earliest;
   const out: string[] = [];
   const day = new Date(`${first}T00:00:00Z`);
   const last = new Date(`${final}T00:00:00Z`);
-  while (day <= last && out.length < 400) {
+  while (day <= last) {
     out.push(day.toISOString().slice(0, 10));
     day.setUTCDate(day.getUTCDate() + 1);
   }
   return out;
+}
+
+/**
+ * The days as bars: one each, or in runs of equal length when there are more than `max`. The newest run
+ * ends on the last day; the oldest may be shorter.
+ */
+export function runsOf(days: readonly string[], max = MAX_BARS): string[][] {
+  if (days.length <= max) return days.map((day) => [day]);
+  const size = Math.ceil(days.length / max);
+  const runs: string[][] = [];
+  for (let end = days.length; end > 0; end -= size) runs.unshift(days.slice(Math.max(0, end - size), end));
+  return runs;
 }
 
 /** The built-in agents, which aren't in the organization. */
@@ -72,6 +91,8 @@ export function UsagePage() {
   const timezone = settings.data?.timezone;
   const from = rangeStart(range, timezone);
   const days = useUsage('day', from, !settings.isPending);
+  // A period without calls: whether there were any before it.
+  const ever = useUsage('model', undefined, range !== 'all' && days.data?.total.calls === 0);
 
   return (
     <Page
@@ -109,6 +130,17 @@ export function UsagePage() {
           <Skeleton className="h-24 rounded-xl" />
           <Skeleton className="h-48 rounded-xl" />
         </div>
+      ) : days.data.total.calls === 0 && range !== 'all' && ever.isPending ? (
+        <Skeleton className="h-48 rounded-xl" />
+      ) : days.data.total.calls === 0 && range !== 'all' && (ever.data?.total.calls ?? 0) > 0 ? (
+        <EmptyState
+          icon={<ChartColumn />}
+          title={`No model calls in the last ${range} days`}
+          description="The ones before are under All time."
+          action={
+            <Button onClick={() => setParams({ range: 'all' }, { replace: true })}>Show all time</Button>
+          }
+        />
       ) : days.data.total.calls === 0 ? (
         <EmptyState
           icon={<ChartColumn />}
@@ -164,7 +196,10 @@ function Totals({ report }: { report: UsageReport }) {
   );
 }
 
-/** One bar per day of the period (today included): cost when there is any, else tokens. */
+/**
+ * A bar for each day of the period, today included (for a long period, each bar a run of days): cost
+ * when there is any, else tokens.
+ */
 function DayChart({
   report,
   from,
@@ -182,18 +217,24 @@ function DayChart({
     from ? dayIn(new Date(from), timezone) : undefined,
     dayIn(new Date(), timezone),
   );
-  const value = (day: string) => {
-    const item = byDay.get(day);
-    if (!item) return 0;
-    return measure === 'cost' ? item.costUsd : item.totalTokens;
-  };
-  const max = Math.max(...days.map(value), 0);
+  const runs = runsOf(days);
+  // The newest run is a full one.
+  const perBar = runs.at(-1)?.length ?? 1;
+  const value = (run: readonly string[]) =>
+    run.reduce((sum, day) => {
+      const item = byDay.get(day);
+      return sum + (item ? (measure === 'cost' ? item.costUsd : item.totalTokens) : 0);
+    }, 0);
+  const max = Math.max(...runs.map(value), 0);
   const label = (day: string) =>
     new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, {
       month: 'short',
       day: 'numeric',
       timeZone: 'UTC',
     });
+  const runLabel = (run: readonly string[]) =>
+    run.length === 1 ? label(run[0] ?? '') : `${label(run[0] ?? '')} – ${label(run.at(-1) ?? '')}`;
+  const shown = measure === 'cost' ? 'Cost' : 'Tokens';
 
   return (
     <Panel className="flex flex-col gap-3 p-4">
@@ -208,26 +249,27 @@ function DayChart({
           { value: 'tokens', label: 'Tokens' },
         ]}
       />
+      {/* No gap between slots: each bar takes most of its slot, so even a long period's stay visible. */}
       <ol
-        className="flex h-40 items-end gap-1"
-        aria-label={`${measure === 'cost' ? 'Cost' : 'Tokens'} by day`}
+        className="flex h-40 items-end"
+        aria-label={runs.length === days.length ? `${shown} by day` : `${shown}, ${perBar} days a bar`}
       >
-        {days.map((day) => {
-          const amount = value(day);
+        {runs.map((run) => {
+          const amount = value(run);
           const text = measure === 'cost' ? formatCost(amount) : `${formatTokens(amount)} tokens`;
           return (
             <li
-              key={day}
-              className="flex h-full min-w-0 flex-1 flex-col justify-end"
-              title={`${label(day)}: ${text}`}
+              key={run[0]}
+              className="flex h-full min-w-0 flex-1 flex-col items-center justify-end"
+              title={`${runLabel(run)}: ${text}`}
             >
               <span className="sr-only">
-                {label(day)}: {text}
+                {runLabel(run)}: {text}
               </span>
               <span
                 aria-hidden
                 className={cn(
-                  'mx-auto block w-full max-w-6 rounded-t-[3px]',
+                  'block w-[70%] max-w-6 rounded-t-[3px]',
                   amount > 0 ? 'bg-foreground/70' : 'bg-fill',
                 )}
                 style={{ height: `${max > 0 ? Math.max(2, (amount / max) * 100) : 2}%` }}
@@ -236,8 +278,9 @@ function DayChart({
           );
         })}
       </ol>
-      <div className="flex justify-between text-caption text-muted-foreground">
+      <div className="flex justify-between gap-3 text-caption text-muted-foreground">
         <span>{days[0] ? label(days[0]) : ''}</span>
+        {runs.length < days.length ? <span>{perBar} days a bar</span> : null}
         <span>{days.at(-1) ? label(days.at(-1) ?? '') : ''}</span>
       </div>
     </Panel>

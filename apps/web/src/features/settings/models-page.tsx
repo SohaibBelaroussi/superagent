@@ -9,19 +9,18 @@ import {
   useDiscoverModels,
   useProviderModels,
   useProviders,
-  useRefreshModels,
   useRemoveModel,
   useTestProvider,
   useUpdateSettings,
 } from '../../api/settings';
 import { Loaded } from '../../layout/loaded';
 import { cn } from '../../lib/cn';
-import { formatCost, plural } from '../../lib/format';
+import { formatPrice, plural } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/dialog';
-import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';
+import { EmptyState, Notice, noticeSurface, Skeleton, Spinner } from '../../ui/feedback';
 import { Input } from '../../ui/field';
 import { Page, PageHeader, Panel, Section } from '../../ui/layout';
 import { Menu, MenuItem, MenuSeparator } from '../../ui/menu';
@@ -192,7 +191,7 @@ function ModelRoles() {
 function ProviderPanel({ provider }: { provider: Provider }) {
   const models = useProviderModels(provider.id);
   const test = useTestProvider(provider.id);
-  const refresh = useRefreshModels(provider.id);
+  const discover = useDiscoverModels();
   const remove = useDeleteProvider(provider.id);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -245,8 +244,9 @@ function ProviderPanel({ provider }: { provider: Provider }) {
             <MenuItem
               icon={<RefreshCw aria-hidden />}
               onClick={() =>
-                refresh.mutate(undefined, {
+                discover.mutate(provider.id, {
                   onSuccess: (list) => toast.success(`${plural(list.items.length, 'model')} listed`),
+                  onError: (error) => toast.error('Couldn’t list its models', errorMessage(error)),
                 })
               }
             >
@@ -280,7 +280,7 @@ function ProviderPanel({ provider }: { provider: Provider }) {
         open={deleting}
         onOpenChange={setDeleting}
         title={`Delete ${provider.name}?`}
-        description="Agents and roles that use its models stop working until they pick another. Its usage history stays."
+        description="Its models and their prices go; what they cost so far stays in the usage. A provider whose models agents or the model roles use can’t be deleted: give them another model first."
         confirmLabel="Delete provider"
         destructive
         busy={remove.isPending}
@@ -306,23 +306,20 @@ const CHECKS: Record<string, string> = {
 };
 
 const VERDICT = {
-  ok: { title: 'Everything works', box: 'bg-success-subtle shadow-[inset_0_0_0_1px_var(--success-edge)]' },
-  partly: {
-    title: 'It answers, but not everything works',
-    box: 'bg-warning-subtle shadow-[inset_0_0_0_1px_var(--warning-edge)]',
-  },
-  down: {
-    title: 'It doesn’t answer',
-    box: 'bg-destructive-subtle shadow-[inset_0_0_0_1px_var(--destructive-edge)]',
-  },
-};
+  ok: { title: 'Everything works', tone: 'success' },
+  partly: { title: 'It answers, but not everything works', tone: 'warning' },
+  down: { title: 'It doesn’t answer', tone: 'destructive' },
+} as const;
 
 /** The checks' outcome: all good, answering with some features failing, or not answering at all. */
 function TestResult({ result }: { result: ProviderTestResult }) {
   const answers = result.checks.find((check) => check.name === 'chat')?.ok ?? false;
   const verdict = VERDICT[result.ok ? 'ok' : answers ? 'partly' : 'down'];
   return (
-    <div role="status" className={cn('mx-4 mb-3 flex flex-col gap-1.5 rounded-xl px-3.5 py-3', verdict.box)}>
+    <div
+      role="status"
+      className={cn('mx-4 mb-3 flex flex-col gap-1.5 rounded-xl px-3.5 py-3', noticeSurface(verdict.tone))}
+    >
       <p className="text-label text-foreground">
         {verdict.title}
         {result.model ? (
@@ -359,7 +356,7 @@ function TestResult({ result }: { result: ProviderTestResult }) {
 function priceText(model: ProviderModel): string {
   if (!model.price) return 'No price';
   const { inputUsd, outputUsd } = model.price;
-  return `${formatCost(inputUsd)} in · ${formatCost(outputUsd)} out`;
+  return `${formatPrice(inputUsd)} in · ${formatPrice(outputUsd)} out`;
 }
 
 /** A provider's models: found on it or added by hand, each with its price. */
@@ -408,7 +405,12 @@ function Models({
                 {priceText(model)}
                 {model.price ? <span className="text-muted-foreground"> per M</span> : null}
               </span>
-              <Button size="sm" variant="ghost" onClick={() => onPrice(model)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`${model.price ? 'Change price' : 'Set price'} of ${model.modelId}`}
+                onClick={() => onPrice(model)}
+              >
                 {model.price ? 'Change price' : 'Set price'}
               </Button>
               {model.source === 'manual' ? (

@@ -24,6 +24,23 @@ async function department(request: APIRequestContext): Promise<{ id: string; slu
   return res.json();
 }
 
+/**
+ * Whatever is wider than the screen: the document, or the page's own scroll container (the document
+ * never scrolls: the page does, inside the frame). Names what overflows, for the failure message.
+ */
+const widerThanItsFrame = (page: Page) =>
+  page.evaluate(() => {
+    const wide: string[] = [];
+    const root = document.documentElement;
+    if (root.scrollWidth > root.clientWidth) wide.push(`document ${root.scrollWidth}px`);
+    for (const scroller of document.querySelectorAll<HTMLElement>('[data-scroll="page"]')) {
+      if (scroller.scrollWidth > scroller.clientWidth) {
+        wide.push(`page ${scroller.scrollWidth}px in ${scroller.clientWidth}px`);
+      }
+    }
+    return wide;
+  });
+
 /** Every Content-Security-Policy violation on a page is recorded; any one fails the test (afterEach). */
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -207,11 +224,11 @@ test('can be added to a home screen', async ({ page, request }) => {
 test('works on a phone: the rail becomes a drawer, and nothing scrolls sideways', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await signIn(page);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
+  expect(await widerThanItsFrame(page)).toEqual([]);
   await page.getByRole('button', { name: 'Menu' }).click();
   await page.getByRole('dialog', { name: 'Navigation' }).getByRole('link', { name: 'Board' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Board' })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
+  expect(await widerThanItsFrame(page)).toEqual([]);
 });
 
 test('sets up a department and its lead, then gives the lead a tool in a new version', async ({ page }) => {
@@ -383,8 +400,21 @@ test('settings on a phone: the sections are a row above the page, and nothing sc
   const row = page.getByRole('navigation', { name: 'Settings sections' });
   await expect(row.getByRole('link', { name: 'Skills' })).toHaveAttribute('aria-current', 'page');
   await expect(row.getByRole('link', { name: 'Skills' })).toBeInViewport();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
+  expect(await widerThanItsFrame(page)).toEqual([]);
   await row.getByRole('link', { name: 'Secrets' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Secrets' })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
+  expect(await widerThanItsFrame(page)).toEqual([]);
+
+  // Usage over 90 days: each day keeps a visible bar.
+  await page.goto('/usage?range=90');
+  const chart = page.getByRole('list', { name: /by day$/ });
+  await expect(page.getByText(/^No model calls/).or(chart)).toBeVisible();
+  if (await chart.isVisible()) {
+    const widths = await chart
+      .getByRole('listitem')
+      .evaluateAll((items) => items.map((item) => item.querySelector('[aria-hidden]')?.clientWidth ?? 0));
+    expect(widths).toHaveLength(90);
+    expect(Math.min(...widths)).toBeGreaterThan(0);
+  }
+  expect(await widerThanItsFrame(page)).toEqual([]);
 });

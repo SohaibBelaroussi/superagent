@@ -2,6 +2,7 @@ import type { SkillList } from '@superagent/shared';
 import { FileText, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
+import { errorMessage } from '../../api/client';
 import { usePlugins, useSkill, useSkills } from '../../api/settings';
 import { Loaded } from '../../layout/loaded';
 import { cn } from '../../lib/cn';
@@ -9,7 +10,7 @@ import { formatBytes } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
-import { EmptyState, Skeleton } from '../../ui/feedback';
+import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
 import { DetailRow, Page, PageHeader, Panel, Section } from '../../ui/layout';
 import { raisedSurface } from '../../ui/recipes';
 
@@ -79,7 +80,12 @@ export function SkillsPage() {
                             <p className="text-caption text-muted-foreground">Needs: {skill.compatibility}</p>
                           ) : null}
                         </div>
-                        <Button size="sm" variant="ghost" onClick={() => setViewing(skill)}>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Files of ${skill.name}`}
+                          onClick={() => setViewing(skill)}
+                        >
                           Files
                         </Button>
                       </li>
@@ -134,6 +140,18 @@ function SkillDialog({
                 </li>
               ))}
             </ul>
+          ) : detail.isError ? (
+            <Notice
+              tone="destructive"
+              title="Couldn’t load its files"
+              action={
+                <Button size="sm" onClick={() => detail.refetch()}>
+                  Retry
+                </Button>
+              }
+            >
+              {errorMessage(detail.error)}
+            </Notice>
           ) : (
             <Skeleton className="h-16 rounded-lg" />
           )}

@@ -133,22 +133,31 @@ function ServerPanel({ server, onEdit }: { server: McpServer; onEdit: () => void
               </Button>
             }
           >
-            <MenuItem
-              icon={<RefreshCw aria-hidden />}
-              onClick={() =>
-                refresh.mutate(server.id, {
-                  onSuccess: (fresh) => toast.success(`${plural(fresh.tools.length, 'tool')} listed`),
-                })
-              }
-            >
-              List its tools again
-            </MenuItem>
+            {server.enabled ? (
+              <MenuItem
+                icon={<RefreshCw aria-hidden />}
+                onClick={() =>
+                  refresh.mutate(server.id, {
+                    // A server that can't be reached still answers, with its state saying why.
+                    onSuccess: (fresh) =>
+                      fresh.status === 'ready'
+                        ? toast.success(`${plural(fresh.tools.length, 'tool')} listed`)
+                        : toast.error(
+                            `Couldn’t reach ${fresh.name}`,
+                            fresh.statusDetail ?? 'Its state below says why.',
+                          ),
+                  })
+                }
+              >
+                List its tools again
+              </MenuItem>
+            ) : null}
             {server.transport === 'http' ? (
               <MenuItem icon={<Pencil aria-hidden />} onClick={onEdit}>
                 Edit
               </MenuItem>
             ) : null}
-            <MenuSeparator />
+            {server.enabled || server.transport === 'http' ? <MenuSeparator /> : null}
             <MenuItem icon={<Trash2 aria-hidden />} destructive onClick={() => setDeleting(true)}>
               Delete…
             </MenuItem>

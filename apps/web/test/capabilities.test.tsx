@@ -1,7 +1,7 @@
 import type { McpServer, Plugin, PluginPreview, Secret, Skill } from '@superagent/shared';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { HttpResponse, http } from 'msw';
+import { delay, HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { api, server, signedInHandlers } from './msw';
 import { renderApp } from './render';
@@ -170,6 +170,45 @@ describe('secrets', () => {
     expect(await screen.findByText('DOCS_KEY stored')).toBeVisible();
   });
 
+  it('won’t add one under a name in use, and clears a description when replacing', async () => {
+    const stored: Array<[string, unknown]> = [];
+    server.use(
+      http.get(api('/v1/secrets'), () => HttpResponse.json({ items: [githubToken] })),
+      http.put(api('/v1/secrets/:name'), async ({ params, request }) => {
+        stored.push([String(params.name), await request.json()]);
+        return HttpResponse.json(githubToken);
+      }),
+      ...signedInHandlers(),
+    );
+    renderApp('/settings/secrets');
+    const user = userEvent.setup();
+    await screen.findByRole('list', { name: 'Secrets' });
+
+    await user.click(screen.getByRole('button', { name: 'Add a secret' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Add a secret' });
+    // Its value is a masked text field, not a password field browsers offer to save.
+    expect(within(dialog).getByLabelText('Value')).toHaveAttribute('type', 'text');
+    await user.type(within(dialog).getByLabelText('Name'), 'GITHUB_TOKEN');
+    await user.type(within(dialog).getByLabelText('Value'), 'not-a-real-value');
+    await user.click(within(dialog).getByRole('button', { name: 'Store secret' }));
+    expect(within(dialog).getByLabelText('Name')).toHaveAccessibleDescription(
+      'There’s a secret with this name: replace it from the list instead.',
+    );
+    expect(stored).toEqual([]);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await user.click(screen.getByRole('button', { name: 'Replace GITHUB_TOKEN' }));
+    dialog = await screen.findByRole('dialog', { name: 'Replace GITHUB_TOKEN' });
+    expect(within(dialog).getByLabelText('What it’s for')).toHaveValue('Read-only token');
+    await user.clear(within(dialog).getByLabelText('What it’s for'));
+    await user.type(within(dialog).getByLabelText('Value'), 'not-a-real-value');
+    await user.click(within(dialog).getByRole('button', { name: 'Replace' }));
+    await waitFor(() =>
+      expect(stored).toEqual([['GITHUB_TOKEN', { value: 'not-a-real-value', description: '' }]]),
+    );
+  });
+
   it('says who uses one before deleting it', async () => {
     const deleted: string[] = [];
     server.use(
@@ -199,11 +238,17 @@ describe('secrets', () => {
 describe('MCP servers', () => {
   it('shows each server’s state and tools, and turns one off', async () => {
     const updates: unknown[] = [];
+    let current = github;
     server.use(
-      http.get(api('/v1/mcp-servers'), () => HttpResponse.json({ items: [github, wiki] })),
+      http.get(api('/v1/mcp-servers'), async () => {
+        // Once it changed, the list is slow to come back: the answer to the change shows first.
+        if (!current.enabled) await delay(2_000);
+        return HttpResponse.json({ items: [current, wiki] });
+      }),
       http.patch(api('/v1/mcp-servers/:id'), async ({ request }) => {
         updates.push(await request.json());
-        return HttpResponse.json({ ...github, enabled: false });
+        current = { ...github, enabled: false };
+        return HttpResponse.json(current);
       }),
       ...signedInHandlers(),
     );
@@ -222,8 +267,53 @@ describe('MCP servers', () => {
     expect(within(wikiPanel).getByRole('alert')).toHaveTextContent('It can’t connect: connection refused');
     expect(within(wikiPanel).getByRole('button', { name: 'Its tools aren’t known yet' })).toBeDisabled();
 
-    await user.click(within(githubPanel).getByRole('switch', { name: 'GitHub enabled' }));
+    const toggle = within(githubPanel).getByRole('switch', { name: 'GitHub enabled' });
+    await user.click(toggle);
     await waitFor(() => expect(updates).toEqual([{ enabled: false }]));
+    // The answer shows at once, before the list comes back.
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'), { timeout: 1_000 });
+    expect(githubPanel).toHaveTextContent('Off');
+  });
+
+  it('lists a server’s tools again, and says when it can’t reach it', async () => {
+    let reachable = true;
+    let current = github;
+    server.use(
+      http.get(api('/v1/mcp-servers'), () => HttpResponse.json({ items: [current] })),
+      http.post(api('/v1/mcp-servers/:id/refresh'), () => {
+        current = reachable
+          ? github
+          : { ...github, status: 'failed', statusDetail: 'It can’t connect: connection refused' };
+        return HttpResponse.json(current);
+      }),
+      ...signedInHandlers(),
+    );
+    renderApp('/settings/mcp');
+    const user = userEvent.setup();
+    const panel = await screen.findByRole('group', { name: /GitHub/ });
+    await user.click(within(panel).getByRole('button', { name: 'More for GitHub' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'List its tools again' }));
+    expect(await screen.findByText('2 tools listed')).toBeVisible();
+
+    reachable = false;
+    await user.click(within(panel).getByRole('button', { name: 'More for GitHub' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'List its tools again' }));
+    expect(await screen.findByText('Couldn’t reach GitHub')).toBeVisible();
+    await waitFor(() => expect(panel).toHaveTextContent('Failed'));
+  });
+
+  it('doesn’t offer to list a server’s tools while it is off', async () => {
+    server.use(
+      http.get(api('/v1/mcp-servers'), () => HttpResponse.json({ items: [{ ...github, enabled: false }] })),
+      ...signedInHandlers(),
+    );
+    renderApp('/settings/mcp');
+    const user = userEvent.setup();
+    const panel = await screen.findByRole('group', { name: /GitHub/ });
+    expect(panel).toHaveTextContent('Off');
+    await user.click(within(panel).getByRole('button', { name: 'More for GitHub' }));
+    expect(await screen.findByRole('menuitem', { name: 'Edit' })).toBeVisible();
+    expect(screen.queryByRole('menuitem', { name: 'List its tools again' })).toBeNull();
   });
 
   it('adds a server whose credential comes from the vault', async () => {
@@ -358,6 +448,7 @@ describe('plugins', () => {
     // A required value first.
     const install = within(look).getByRole('button', { name: 'Install' });
     expect(install).toBeDisabled();
+    expect(within(look).getByLabelText('SEARCH_KEY')).toHaveAttribute('type', 'text');
     await user.type(within(look).getByLabelText('SEARCH_KEY'), 'not-a-real-key');
     await user.click(within(look).getByRole('button', { name: 'No network' }));
     await user.click(install);
@@ -389,7 +480,7 @@ describe('plugins', () => {
     renderApp('/settings/plugins');
     const user = userEvent.setup();
     const plugin = await screen.findByRole('group', { name: 'Research kit' });
-    await user.click(within(plugin).getByRole('button', { name: 'Uninstall' }));
+    await user.click(within(plugin).getByRole('button', { name: 'Uninstall Research kit' }));
     const confirm = await screen.findByRole('dialog', { name: 'Uninstall Research kit?' });
     expect(confirm).toHaveTextContent('the secrets it made are deleted');
     await user.click(within(confirm).getByRole('button', { name: 'Uninstall' }));
@@ -412,7 +503,7 @@ describe('skills', () => {
     const group = await screen.findByRole('region', { name: 'Research kit' });
     expect(group).toHaveTextContent('deep-search');
     expect(group).toHaveTextContent('Needs: web_search');
-    await user.click(within(group).getByRole('button', { name: 'Files' }));
+    await user.click(within(group).getByRole('button', { name: 'Files of deep-search' }));
     const dialog = await screen.findByRole('dialog', { name: 'deep-search' });
     expect(dialog).toHaveTextContent('research-kit/deep-search');
     const files = await within(dialog).findByRole('list', { name: 'Files' });
@@ -421,5 +512,27 @@ describe('skills', () => {
         .getAllByRole('listitem')
         .map((item) => item.textContent),
     ).toEqual(['SKILL.md', 'scripts/rank.py', 'reference/sources.md']);
+  });
+
+  it('says when a skill’s files can’t be loaded', async () => {
+    const { files: _files, ...summary } = deepSearch;
+    server.use(
+      http.get(api('/v1/skills'), () => HttpResponse.json({ items: [summary] })),
+      http.get(api('/v1/skills/:id'), () =>
+        HttpResponse.json(
+          { type: 'about:blank', title: 'Error', status: 500, detail: 'The skill store is down.' },
+          { status: 500, headers: { 'content-type': 'application/problem+json' } },
+        ),
+      ),
+      http.get(api('/v1/plugins'), () => HttpResponse.json({ items: [researchKit] })),
+      ...signedInHandlers(),
+    );
+    renderApp('/settings/skills');
+    const user = userEvent.setup();
+    const group = await screen.findByRole('region', { name: 'Research kit' });
+    await user.click(within(group).getByRole('button', { name: 'Files of deep-search' }));
+    const dialog = await screen.findByRole('dialog', { name: 'deep-search' });
+    expect(await within(dialog).findByText('Couldn’t load its files', {}, { timeout: 8000 })).toBeVisible();
+    expect(within(dialog).getByText('The skill store is down.')).toBeVisible();
   });
 });

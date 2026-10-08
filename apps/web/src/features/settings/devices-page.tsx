@@ -10,7 +10,7 @@ import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { ConfirmDialog, Dialog } from '../../ui/dialog';
 import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';
-import { Field, Input } from '../../ui/field';
+import { Field, Input, SecretInput } from '../../ui/field';
 import { Page, PageHeader, Panel } from '../../ui/layout';
 import { raisedSurface } from '../../ui/recipes';
 import { RelativeTime } from '../../ui/time';
@@ -98,12 +98,11 @@ function AdminTokenForm({ refused, onToken }: { refused: string | null; onToken:
       <form onSubmit={submit} className="flex flex-col gap-3 sm:flex-row sm:items-start">
         <Field label="Admin token" error={refused ?? undefined} className="flex-1">
           {(control) => (
-            <Input
+            <SecretInput
               {...control}
-              type="password"
-              autoComplete="off"
               value={value}
-              className="font-mono"
+              inputClassName="font-mono"
+              revealLabel="Show the token"
               onChange={(event) => setValue(event.target.value)}
             />
           )}
@@ -162,7 +161,12 @@ function TokenList({ tokens, adminToken }: { tokens: TokenRecord[]; adminToken: 
                 </span>
               </p>
             </div>
-            <Button size="sm" variant="destructive-ghost" onClick={() => setRevoking(token)}>
+            <Button
+              size="sm"
+              variant="destructive-ghost"
+              aria-label={`Revoke ${token.name}`}
+              onClick={() => setRevoking(token)}
+            >
               Revoke
             </Button>
           </li>
@@ -231,6 +235,8 @@ function NewTokenDialog({
   const outputId = useId();
 
   const close = (next: boolean) => {
+    // A token being made would be lost: it is shown once, here.
+    if (!next && create.isPending) return;
     onOpenChange(next);
     if (!next) {
       setName('');
@@ -270,7 +276,7 @@ function NewTokenDialog({
           </Button>
         ) : (
           <>
-            <Button variant="ghost" onClick={() => close(false)}>
+            <Button variant="ghost" disabled={create.isPending} onClick={() => close(false)}>
               Cancel
             </Button>
             <Button

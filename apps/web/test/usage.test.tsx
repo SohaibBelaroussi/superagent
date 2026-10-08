@@ -3,7 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
-import { fillDays, rangeStart } from '../src/features/usage/usage-page';
+import { fillDays, rangeStart, runsOf } from '../src/features/usage/usage-page';
 import { addDays, dayIn } from '../src/lib/timezones';
 import { api, NO_USAGE, research, SETTINGS, server, signedInHandlers } from './msw';
 import { renderApp } from './render';
@@ -82,6 +82,26 @@ describe('usage periods', () => {
     expect(fillDays(['2026-10-01'], '2026-10-02', '2026-10-02')).toEqual(['2026-10-01', '2026-10-02']);
     expect(fillDays([], '2026-02-27', '2026-03-01')).toEqual(['2026-02-27', '2026-02-28', '2026-03-01']);
   });
+
+  it('keep the newest days of a long history', () => {
+    const days = fillDays(['2010-01-01'], undefined, '2026-10-08');
+    expect(days).toHaveLength(3_660);
+    expect(days.at(-1)).toBe('2026-10-08');
+  });
+
+  it('draw a long period in runs of days, the newest run ending today', () => {
+    const ninety = fillDays([], '2026-07-11', '2026-10-08');
+    expect(ninety).toHaveLength(90);
+    expect(runsOf(ninety)).toHaveLength(90);
+    const days = fillDays([], '2026-03-23', '2026-10-08');
+    expect(days).toHaveLength(200);
+    const runs = runsOf(days);
+    expect(runs).toHaveLength(67);
+    expect(runs.at(-1)).toEqual(['2026-10-06', '2026-10-07', '2026-10-08']);
+    // The oldest run takes what is left.
+    expect(runs[0]).toEqual(['2026-03-23', '2026-03-24']);
+    expect(runs.flat()).toEqual(days);
+  });
 });
 
 describe('the usage page', () => {
@@ -102,7 +122,7 @@ describe('the usage page', () => {
     expect(bars).toHaveLength(30);
     expect(bars.at(-1)).toHaveTextContent('$0.30');
     expect(bars.at(-2)).toHaveTextContent('$0.12');
-    expect(bars[0]).toHaveTextContent('$0');
+    expect(bars[0]).toHaveTextContent(/: \$0$/);
     // Asked once, from the start of the owner's day 29 days ago (the settings' timezone).
     expect(asked.filter(([group]) => group === 'day')).toEqual([
       ['day', rangeStart('30', SETTINGS.timezone)],
@@ -145,6 +165,48 @@ describe('the usage page', () => {
       within(await screen.findByRole('list', { name: 'Cost by day' })).getAllByRole('listitem'),
     ).toHaveLength(7);
     await waitFor(() => expect(asked).toContainEqual(['agent', rangeStart('7', SETTINGS.timezone)]));
+  });
+
+  it('groups a long history into runs of days, and sums each', async () => {
+    const today = dayIn(new Date(), SETTINGS.timezone);
+    const first = addDays(today, -199);
+    server.use(
+      usageHandler([], (group, from) => ({
+        ...report(group, from),
+        ...(group === 'day'
+          ? {
+              items: [
+                { key: first, label: first, ...used(0.1, 1_000, 1) },
+                { key: addDays(today, -1), label: addDays(today, -1), ...used(0.12, 4_000, 2) },
+                { key: today, label: today, ...used(0.3, 8_300, 2) },
+              ],
+            }
+          : {}),
+      })),
+      ...signedInHandlers(),
+    );
+    renderApp('/usage?range=all');
+    const chart = await screen.findByRole('list', { name: 'Cost, 3 days a bar' });
+    const bars = within(chart).getAllByRole('listitem');
+    expect(bars).toHaveLength(67);
+    // Today and the two days before: one bar.
+    expect(bars.at(-1)).toHaveTextContent(/: \$0\.42$/);
+    expect(screen.getByText('3 days a bar')).toBeVisible();
+  });
+
+  it('points to all time when a period is empty but earlier ones aren’t', async () => {
+    server.use(
+      usageHandler([], (group, from) =>
+        from ? { group, from, to: null, items: [], total: NO_USAGE } : report(group, from),
+      ),
+      ...signedInHandlers(),
+    );
+    const { router } = renderApp('/usage');
+    const user = userEvent.setup();
+    expect(await screen.findByText('No model calls in the last 30 days')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Show all time' }));
+    await waitFor(() => expect(router.state.location.search).toBe('?range=all'));
+    expect(await screen.findByRole('list', { name: 'Cost by day' })).toBeVisible();
   });
 
   it('starts all time at the first day with calls', async () => {

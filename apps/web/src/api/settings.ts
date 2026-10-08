@@ -40,6 +40,15 @@ import { queryKeys } from './queries';
 
 const providerPath = (id: string, rest = '') => `/v1/providers/${encodeURIComponent(id)}${rest}`;
 
+/**
+ * For mutations that carry a credential (a key, a token, a secret's value): dropped from the cache as
+ * soon as nothing shows them, not kept for the default five minutes.
+ */
+const FORGET = { gcTime: 0 } as const;
+
+/** While something is still starting: how often to look again (no live event covers it). */
+const SETTLING_MS = 3_000;
+
 export const settingsKeys = {
   providerModels: queryKeys.providerModels,
   tokens: ['tokens'] as const,
@@ -80,6 +89,7 @@ export function useCreateProvider() {
       api(ProviderSchema, '/v1/providers', { method: 'POST', json: input }),
     onSuccess: () => refreshProviders(queryClient),
     meta: { silent: true },
+    ...FORGET,
   });
 }
 
@@ -90,6 +100,7 @@ export function useUpdateProvider(id: string) {
       api(ProviderSchema, providerPath(id), { method: 'PATCH', json: input }),
     onSuccess: () => refreshProviders(queryClient),
     meta: { silent: true },
+    ...FORGET,
   });
 }
 
@@ -110,16 +121,23 @@ export function useDeleteProvider(id: string) {
 }
 
 /** The models list a model mutation answers with, put straight into its query. */
-function useModelsMutation<T>(id: string, run: (input: T) => Promise<{ items: unknown[] }>, failure: string) {
+function useModelsMutation<T>(
+  id: string,
+  run: (input: T) => Promise<{ items: unknown[] }>,
+  meta: { failure?: string; silent?: boolean },
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: run,
     onSuccess: (list) => queryClient.setQueryData(queryKeys.providerModels(id), list),
-    meta: { failure },
+    meta,
   });
 }
 
-/** Lists any provider's models (by id): for one just added, whose own hooks don't exist yet. */
+/**
+ * Asks a provider for its models again (`GET {baseUrl}/models`), by id: also for one just added,
+ * whose own hooks don't exist yet. Callers say how it went.
+ */
 export function useDiscoverModels() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -130,21 +148,12 @@ export function useDiscoverModels() {
   });
 }
 
-/** Asks the provider for its models again (`GET {baseUrl}/models`). */
-export function useRefreshModels(id: string) {
-  return useModelsMutation(
-    id,
-    () => api(ProviderModelListSchema, providerPath(id, '/refresh-models'), { method: 'POST' }),
-    'Couldn’t list the provider’s models',
-  );
-}
-
 export function useAddModel(id: string) {
   return useModelsMutation(
     id,
     (input: AddModelInput) =>
       api(ProviderModelListSchema, providerPath(id, '/models'), { method: 'POST', json: input }),
-    'Couldn’t add the model',
+    { failure: 'Couldn’t add the model' },
   );
 }
 
@@ -163,7 +172,8 @@ export function useSetPrice(id: string) {
     id,
     (input: SetModelPriceInput) =>
       api(ProviderModelListSchema, providerPath(id, '/prices'), { method: 'PUT', json: input }),
-    'Couldn’t set the price',
+    // The price dialog says why.
+    { silent: true },
   );
 }
 
@@ -195,6 +205,8 @@ export function useUpdateSettings() {
       queryClient.setQueryData(queryKeys.settings, settings);
       // The attention inbox says when a model role is missing.
       void queryClient.invalidateQueries({ queryKey: queryKeys.attention });
+      // Usage is grouped into days in the timezone.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.usage });
     },
     meta: { silent: true },
   });
@@ -228,6 +240,7 @@ export function useCreateToken(adminToken: string | null) {
       }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: settingsKeys.tokens }),
     meta: { failure: 'Couldn’t create the token' },
+    ...FORGET,
   });
 }
 
@@ -238,6 +251,7 @@ export function useRevokeToken(adminToken: string | null) {
       apiVoid(`/v1/tokens/${encodeURIComponent(id)}`, { method: 'DELETE', token: adminToken ?? undefined }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: settingsKeys.tokens }),
     meta: { failure: 'Couldn’t revoke the token' },
+    ...FORGET,
   });
 }
 
@@ -257,6 +271,7 @@ export function usePutSecret() {
       api(SecretSchema, `/v1/secrets/${encodeURIComponent(name)}`, { method: 'PUT', json: input }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: settingsKeys.secrets }),
     meta: { silent: true },
+    ...FORGET,
   });
 }
 
@@ -283,7 +298,20 @@ export function useMcpServers() {
     queryKey: settingsKeys.mcpServers,
     queryFn: ({ signal }) => api(McpServerListSchema, '/v1/mcp-servers', { signal }),
     select: (data) => data.items,
+    // A server still starting is looked at again until it is ready or failed.
+    refetchInterval: (query) =>
+      query.state.data?.items.some((server) => server.enabled && server.status === 'pending')
+        ? SETTLING_MS
+        : false,
   });
+}
+
+/** A server as the API answered for it, put in the list at once. */
+function putServer(queryClient: QueryClient, server: z.infer<typeof McpServerSchema>): void {
+  queryClient.setQueryData<z.infer<typeof McpServerListSchema>>(
+    settingsKeys.mcpServers,
+    (list) => list && { items: list.items.map((item) => (item.id === server.id ? server : item)) },
+  );
 }
 
 export function useCreateMcpServer() {
@@ -293,6 +321,8 @@ export function useCreateMcpServer() {
       api(McpServerSchema, '/v1/mcp-servers', { method: 'POST', json: input }),
     onSuccess: () => refreshCapabilities(queryClient),
     meta: { silent: true },
+    // Its headers may hold a credential given as a plain value.
+    ...FORGET,
   });
 }
 
@@ -301,8 +331,12 @@ export function useUpdateMcpServer() {
   return useMutation({
     mutationFn: ({ id, ...input }: UpdateMcpServerInput & { id: string }) =>
       api(McpServerSchema, `/v1/mcp-servers/${encodeURIComponent(id)}`, { method: 'PATCH', json: input }),
-    onSuccess: () => refreshCapabilities(queryClient),
+    onSuccess: (server) => {
+      putServer(queryClient, server);
+      refreshCapabilities(queryClient);
+    },
     meta: { silent: true },
+    ...FORGET,
   });
 }
 
@@ -321,7 +355,10 @@ export function useRefreshMcpServer() {
   return useMutation({
     mutationFn: (id: string) =>
       api(McpServerSchema, `/v1/mcp-servers/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
-    onSuccess: () => refreshCapabilities(queryClient),
+    onSuccess: (server) => {
+      putServer(queryClient, server);
+      refreshCapabilities(queryClient);
+    },
     meta: { failure: 'Couldn’t reach the server' },
   });
 }
@@ -331,6 +368,9 @@ export function usePlugins() {
     queryKey: settingsKeys.plugins,
     queryFn: ({ signal }) => api(PluginListSchema, '/v1/plugins', { signal }),
     select: (data) => data.items,
+    // A plugin still installing (its servers starting) is looked at again until it is done.
+    refetchInterval: (query) =>
+      query.state.data?.items.some((plugin) => plugin.status === 'installing') ? SETTLING_MS : false,
   });
 }
 
@@ -350,6 +390,8 @@ export function useInstallPlugin() {
       api(PluginSchema, '/v1/plugins', { method: 'POST', json: input }),
     onSuccess: () => refreshCapabilities(queryClient),
     meta: { silent: true },
+    // The values it needs may be credentials.
+    ...FORGET,
   });
 }
 

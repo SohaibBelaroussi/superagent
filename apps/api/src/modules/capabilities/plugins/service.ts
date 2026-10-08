@@ -21,6 +21,7 @@ import {
 } from '../../../db/schema';
 import { ApiError } from '../../../http/problem';
 import { Mutex } from '../../../util/mutex';
+import { errorText } from '../../../util/text';
 import type { RunnerClient } from '../../workspace/runner-client';
 import { mcpToolKeys } from '../mcp/naming';
 import type { McpService } from '../mcp/service';
@@ -549,9 +550,9 @@ export class PluginService {
           }
         } catch (error) {
           if (signal.aborted) return;
-          problems.push(`setting up its stdio servers failed: ${(error as Error).message}`);
+          problems.push(`setting up its stdio servers failed: ${errorText(error)}`);
           ready = rows.filter((row) => row.transport === 'http');
-          for (const row of stdio) await this.deps.mcp.fail(row.id, (error as Error).message);
+          for (const row of stdio) await this.deps.mcp.fail(row.id, errorText(error));
         }
       }
     }
@@ -565,8 +566,8 @@ export class PluginService {
         if (server.status !== 'ready') problems.push(`${server.slug}: ${server.statusDetail ?? 'no tools'}`);
       } catch (error) {
         if (signal.aborted) return;
-        problems.push(`${row.slug}: ${(error as Error).message}`);
-        await this.deps.mcp.fail(row.id, (error as Error).message);
+        problems.push(`${row.slug}: ${errorText(error)}`);
+        await this.deps.mcp.fail(row.id, errorText(error));
       }
     }
     if (signal.aborted) return;

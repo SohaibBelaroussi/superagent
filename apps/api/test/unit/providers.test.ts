@@ -110,4 +110,17 @@ describe('error text for the owner', () => {
     expect(errorText('plain')).toBe('plain');
     expect(withoutStack('Two lines\nwith no frames')).toBe('Two lines\nwith no frames');
   });
+
+  it('cuts only at a frame, whatever the path looks like', () => {
+    // An indented line that starts with "at" is text.
+    expect(withoutStack('Invalid params:\n  at least one of name or url is required')).toBe(
+      'Invalid params:\n  at least one of name or url is required',
+    );
+    expect(withoutStack('Failed\r\n    at Object.<anonymous> (C:\\app\\x.js:3:1)')).toBe('Failed');
+    expect(withoutStack('Failed: probe\n    at new Client (<anonymous>)\n    at x.js:1:1')).toBe(
+      'Failed: probe',
+    );
+    expect(withoutStack('Failed\n    at async Promise.all (index 0)')).toBe('Failed');
+    expect(withoutStack('Failed\n    at file:///srv/app/y.js:9:9')).toBe('Failed');
+  });
 });

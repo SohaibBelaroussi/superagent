@@ -99,6 +99,27 @@ describe('devices', () => {
     expect(screen.queryByRole('list', { name: 'Devices' })).toBeNull();
   });
 
+  it('refuses an unknown token without signing this browser out', async () => {
+    const seen = { auth: [] as string[], created: [] as unknown[], revoked: [] as string[] };
+    server.use(...tokenHandlers(seen), ...signedInHandlers());
+    const { router } = renderApp('/settings/devices');
+    const user = userEvent.setup();
+    const field = await screen.findByLabelText('Admin token');
+    // Not a password field: browsers would offer to save the admin token (D45).
+    expect(field).toHaveAttribute('type', 'text');
+    expect(field).toHaveAttribute('data-1p-ignore');
+    await user.type(field, `sa_admin_${'x'.repeat(40)}`);
+    await user.click(screen.getByRole('button', { name: 'Show devices' }));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Admin token')).toHaveAccessibleDescription(
+        'The server doesn’t know that token.',
+      ),
+    );
+    expect(router.state.location.pathname).toBe('/settings/devices');
+    expect(screen.getByRole('navigation', { name: 'Main' })).toBeVisible();
+    expect(window.localStorage.getItem('superagent.token')).toBe(DEVICE_TOKEN);
+  });
+
   it('makes a token for another device and shows it once', async () => {
     const seen = { auth: [] as string[], created: [] as unknown[], revoked: [] as string[] };
     server.use(...tokenHandlers(seen), ...signedInHandlers());
@@ -133,13 +154,15 @@ describe('devices', () => {
       'listitem',
     );
 
-    await user.click(within(mine as HTMLElement).getByRole('button', { name: 'Revoke' }));
+    await user.click(
+      within(mine as HTMLElement).getByRole('button', { name: 'Revoke Web: Chrome on Windows' }),
+    );
     expect(await screen.findByRole('dialog', { name: 'Revoke “Web: Chrome on Windows”?' })).toHaveTextContent(
       'It’s this browser’s token: this browser signs out.',
     );
     await user.click(screen.getByRole('button', { name: 'Keep it' }));
 
-    await user.click(within(phone as HTMLElement).getByRole('button', { name: 'Revoke' }));
+    await user.click(within(phone as HTMLElement).getByRole('button', { name: 'Revoke Phone' }));
     const confirm = await screen.findByRole('dialog', { name: 'Revoke “Phone”?' });
     await user.click(within(confirm).getByRole('button', { name: 'Revoke' }));
     expect(await screen.findByText('“Phone” revoked')).toBeVisible();

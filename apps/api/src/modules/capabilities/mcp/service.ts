@@ -347,7 +347,8 @@ export class McpService {
       };
     } catch (error) {
       update = { status: 'failed', statusDetail: errorText(error).slice(0, 500) };
-      this.logger.warn('MCP server discovery failed', { server: row.slug, error: update.statusDetail });
+      // The log keeps the whole error; only the owner's copy loses the stack.
+      this.logger.warn('MCP server discovery failed', { server: row.slug, error });
     }
     const changed = await this.lock.run(async () => {
       const current = this.rows.get(id);
@@ -455,7 +456,7 @@ export class McpService {
     } catch (error) {
       this.entries.delete(row.id);
       const detail = `It can't connect: ${errorText(error)}`;
-      this.logger.warn('An MCP server cannot be used', { server: row.slug, error: detail });
+      this.logger.warn('An MCP server cannot be used', { server: row.slug, error });
       const [next] = await this.deps.db
         .update(mcpServers)
         .set({ status: 'failed', statusDetail: detail.slice(0, 500), updatedAt: new Date() })

@@ -11,7 +11,7 @@ import { Button } from '../../ui/button';
 import { Checkbox } from '../../ui/checkbox';
 import { ConfirmDialog, Dialog } from '../../ui/dialog';
 import { EmptyState, FormFailure, Notice, Spinner } from '../../ui/feedback';
-import { Field, Input } from '../../ui/field';
+import { Field, Input, SecretInput } from '../../ui/field';
 import { DetailRow, Page, PageHeader, Panel } from '../../ui/layout';
 import { Segmented } from '../../ui/tabs';
 import { RelativeTime } from '../../ui/time';
@@ -93,7 +93,12 @@ export function PluginsPage() {
                           ) : null}
                         </div>
                       </div>
-                      <Button size="sm" variant="destructive-ghost" onClick={() => setRemoving(plugin)}>
+                      <Button
+                        size="sm"
+                        variant="destructive-ghost"
+                        aria-label={`Uninstall ${plugin.title}`}
+                        onClick={() => setRemoving(plugin)}
+                      >
                         <Trash2 aria-hidden />
                         Uninstall
                       </Button>
@@ -499,16 +504,25 @@ function PreviewView({
               label={`${input.name}${input.required ? '' : ' (optional)'}`}
               hint={`${input.description}${input.sensitive ? ' Kept in the secrets vault.' : ''}`}
             >
-              {(control) => (
-                <Input
-                  {...control}
-                  type={input.sensitive ? 'password' : 'text'}
-                  autoComplete="off"
-                  value={inputs[input.name] ?? ''}
-                  placeholder={input.default ?? undefined}
-                  onChange={(event) => onInput(input.name, event.target.value)}
-                />
-              )}
+              {(control) =>
+                input.sensitive ? (
+                  <SecretInput
+                    {...control}
+                    value={inputs[input.name] ?? ''}
+                    placeholder={input.default ?? undefined}
+                    revealLabel={`Show ${input.name}`}
+                    onChange={(event) => onInput(input.name, event.target.value)}
+                  />
+                ) : (
+                  <Input
+                    {...control}
+                    autoComplete="off"
+                    value={inputs[input.name] ?? ''}
+                    placeholder={input.default ?? undefined}
+                    onChange={(event) => onInput(input.name, event.target.value)}
+                  />
+                )
+              }
             </Field>
           ))}
         </section>

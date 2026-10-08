@@ -42,6 +42,7 @@ export const queryKeys = {
   settings: ['settings'] as const,
   providers: ['providers'] as const,
   providerModels: (id: string) => ['providers', id, 'models'] as const,
+  usage: ['usage'] as const,
   schedules: ['schedules'] as const,
   knowledge: ['knowledge'] as const,
 };
@@ -159,7 +160,7 @@ export function useProfile() {
 /** Tokens and cost since `from`, grouped by `group`. */
 export function useUsage(group: UsageGroup, from?: string, enabled = true) {
   return useQuery({
-    queryKey: ['usage', group, from ?? 'all'],
+    queryKey: [...queryKeys.usage, group, from ?? 'all'],
     queryFn: ({ signal }) => api(UsageReportSchema, '/v1/usage', { signal, query: { group, from } }),
     staleTime: 60_000,
     enabled,
