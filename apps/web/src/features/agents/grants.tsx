@@ -1,6 +1,7 @@
 import type { BrowserIdentity, Capabilities, CatalogTool, McpGrant, ToolGrant } from '@superagent/shared';
 import { Plug, Sparkles, Wrench } from 'lucide-react';
 import { type ReactNode, useId } from 'react';
+import { Link } from 'react-router';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { Checkbox } from '../../ui/checkbox';
@@ -168,6 +169,12 @@ function ToolRow({
                     : []),
                 ]}
               />
+              <Link
+                to="/settings/browsers"
+                className="text-caption text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                {identities?.length ? 'Manage identities' : 'Make an identity'}
+              </Link>
             </div>
           ) : null}
         </>

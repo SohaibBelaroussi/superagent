@@ -25,7 +25,7 @@
   - a schedule built from "every week, Monday and Thursday at 9" showed its next runs in its timezone, and "Run now" made its task;
   - an uploaded document was found by the search agents use, with the words marked;
   - notes written on the department page reached the lead's notes.
-- W5 (settings and usage): in review. Verified in a browser against the same scripted API, at a phone's width, in both themes:
+- W5 (settings and usage): merged in PR #15. Verified in a browser against the same scripted API, at a phone's width, in both themes:
   - a provider added from the models page had its models listed; a check of the provider said what worked, and the calls it made were priced at its model's price;
   - the timezone and the theme saved as they were picked, and the usage page's periods followed the new timezone's days;
   - the admin token, given on the devices page, listed the devices even after a refused token, and forgetting it left nothing in the browser;
@@ -33,6 +33,13 @@
   - the usage page showed a bar for each day of the period, and named the built-in agents.
 
   Browser tests against the release image add, price and delete a provider, make and revoke a device token, and open the usage page and the settings on a phone.
+- W6 (workspaces and browsers): in review. Verified in a browser against the same scripted API, with a runner of its own starting real sandboxes and Chromium:
+  - a task's Files tab listed what its agent wrote in the sandbox, and showed the Markdown formatted or as source, and the text as it is;
+  - its Browser tab showed the agent's browser live; taken over, it went where the address bar said, took clicks and typing (shortcuts included), then went back to the agents and closed;
+  - an identity was signed in through its own browser: public sites through the egress proxy, a search typed into a page, and Done saved it;
+  - the Sandboxes page listed the task's sandbox, and removed it.
+
+  Browser tests against the release image open a task's empty Files and Browser tabs (the live view's WebSocket under the CSP) and sign an identity in through Chromium in its container.
 
 **Related docs:**
 - [decisions.md](decisions.md): D06 and D43–D48 cover the web app.
@@ -300,6 +307,14 @@ Each milestone ends like the API's: tests pass, a PR, one review, fixes, CI gree
 - Live browser views:
   - a task's browser, with takeover;
   - identities and their sign-in sessions, over the live-view WebSocket (`?apiKey=`, which the request log never records).
+
+**Built:**
+- **A task's files** (the Files tab, `/tasks/:id?view=files`): what its agents wrote in the workspace, as a tree (folders first, numbers in order), refreshed with the task's events. A file opens in a preview: text as it is, Markdown formatted or as source, images; anything else, or too large to show, downloads. Downloads go through the browser's own, from the bytes the API sends with the session's token.
+- **A task's browser** (the Browser tab): the live view of the browser its agents use, as it browses. Taking it over pauses their browser tools until it's given back; then the address bar navigates, and the mouse, wheel and keyboard go to the page. Closing it saves its identity's cookies.
+- **The live view** (`features/browsers/live-view.tsx`) is a WebSocket of its own while on screen, with the device token as `?apiKey=`: JPEG frames are written straight into an image (no render per frame), and its size comes from the frames, as input is in their pixels. The keyboard goes through a hidden text field: keys as keys, and text that comes without them (a phone's keyboard, an input method, dictation, a paste) as the key presses that type it. On a touch screen a tap clicks and a drag scrolls. It reconnects after a drop, and closes when the token is revoked.
+- **Browsers** (`/settings/browsers`): identities, with who holds each (a task's browser, or your sign-in); making and deleting them; signing one in (`/settings/browsers/:id/sign-in`), its browser yours from the start until Done saves the sign-ins. The browsers open now: tasks', sign-in sessions and the page reader, each with a way to close it.
+- **Sandboxes** (`/settings/sandboxes`): each task's container, running or stopped, linked to its task's files; removing one leaves the files.
+- The API now gives Chromium the key codes shortcuts need (Ctrl+A, Ctrl+C), by the key's place on the keyboard.
 
 ## 6. Risks
 

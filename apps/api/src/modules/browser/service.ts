@@ -18,6 +18,7 @@ import { assertPublicUrl, type ResolveHost } from '../tools/web';
 import { type RunnerClient, RunnerRequestError } from '../workspace/runner-client';
 import { taskOf } from '../workspace/service';
 import type { IdentityHolder, IdentityService } from './identities';
+import { virtualKey } from './keys';
 
 /** Screenshots go to the model as images; the models agents use may not read them. */
 const EXCLUDED_TOOLS: BrowserToolName[] = ['browser_screenshot'];
@@ -27,24 +28,6 @@ const SWEEP_MS = 30_000;
 const TAKEOVER_WAIT_MS = 60_000;
 const IDENTITY_POLL_MS = 2_000;
 const READ_TIMEOUT_MS = 30_000;
-
-/** Windows virtual key codes for keys that type no text (CDP needs them to act on the key). */
-const VIRTUAL_KEYS: Record<string, number> = {
-  Backspace: 8,
-  Tab: 9,
-  Enter: 13,
-  Escape: 27,
-  ' ': 32,
-  PageUp: 33,
-  PageDown: 34,
-  End: 35,
-  Home: 36,
-  ArrowLeft: 37,
-  ArrowUp: 38,
-  ArrowRight: 39,
-  ArrowDown: 40,
-  Delete: 46,
-};
 
 type SessionKind = BrowserSession['kind'];
 
@@ -665,7 +648,7 @@ export class BrowserService {
         code: message.code,
         text: message.text,
         modifiers: message.modifiers,
-        windowsVirtualKeyCode: message.key ? VIRTUAL_KEYS[message.key] : undefined,
+        windowsVirtualKeyCode: virtualKey(message.key, message.code),
       }),
     );
   }

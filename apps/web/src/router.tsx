@@ -122,6 +122,21 @@ export const routes: RouteObject[] = [
                     path: 'skills',
                     ...page(async () => (await import('./features/settings/skills-page')).SkillsPage),
                   },
+                  {
+                    path: 'browsers',
+                    ...page(async () => (await import('./features/settings/browsers-page')).BrowsersPage),
+                  },
+                  {
+                    path: 'browsers/:identityId/sign-in',
+                    ...page(
+                      async () =>
+                        (await import('./features/settings/identity-sign-in-page')).IdentitySignInPage,
+                    ),
+                  },
+                  {
+                    path: 'sandboxes',
+                    ...page(async () => (await import('./features/settings/sandboxes-page')).SandboxesPage),
+                  },
                   { path: '*', element: <NotFound /> },
                 ],
               },

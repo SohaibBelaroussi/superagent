@@ -23,14 +23,23 @@ import { EditTaskDialog } from './edit-task-dialog';
 import { type OrgLookup, useOrg } from './org';
 import { TaskActivity } from './task-activity';
 import { DepartmentLabel, DueBadge, PhaseBadge, PriorityBadge, SourceBadge } from './task-bits';
+import { TaskBrowser } from './task-browser';
 import { TaskComposer } from './task-composer';
+import { TaskFiles } from './task-files';
 import { TaskArtifacts, TaskChecklist, TaskDetails, TaskUsage } from './task-rail';
 
-/** What happened on a task: its history (who did what), or the lead's own thread. */
+/**
+ * What happened on a task: its history (who did what), the lead's own thread, the files its agents
+ * wrote, and the browser they use.
+ */
 const VIEWS = [
   { value: 'activity', label: 'Activity' },
   { value: 'transcript', label: 'Transcript' },
+  { value: 'files', label: 'Files' },
+  { value: 'browser', label: 'Browser' },
 ] as const;
+type View = (typeof VIEWS)[number]['value'];
+const isView = (value: string | null): value is View => VIEWS.some((view) => view.value === value);
 
 /** Task ids are UUIDs; anything else in the URL is a bad link, never part of a request path. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -96,7 +105,8 @@ function TaskView({ task, org }: { task: Task; org: OrgLookup }) {
   const cancel = useCancelTask(task.id);
   const [cancelReason, setCancelReason] = useState('');
   const [params, setParams] = useSearchParams();
-  const view = params.get('view') === 'transcript' ? 'transcript' : 'activity';
+  const requested = params.get('view');
+  const view: View = isView(requested) ? requested : 'activity';
 
   const canAccept = canTransition('owner', task.phase, 'done');
   const canQueue = canTransition('owner', task.phase, 'queued') && Boolean(department?.lead);
@@ -232,9 +242,7 @@ function TaskView({ task, org }: { task: Task; org: OrgLookup }) {
 
           <Tabs
             value={view}
-            onValueChange={(next) =>
-              setParams(next === 'transcript' ? { view: next } : {}, { replace: true })
-            }
+            onValueChange={(next) => setParams(next === 'activity' ? {} : { view: next }, { replace: true })}
             items={VIEWS}
           >
             <TabPanel value="activity" className="pt-4">
@@ -242,6 +250,12 @@ function TaskView({ task, org }: { task: Task; org: OrgLookup }) {
             </TabPanel>
             <TabPanel value="transcript" className="pt-4">
               <TaskTranscript task={task} org={org} />
+            </TabPanel>
+            <TabPanel value="files" className="pt-4">
+              <TaskFiles taskId={task.id} />
+            </TabPanel>
+            <TabPanel value="browser" className="pt-4">
+              <TaskBrowser taskId={task.id} />
             </TabPanel>
           </Tabs>
 

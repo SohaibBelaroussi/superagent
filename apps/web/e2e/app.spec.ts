@@ -418,3 +418,61 @@ test('settings on a phone: the sections are a row above the page, and nothing sc
   }
   expect(await widerThanItsFrame(page)).toEqual([]);
 });
+
+test("shows a task's files and browser, empty until its agents use them", async ({ page, request }) => {
+  const team = await department(request);
+  const created = await request.post('/v1/tasks', {
+    headers: auth,
+    data: { departmentId: team.id, title: 'Nothing written yet', brief: 'No agent ran.', dispatch: false },
+  });
+  const task = await created.json();
+  await signIn(page);
+  await page.goto(`/tasks/${task.id}?view=files`);
+  await expect(page.getByText('No files yet')).toBeVisible();
+  await page.getByRole('tab', { name: 'Browser' }).click();
+  await expect(page).toHaveURL(/view=browser$/);
+  // The live view connects (a WebSocket, under the CSP) and says no browser is open.
+  await expect(page.getByRole('status', { name: 'Browser' })).toContainText('Not open');
+  await expect(page.getByText('No browser open')).toBeVisible();
+
+  await page.goto('/settings/sandboxes');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sandboxes' })).toBeVisible();
+  await expect(
+    page.getByRole('list', { name: 'Sandboxes' }).or(page.getByText('No sandboxes')),
+  ).toBeVisible();
+});
+
+test('signs an identity in through its live browser, then deletes it', async ({ page }) => {
+  // Chromium starts in its hardened container through the runner: give it time.
+  test.setTimeout(120_000);
+  const name = `e2e-${Date.now().toString(36)}`;
+  await signIn(page);
+  await page.goto('/settings/browsers');
+  await page.getByRole('button', { name: 'New identity' }).click();
+  const dialog = page.getByRole('dialog', { name: 'New identity' });
+  await dialog.getByLabel('Name').fill(name);
+  await dialog.getByRole('button', { name: 'Make identity' }).click();
+  await page.getByRole('button', { name: `Sign in as ${name}` }).click();
+  await expect(page).toHaveURL(/\/sign-in$/);
+
+  // Its screen streams in: a frame, and the address it is at.
+  await expect(page.getByRole('img', { name: /^The page/ })).toHaveAttribute(
+    'src',
+    /^data:image\/jpeg;base64,/,
+    {
+      timeout: 90_000,
+    },
+  );
+  await expect(page.getByRole('status', { name: 'Browser' })).toContainText('Live');
+  await expect(page.getByLabel('Type into the page')).toBeEnabled();
+
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.getByText('Sign-ins saved')).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/browsers$/);
+  await page.getByRole('button', { name: `Delete ${name}` }).click();
+  await page
+    .getByRole('dialog', { name: `Delete ${name}?` })
+    .getByRole('button', { name: 'Delete identity' })
+    .click();
+  await expect(page.getByText(`${name} deleted`)).toBeVisible();
+});
