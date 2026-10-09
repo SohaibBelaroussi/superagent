@@ -168,10 +168,10 @@ function eventStream(frames = 'id: 0\nevent: ready\ndata: {"lastEventId":0}\n\n'
   return new HttpResponse(stream, { headers: { 'content-type': 'text/event-stream' } });
 }
 
-/** An event stream the test writes to, one connection at a time. */
-export function liveStream() {
+/** A live stream (the events, or a conversation's) the test writes to, one connection at a time. */
+export function liveStream(path = '/v1/events') {
   const connections: Array<{ lastEventId: string | null; send(text: string): void; closed: boolean }> = [];
-  const handler = http.get(api('/v1/events'), ({ request }) => {
+  const handler = http.get(api(path), ({ request }) => {
     const connection = {
       lastEventId: request.headers.get('last-event-id'),
       closed: false,

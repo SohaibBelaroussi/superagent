@@ -22,6 +22,7 @@ import { Screen } from '../../ui/screen';
 import { Card, Section } from '../../ui/surface';
 import { Text } from '../../ui/text';
 import { makeStyles, radius, space, toneColors, useTheme } from '../../ui/theme';
+import { QuickAsk } from '../conversations/quick-ask';
 import { DepartmentLabel, KINDS, PhaseIcon, ProgressBar, RelativeTime } from '../tasks/bits';
 
 /** With a lead now: sent, being worked on, or waiting for you. The inbox hasn't started yet. */
@@ -108,6 +109,7 @@ export function HomeScreen() {
           onPress={() => router.push('/new-task')}
           style={styles.newTask}
         />
+        <QuickAsk />
       </View>
 
       <View style={styles.stats}>

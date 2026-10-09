@@ -11,7 +11,7 @@ export function useLiveStatus(): LiveStatus {
 }
 
 /** Wakes a waiting reconnect when the phone's network comes back. */
-function watchNetwork(wake: () => void): () => void {
+export function watchNetwork(wake: () => void): () => void {
   const subscription = Network.addNetworkStateListener((network) => {
     if (network.isConnected) wake();
   });
