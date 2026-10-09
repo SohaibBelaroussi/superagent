@@ -7,7 +7,7 @@ import { parsePairingLink } from '../../api/pairing';
 import { Button } from '../../ui/button';
 import { Notice, Spinner } from '../../ui/feedback';
 import { Text } from '../../ui/text';
-import { makeStyles, radius, space } from '../../ui/theme';
+import { makeStyles, onCamera, radius, space } from '../../ui/theme';
 
 /** The camera, looking for the pairing code the web app shows. It asks for the camera first. */
 export function ScanScreen() {
@@ -82,7 +82,7 @@ const useStyles = makeStyles((theme) => ({
     padding: space.xl,
     backgroundColor: theme.colors.background,
   },
-  camera: { flex: 1, backgroundColor: '#000' },
+  camera: { flex: 1, backgroundColor: onCamera.screen },
   overlay: {
     flex: 1,
     alignItems: 'center',
@@ -90,12 +90,12 @@ const useStyles = makeStyles((theme) => ({
     padding: space.xl,
     gap: space.lg,
   },
-  hint: { color: '#fff', marginTop: space.lg },
+  hint: { color: onCamera.text, marginTop: space.lg },
   frame: {
     width: 240,
     height: 240,
     borderRadius: radius.card,
     borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.85)',
+    borderColor: onCamera.frame,
   },
 }));

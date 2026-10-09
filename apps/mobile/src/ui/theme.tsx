@@ -45,6 +45,9 @@ export const radius = { sm: 8, md: 12, lg: 16, card: 20, sheet: 24, pill: 999 } 
 /** Control heights: touch targets are at least 44 pt (48 dp counts the hit slop). */
 export const control = { sm: 36, md: 44, lg: 52 } as const;
 
+/** Over a camera's picture, which is dark whichever theme is on: the screen, its text, the viewfinder. */
+export const onCamera = { screen: '#000000', text: '#ffffff', frame: 'rgba(255, 255, 255, 0.85)' } as const;
+
 /** How the system's text size may grow ours, before layouts give way. */
 export const MAX_FONT_SCALE = 1.6;
 
