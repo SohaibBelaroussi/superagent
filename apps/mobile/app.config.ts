@@ -25,6 +25,13 @@ const LIGHT_BACKGROUND = '#fafafa';
 /** The mark's tile, as on the web app's icons. */
 const ICON_BACKGROUND = '#151515';
 
+/**
+ * The Firebase project's Android config (`google-services.json`), which push needs (D54). It stays out of
+ * git: the build is given its path. Without it the app builds and runs, and says it can't get
+ * notifications.
+ */
+const googleServicesFile = process.env.GOOGLE_SERVICES_JSON;
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'superagent',
@@ -46,6 +53,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // The token lives in the keystore, which a backup can't carry anyway: don't back the app up.
     allowBackup: false,
     blockedPermissions: ['android.permission.RECORD_AUDIO', 'android.permission.SYSTEM_ALERT_WINDOW'],
+    ...(googleServicesFile ? { googleServicesFile } : {}),
   },
   ios: {
     bundleIdentifier: 'dev.superagent.app',
@@ -82,6 +90,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         dark: { image: './assets/splash-icon.png', backgroundColor: DARK_BACKGROUND },
       },
     ],
+    // The small icon notifications show: the mark in white, which Android tints.
+    ['expo-notifications', { icon: './assets/notification-icon.png' }],
     './plugins/cmake-version.js',
     ...(variant === 'production' ? [] : ['./plugins/local-http.js']),
   ],

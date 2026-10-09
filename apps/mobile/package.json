@@ -14,6 +14,7 @@
     "e2e": "maestro test e2e"
   },
   "dependencies": {
+    "@noble/ciphers": "2.4.0",
     "@superagent/client": "workspace:*",
     "@superagent/shared": "workspace:*",
     "@tanstack/react-query": "5.104.1",
@@ -29,12 +30,14 @@
     "expo-image": "57.0.5",
     "expo-linking": "57.0.12",
     "expo-network": "57.0.2",
+    "expo-notifications": "57.0.22",
     "expo-router": "57.0.25",
     "expo-secure-store": "57.0.4",
     "expo-splash-screen": "57.0.9",
     "expo-sqlite": "57.0.4",
     "expo-status-bar": "57.0.1",
     "expo-system-ui": "57.0.4",
+    "expo-task-manager": "57.0.21",
     "expo-web-browser": "57.0.3",
     "lucide-react-native": "1.54.0",
     "mdast-util-from-markdown": "2.1.0",
@@ -71,6 +74,11 @@
     "install": {
       "exclude": [
         "typescript"
+      ]
+    },
+    "autolinking": {
+      "buildFromSource": [
+        "expo-notifications"
       ]
     }
   }

@@ -21,6 +21,7 @@ import type { TaskService } from '../modules/ledger/service';
 import type { MemoryService } from '../modules/memory/service';
 import type { OrgService } from '../modules/org/service';
 import type { ProviderService } from '../modules/providers/service';
+import type { PushService } from '../modules/push/service';
 import type { ScheduleService } from '../modules/schedules/service';
 import type { SettingsService } from '../modules/settings/service';
 import type { ToolCatalog } from '../modules/tools/catalog';
@@ -58,6 +59,7 @@ export interface AppDeps {
   skills: SkillStore;
   plugins: PluginService;
   usage: UsageService;
+  push: PushService;
   /** Whether SUPERAGENT_ENCRYPTION_KEY opens the database's sealed values (checked at boot). */
   keyCheck: KeyCheck;
 }

@@ -11,6 +11,8 @@ interface ToastMessage {
   tone: ToastTone;
   title: string;
   detail?: string;
+  /** What a tap does besides dismissing it (a push shown in the app opens its task). */
+  open?: () => void;
 }
 
 /*
@@ -23,9 +25,9 @@ let current: ToastMessage | null = null;
 let counter = 0;
 const listeners = new Set<() => void>();
 
-function show(tone: ToastTone, title: string, detail?: string): void {
+function show(tone: ToastTone, title: string, detail?: string, open?: () => void): void {
   counter += 1;
-  current = { id: counter, tone, title, detail };
+  current = { id: counter, tone, title, detail, open };
   for (const listener of listeners) listener();
   AccessibilityInfo.announceForAccessibility(detail ? `${title}. ${detail}` : title);
 }
@@ -40,6 +42,8 @@ export const toast = {
   success: (title: string, detail?: string) => show('success', title, detail),
   error: (title: string, detail?: string) => show('error', title, detail),
   info: (title: string, detail?: string) => show('info', title, detail),
+  /** Something that arrived (a push while the app is open): a tap opens it. */
+  notice: (title: string, detail?: string, open?: () => void) => show('info', title, detail, open),
 };
 
 const subscribe = (listener: () => void) => {
@@ -87,8 +91,11 @@ export function ToastHost() {
     <Animated.View pointerEvents="box-none" style={[styles.host, { top: insets.top + space.sm, opacity }]}>
       <Pressable
         accessibilityRole="alert"
-        accessibilityHint="Dismisses the message"
-        onPress={() => dismiss(shown.id)}
+        accessibilityHint={shown.open ? 'Opens it' : 'Dismisses the message'}
+        onPress={() => {
+          shown.open?.();
+          dismiss(shown.id);
+        }}
         style={styles.toast}
       >
         <Text variant="label" style={{ color: ink }}>

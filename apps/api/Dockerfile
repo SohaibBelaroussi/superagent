@@ -11,6 +11,8 @@ RUN corepack enable
 FROM base AS build
 WORKDIR /repo
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+# The lockfile checks the patches against their hashes, used or not.
+COPY patches patches
 COPY apps/api/package.json apps/api/
 COPY apps/runner/package.json apps/runner/
 COPY apps/egress/package.json apps/egress/
@@ -27,9 +29,10 @@ RUN pnpm --filter @superagent/api build
 COPY packages/client packages/client
 COPY apps/web apps/web
 RUN pnpm --filter @superagent/web build
-# --legacy: deploy without injectWorkspacePackages; workspace code is already bundled into dist/.
+# --legacy: deploy without injectWorkspacePackages; workspace code is already bundled into dist/. The
+# phone app's patches (patches/) don't apply to the server's dependencies.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm --filter @superagent/api deploy --prod --legacy /out
+    pnpm --filter @superagent/api deploy --prod --legacy --config.allow-unused-patches=true /out
 
 # --- runtime: bundle + migrations + production dependencies + the web app, running as the node user ---
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime

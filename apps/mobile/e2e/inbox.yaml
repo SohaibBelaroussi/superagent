@@ -1,0 +1,21 @@
+# Needs the tests' fake model (MAESTRO_MODEL_URL, see setup.js): setup.js sends a task to the Phone
+# review department, whose lead reports straight back, so the task waits for your review.
+appId: dev.superagent.app
+name: The inbox
+tags:
+  - server
+  - model
+---
+- runFlow: common/pair.yaml
+# The tab names its count too ("Inbox, 3 new notifications").
+- tapOn: "Inbox(, .*)?"
+- assertVisible: "Inbox"
+# Below whatever else needs you on this server, once the lead has reported.
+- scrollUntilVisible:
+    element: ".*Phone check: ready for review is ready for review"
+    timeout: 60000
+- tapOn:
+    text: "Accept"
+    below: ".*Phone check: ready for review is ready for review"
+- assertVisible: "Accepted"
+- assertNotVisible: ".*Phone check: ready for review is ready for review"

@@ -301,7 +301,7 @@ Each milestone ends like the web app's: tests pass, a PR, one review, fixes, CI 
   A count shows on the tab, and on the icon where the launcher shows one.
 - **API:**
   - `PushService`, with the chief's finished answers reaching it as well as task events;
-  - device registrations: `PUT` and `DELETE /v1/push/device`, `GET /v1/push`, `POST /v1/push/test`;
+  - device registrations: `GET`, `PUT` and `DELETE /v1/push/device` and `POST /v1/push/device/test` for a phone, `GET /v1/push` and `PUT`/`DELETE /v1/push/config` for the owner;
   - the FCM sender: no SDK, just a token signed with the service account, sent to FCM's HTTP v1 API;
   - encrypted payloads;
   - a fake FCM server for tests.
@@ -309,7 +309,7 @@ Each milestone ends like the web app's: tests pass, a PR, one review, fixes, CI 
 - **App:**
   - turning push on, with Android 13's permission asked once its channels exist;
   - a channel per kind, and which kinds to get, in settings;
-  - notifications drawn by the app, with their actions. On the lock screen they show only their kind, and their actions wait for the phone to be unlocked;
+  - notifications drawn by the app, with their actions. Their actions wait for the phone to be unlocked, which Android allows from Android 12; older phones get no actions, and a tap opens the app. On a lock screen that hides sensitive content (Android's setting, on by the owner's choice), they show only their kind;
   - a tap opens the item;
   - while the app is open, a banner inside it instead.
 - **Runbook:** setting up a Firebase project, which is free.

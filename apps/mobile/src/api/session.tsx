@@ -1,14 +1,14 @@
-import { api, apiVoid, configureClient, onUnauthorized, ProblemError, setApiToken } from '@superagent/client';
+import { api, apiVoid, onUnauthorized, ProblemError, setApiToken } from '@superagent/client';
 import { CreatedTokenSchema, type Me, MeSchema } from '@superagent/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { forgetPush } from '../push/registration';
+import { connect } from './connect';
 import { deviceName, type PairingLink } from './pairing';
 import { clearSession, loadSession, type StoredSession, saveSession } from './storage';
 
 /** The admin token's id in `/v1/me`: it can mint tokens, so the app swaps it for a device token (D45). */
 const ADMIN_TOKEN_ID = 'admin';
-
-const NETWORK_ERROR = 'Can’t reach superagent. Is Tailscale on?';
 
 export type SessionState =
   | { status: 'checking' }
@@ -48,11 +48,6 @@ export function useSignedIn(): Extract<SessionState, { status: 'signed-in' }> {
   return state;
 }
 
-function connect(server: string, token: string | null): void {
-  configureClient({ baseUrl: server, networkErrorDetail: NETWORK_ERROR });
-  setApiToken(token);
-}
-
 /**
  * The phone's session: a device token for one server, kept in the keystore. A stored session counts
  * as signed in at once (the server may be out of reach: Tailscale off, no signal); the server's
@@ -65,6 +60,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const forget = useCallback(
     async (reason: 'revoked' | 'signed-out') => {
       await clearSession();
+      await forgetPush();
       setApiToken(null);
       queryClient.clear();
       setState({ status: 'signed-out', reason });

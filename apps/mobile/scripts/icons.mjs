@@ -30,6 +30,8 @@ for (const [name, size, image, transparent] of [
   ['adaptive-icon-monochrome.png', 1024, svg(0.6, null, monochrome), true],
   // The splash screen's mark, on the theme's background (set in app.config.ts).
   ['splash-icon.png', 512, svg(1, null), true],
+  // Android's notification icon: white on transparent, filling most of its square.
+  ['notification-icon.png', 96, svg(0.9, null, monochrome), true],
 ]) {
   const page = await browser.newPage({ viewport: { width: size, height: size } });
   await page.setContent(

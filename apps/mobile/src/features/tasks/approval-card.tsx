@@ -3,7 +3,7 @@ import type { AttentionItem } from '@superagent/shared';
 import * as Haptics from 'expo-haptics';
 import { ShieldCheck, ShieldQuestion, ShieldX } from 'lucide-react-native';
 import { useRef, useState } from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { useDecide } from '../../api/queries';
 import { Button } from '../../ui/button';
 import { CodeBlock } from '../../ui/code-block';
@@ -16,9 +16,10 @@ type Kind = 'approve' | 'decline';
 
 /**
  * A tool call waiting for you: what it would do, then Approve, or Decline with an optional reason the
- * agent reads. No swipe or long press decides: only these buttons, with the call in view.
+ * agent reads. No swipe or long press decides: only these buttons, with the call in view. In the inbox,
+ * its head opens the task (`onOpen`).
  */
-export function ApprovalCard({ item }: { item: AttentionItem }) {
+export function ApprovalCard({ item, onOpen }: { item: AttentionItem; onOpen?: () => void }) {
   const theme = useTheme();
   const styles = useStyles();
   const decide = useDecide();
@@ -54,16 +55,23 @@ export function ApprovalCard({ item }: { item: AttentionItem }) {
 
   return (
     <View accessibilityLabel={`${item.title}: waiting for your approval`} style={styles.card}>
-      <View style={styles.head}>
+      <Pressable
+        accessibilityRole={onOpen ? 'link' : undefined}
+        accessibilityHint={onOpen ? 'Opens the task' : undefined}
+        disabled={!onOpen}
+        onPress={onOpen}
+        style={styles.head}
+      >
         <ShieldQuestion size={18} color={theme.colors.warningIndicator} style={{ marginTop: 1 }} />
         <View style={{ flex: 1, gap: 2 }}>
           <Text variant="label">{item.title}</Text>
           <Text variant="caption" color="mutedForeground">
-            Waiting since <RelativeTime iso={item.since} variant="caption" color="mutedForeground" />. The
-            task carries on once you decide.
+            {item.taskNumber !== null && onOpen ? `#${item.taskNumber} · ` : ''}Waiting since{' '}
+            <RelativeTime iso={item.since} variant="caption" color="mutedForeground" />. The task carries on
+            once you decide.
           </Text>
         </View>
-      </View>
+      </Pressable>
 
       {args ? <CodeBlock value={args} /> : null}
 

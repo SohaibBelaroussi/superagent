@@ -1,6 +1,6 @@
-import { errorMessage, ProblemError } from '@superagent/client';
+import { errorMessage } from '@superagent/client';
 import type { TokenRecord } from '@superagent/shared';
-import { Copy, KeyRound, MonitorSmartphone, Plus, Smartphone } from 'lucide-react';
+import { Copy, MonitorSmartphone, Plus, Smartphone } from 'lucide-react';
 import { type FormEvent, useId, useState } from 'react';
 import { useMe } from '../../api/session';
 import { useCreateToken, useRevokeToken, useTokens } from '../../api/settings';
@@ -10,11 +10,12 @@ import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { ConfirmDialog, Dialog } from '../../ui/dialog';
 import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';
-import { Field, Input, SecretInput } from '../../ui/field';
+import { Field, Input } from '../../ui/field';
 import { Page, PageHeader, Panel } from '../../ui/layout';
 import { raisedSurface } from '../../ui/recipes';
 import { RelativeTime } from '../../ui/time';
 import { toast } from '../../ui/toast';
+import { AdminTokenForm, refusal } from './admin-token-form';
 import { PairPhoneDialog } from './pair-phone-dialog';
 
 /**
@@ -32,12 +33,7 @@ export function DevicesPage() {
   const [pairing, setPairing] = useState(false);
   // While a phone pairs, look for its token every couple of seconds.
   const tokens = useTokens(adminToken, attempt, pairing ? 2_000 : undefined);
-  const refused =
-    tokens.error instanceof ProblemError && (tokens.error.status === 401 || tokens.error.status === 403)
-      ? tokens.error.status === 403
-        ? 'That’s a device token. Managing devices takes the admin token.'
-        : 'The server doesn’t know that token.'
-      : null;
+  const refused = refusal(tokens.error, 'Managing devices');
   const [creating, setCreating] = useState(false);
 
   return (
@@ -69,7 +65,12 @@ export function DevicesPage() {
       }
     >
       {!adminToken || refused ? (
-        <AdminTokenForm refused={refused} onToken={giveToken} />
+        <AdminTokenForm
+          refused={refused}
+          onToken={giveToken}
+          purpose="to manage devices"
+          submitLabel="Show devices"
+        />
       ) : tokens.isError ? (
         <Notice tone="destructive" title="Couldn’t load the devices">
           {errorMessage(tokens.error)}
@@ -87,45 +88,6 @@ export function DevicesPage() {
         tokens={tokens.data}
       />
     </Page>
-  );
-}
-
-function AdminTokenForm({ refused, onToken }: { refused: string | null; onToken: (token: string) => void }) {
-  const [value, setValue] = useState('');
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (value.trim()) onToken(value.trim());
-  };
-  return (
-    <Panel className="flex flex-col gap-4 p-5">
-      <div className="flex items-start gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-fill-subtle text-muted-foreground shadow-rim [&_svg]:size-4">
-          <KeyRound aria-hidden />
-        </div>
-        <div className="flex flex-col gap-1">
-          <h2 className="text-subheading text-foreground">The admin token, to manage devices</h2>
-          <p className="text-body-sm text-muted-foreground">
-            It stays on this page only: it isn’t kept in the browser, and leaving or reloading forgets it.
-          </p>
-        </div>
-      </div>
-      <form onSubmit={submit} className="flex flex-col gap-3 sm:flex-row sm:items-start">
-        <Field label="Admin token" error={refused ?? undefined} className="flex-1">
-          {(control) => (
-            <SecretInput
-              {...control}
-              value={value}
-              inputClassName="font-mono"
-              revealLabel="Show the token"
-              onChange={(event) => setValue(event.target.value)}
-            />
-          )}
-        </Field>
-        <Button type="submit" variant="primary" className="sm:mt-6.5" disabled={!value.trim()}>
-          Show devices
-        </Button>
-      </form>
-    </Panel>
   );
 }
 

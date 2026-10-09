@@ -44,3 +44,30 @@ export async function clearSession(): Promise<void> {
     // Nothing stored.
   }
 }
+
+const PUSH_KEY = 'superagent.push-key';
+/** Read when a push arrives, which can be while the phone is locked (after its first unlock). */
+const PUSH_KEY_OPTIONS: SecureStore.SecureStoreOptions = {
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+};
+
+/** The key this phone's notifications are encrypted with (D54), if it gets them. */
+export async function loadPushKey(): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(PUSH_KEY, PUSH_KEY_OPTIONS);
+  } catch {
+    return null;
+  }
+}
+
+export async function savePushKey(key: string): Promise<void> {
+  await SecureStore.setItemAsync(PUSH_KEY, key, PUSH_KEY_OPTIONS);
+}
+
+export async function clearPushKey(): Promise<void> {
+  try {
+    await SecureStore.deleteItemAsync(PUSH_KEY, PUSH_KEY_OPTIONS);
+  } catch {
+    // Nothing stored.
+  }
+}

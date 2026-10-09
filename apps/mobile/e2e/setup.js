@@ -20,6 +20,14 @@ const DEPARTMENT = {
   description: 'For the phone app’s end-to-end flows.',
 };
 const TASK = { title: 'Phone check: on the board', brief: 'Seeded for the phone app’s end-to-end flows.' };
+// With the fake model: a department whose lead reports straight back, so its task waits for your review.
+const REVIEWS = {
+  slug: 'phone-review',
+  name: 'Phone review',
+  description: 'For the phone app’s inbox flow: its lead reports straight back.',
+};
+const REVIEW_LEAD = 'phone-review-lead';
+const TO_REVIEW = { title: 'Phone check: ready for review', brief: 'Seeded for the inbox flow.' };
 const headers = { Authorization: `Bearer ${MAESTRO_ADMIN_TOKEN}`, 'Content-Type': 'application/json' };
 
 function read(response, what) {
@@ -64,6 +72,25 @@ if (typeof MAESTRO_MODEL_URL !== 'undefined' && MAESTRO_MODEL_URL) {
     }),
     'PATCH /v1/settings',
   );
+
+  // One result to review at a time: a new one once the last was accepted.
+  const reviews =
+    get('/v1/departments').items.find((item) => item.slug === REVIEWS.slug) ??
+    post('/v1/departments', REVIEWS);
+  if (!get('/v1/agents').items.some((agent) => agent.key === REVIEW_LEAD)) {
+    post('/v1/agents', {
+      key: REVIEW_LEAD,
+      name: 'Reviewer',
+      role: 'lead',
+      departmentId: reviews.id,
+      description: 'Reports straight back, for the phone app’s inbox flow.',
+      instructions: 'Reply briefly.',
+    });
+  }
+  const open = get(`/v1/tasks?departmentId=${reviews.id}&limit=200`).items.filter((task) => !task.closedAt);
+  if (!open.some((task) => task.title === TO_REVIEW.title)) {
+    post('/v1/tasks', { departmentId: reviews.id, ...TO_REVIEW, dispatch: true });
+  }
 }
 
 // The department has no lead, so its tasks wait in the inbox and nothing calls a model.

@@ -15,6 +15,7 @@ import { registerMeRoutes } from './me';
 import { registerMemoryRoutes } from './memory';
 import { registerOrgRoutes } from './org';
 import { registerProviderRoutes } from './providers';
+import { registerPushRoutes } from './push';
 import { registerScheduleRoutes } from './schedules';
 import { registerSettingsRoutes } from './settings';
 import { registerTaskRoutes } from './tasks';
@@ -56,6 +57,7 @@ export function createV1Router(deps: AppDeps, upgradeWebSocket: UpgradeWebSocket
   registerBrowserRoutes(v1, deps, upgradeWebSocket);
   registerCapabilityRoutes(v1, deps);
   registerUsageRoutes(v1, deps);
+  registerPushRoutes(v1, deps);
 
   v1.openAPIRegistry.registerComponent('securitySchemes', 'bearer', { type: 'http', scheme: 'bearer' });
   v1.doc31('/openapi.json', {

@@ -42,6 +42,9 @@ const configSchema = z.object({
   S3_REGION: z.string().min(1).default('us-east-1'),
   S3_ACCESS_KEY: z.string().min(8).optional(),
   S3_SECRET_KEY: z.string().min(16).optional(),
+  // Push notifications (D54) go to Google's endpoints. Overridden only so tests can use a fake server.
+  PUSH_FCM_URL: z.url().default('https://fcm.googleapis.com'),
+  PUSH_OAUTH_URL: z.url().default('https://oauth2.googleapis.com/token'),
   // Long threads are compressed into observations past this many tokens (decision D30).
   MEMORY_OBSERVE_TOKENS: z.coerce.number().int().min(100).default(30_000),
   MEMORY_REFLECT_TOKENS: z.coerce.number().int().min(100).default(40_000),

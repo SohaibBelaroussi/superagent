@@ -107,6 +107,12 @@ export const routes: RouteObject[] = [
                     ...page(async () => (await import('./features/settings/devices-page')).DevicesPage),
                   },
                   {
+                    path: 'notifications',
+                    ...page(
+                      async () => (await import('./features/settings/notifications-page')).NotificationsPage,
+                    ),
+                  },
+                  {
                     path: 'secrets',
                     ...page(async () => (await import('./features/settings/secrets-page')).SecretsPage),
                   },

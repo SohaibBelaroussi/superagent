@@ -25,6 +25,8 @@ const ESM = [
   'headers-polyfill',
   'is-node-process',
   'lucide-react-native',
+  // Push's decryption (ESM only).
+  '@noble',
   // In jest-expo's own list (Expo Router's navigation).
   'standard-navigation',
 ];

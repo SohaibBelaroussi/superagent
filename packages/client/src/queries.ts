@@ -48,6 +48,7 @@ export const queryKeys = {
   usage: ['usage'] as const,
   schedules: ['schedules'] as const,
   knowledge: ['knowledge'] as const,
+  myPush: ['push', 'device'] as const,
 };
 
 type Context = Pick<QueryFunctionContext, 'signal'>;

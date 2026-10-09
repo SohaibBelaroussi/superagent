@@ -54,6 +54,40 @@ export const pairingCodes = app.table('pairing_codes', {
 
 export type PairingCodeRow = typeof pairingCodes.$inferSelect;
 
+/**
+ * Where push notifications go (D54): at most one registration per device token, removed with it. The
+ * phone made `key` and gave it at registration; payloads are encrypted with it, so FCM sees only
+ * ciphertext. The push token and the key are sealed with SecretBox.
+ */
+export const pushDevices = app.table('push_devices', {
+  id: uuid('id').primaryKey(),
+  tokenId: uuid('token_id')
+    .notNull()
+    .unique()
+    .references(() => apiTokens.id, { onDelete: 'cascade' }),
+  platform: text('platform').$type<'android' | 'ios'>().notNull(),
+  pushTokenEnc: text('push_token_enc').notNull(),
+  keyEnc: text('key_enc').notNull(),
+  kinds: jsonb('kinds').$type<string[]>().notNull(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+  lastSentAt: timestamp('last_sent_at', { withTimezone: true }),
+  lastError: text('last_error'),
+});
+
+export type PushDeviceRow = typeof pushDevices.$inferSelect;
+
+/** The Firebase project pushes go through (one row, id 'fcm'): its service account key, sealed. */
+export const pushConfig = app.table('push_config', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull(),
+  clientEmail: text('client_email').notNull(),
+  serviceAccountEnc: text('service_account_enc').notNull(),
+  updatedAt: updatedAt(),
+});
+
+export type PushConfigRow = typeof pushConfig.$inferSelect;
+
 /** OpenAI-compatible model providers. Secrets are sealed with SecretBox (AES-256-GCM). */
 export const providers = app.table('providers', {
   id: uuid('id').primaryKey(),

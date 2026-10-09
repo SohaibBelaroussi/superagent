@@ -1,6 +1,6 @@
 # The phone app on this PC
 
-How to work on the phone app (`apps/mobile`, decisions D50–D56) on Windows: the Android tools, the emulator, running the app against the API in development, and the end-to-end flows. There's no Mac here, so the iPhone build is CI's job (section 5).
+How to work on the phone app (`apps/mobile`, decisions D50–D56) on Windows: the Android tools, the emulator, running the app against the API in development, the end-to-end flows, and push notifications. There's no Mac here, so the iPhone build is CI's job (section 6).
 
 ## 1. Tools
 
@@ -76,15 +76,41 @@ The [Maestro](https://maestro.dev) flows in `apps/mobile/e2e` drive a release bu
 
 **When a flow fails,** Maestro keeps its screenshots and logs in `%USERPROFILE%\.maestro\tests`.
 
-The flows: `board.yaml` (home, the board, a task), `new-task.yaml`, `sign-out.yaml`, `chief.yaml` (a conversation with the chief, on the fake model), and `sign-in.yaml`, which needs no server.
+The flows: `board.yaml` (home, the board, a task), `inbox.yaml` (what needs you, answered from the Inbox tab), `new-task.yaml`, `sign-out.yaml`, `chief.yaml` (a conversation with the chief, on the fake model), and `sign-in.yaml`, which needs no server.
 
-## 4. Jest
+## 4. Push notifications
+
+The API sends notifications itself, through Firebase Cloud Messaging (D54). FCM is free, and needs a Firebase project of your own: the app needs its Android config, and the API its service account. Google only ever sees ciphertext: each phone makes a key when you turn notifications on, and the API encrypts every notification with it.
+
+1. **Create the project** at [console.firebase.google.com](https://console.firebase.google.com) (the free plan; Google Analytics isn't needed). New projects have the Cloud Messaging API (V1) on already.
+2. **Add an Android app** to it, with the package name `dev.superagent.app`, and download its `google-services.json`. Keep it outside the repository (for example in `%USERPROFILE%\.superagent\`). It isn't a secret, but it names your project, and the repository is public.
+3. **Build the app with it.** `GOOGLE_SERVICES_JSON` gives the build its path; set it for the prebuild, then build as in section 3:
+
+   ```bash
+   cd apps/mobile
+   GOOGLE_SERVICES_JSON="$USERPROFILE/.superagent/google-services.json" APP_VARIANT=test pnpm exec expo prebuild --platform android --clean
+   ```
+
+   A build without it works, and says in its settings that it can't get notifications.
+4. **Give the API the service account.** In the Firebase console, open Project settings, Service accounts, and generate a new private key: a JSON file. In the web app, open Settings, Notifications, give the admin token, and choose that file. The API checks it with Google and keeps it sealed, like provider keys; delete the downloaded file afterwards. Stop notifications there to forget it.
+5. **Turn them on, on the phone:** Settings, Notifications, Get notifications. Android asks for the permission. Pick the kinds, and send a test.
+
+**What a notification does.**
+- Each kind has its own channel, which Android's settings can tune or silence.
+- Approve, Decline, Answer, Accept and Reply work from the notification without opening the app, once the phone is unlocked. That needs Android 12 or later; on older phones, notifications have no buttons, and a tap opens the app.
+- The lock screen shows a notification's text unless Android hides sensitive content there (Settings, Notifications, "Sensitive notifications" off). Then it shows only the kind. Turn that off if tool calls and task titles shouldn't show on a locked phone.
+- A tap opens its task, or the chief. With the app open, it shows as a banner inside the app instead.
+- The app acts only on notifications it drew from an encrypted push. A message sent to the phone some other way (by someone holding the service account) can't use its buttons.
+
+**When one doesn't arrive:** the web app's Notifications page lists each phone with the last error FCM gave. A phone FCM no longer knows (the app was uninstalled) is dropped, as is one whose device token is revoked. Android can hold notifications back in battery saver and Doze. On the emulator, it must be a Google APIs image (the one in section 1 is).
+
+## 5. Jest
 
 `pnpm --filter @superagent/mobile test` runs the app's unit and component tests: whole screens rendered through Expo Router, with MSW answering the network. They're part of `pnpm check`.
 
 `pnpm --filter @superagent/mobile tokens` regenerates `src/ui/tokens.ts` from the web app's `theme.css`. A test fails when they disagree.
 
-## 5. The iPhone
+## 6. The iPhone
 
 CI builds the app for the iOS simulator on a macOS runner, which needs no Apple account, and runs `sign-in.yaml` on it. Docker doesn't run on those runners, so there's no server there for the other flows to reach.
 
