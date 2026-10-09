@@ -32,7 +32,8 @@ export function TaskTranscript({ task, org }: { task: Task; org: OrgLookup }) {
       </div>
     );
   }
-  if (history.isError) {
+  // A failed refresh keeps what was loaded.
+  if (history.isError && !history.data) {
     return (
       <Notice
         tone="destructive"

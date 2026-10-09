@@ -18,6 +18,7 @@ import { Pressable, View } from 'react-native';
 import { useAttention, useBoard, useOrg } from '../../api/queries';
 import { Button, IconButton } from '../../ui/button';
 import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
+import { AvoidKeyboard } from '../../ui/keyboard';
 import { Screen } from '../../ui/screen';
 import { Card, Section } from '../../ui/surface';
 import { Text } from '../../ui/text';
@@ -83,105 +84,108 @@ export function HomeScreen() {
   };
 
   return (
-    <Screen
-      edges={['top', 'left', 'right']}
-      onRefresh={refresh}
-      refreshing={attention.isRefetching || board.isRefetching}
-    >
-      <View style={styles.header}>
-        <View style={styles.topRow}>
-          <Text variant="caption" color="mutedForeground">
-            {today.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+    // The quick ask is a field: the keyboard mustn't cover it.
+    <AvoidKeyboard style={{ flex: 1 }}>
+      <Screen
+        edges={['top', 'left', 'right']}
+        onRefresh={refresh}
+        refreshing={attention.isRefetching || board.isRefetching}
+      >
+        <View style={styles.header}>
+          <View style={styles.topRow}>
+            <Text variant="caption" color="mutedForeground">
+              {today.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+            </Text>
+            <IconButton icon={Settings} label="Settings" onPress={() => router.push('/settings')} />
+          </View>
+          <Text variant="display" accessibilityRole="header">
+            {greeting(today.getHours())}
+            {name ? `, ${name}` : ''}
           </Text>
-          <IconButton icon={Settings} label="Settings" onPress={() => router.push('/settings')} />
+          <Text variant="bodySmall" color="mutedForeground">
+            {attention.isSuccess && board.isSuccess ? summary : ' '}
+          </Text>
+          <Button
+            title="New task"
+            variant="primary"
+            icon={Plus}
+            onPress={() => router.push('/new-task')}
+            style={styles.newTask}
+          />
+          <QuickAsk />
         </View>
-        <Text variant="display" accessibilityRole="header">
-          {greeting(today.getHours())}
-          {name ? `, ${name}` : ''}
-        </Text>
-        <Text variant="bodySmall" color="mutedForeground">
-          {attention.isSuccess && board.isSuccess ? summary : ' '}
-        </Text>
-        <Button
-          title="New task"
-          variant="primary"
-          icon={Plus}
-          onPress={() => router.push('/new-task')}
-          style={styles.newTask}
-        />
-        <QuickAsk />
-      </View>
 
-      <View style={styles.stats}>
-        <Stat label="Need you" value={attention.isSuccess ? String(needs.length) : null} />
-        <Stat label="In progress" value={board.isSuccess ? String(running.length) : null} />
-        <Stat label="Done this week" value={board.isSuccess ? String(doneThisWeek) : null} />
-        <Stat
-          label="Spent this week"
-          value={usage.isSuccess ? formatCost(usage.data.total.costUsd) : null}
-          hint={usage.isSuccess ? `${formatTokens(usage.data.total.totalTokens)} tokens` : undefined}
-        />
-      </View>
+        <View style={styles.stats}>
+          <Stat label="Need you" value={attention.isSuccess ? String(needs.length) : null} />
+          <Stat label="In progress" value={board.isSuccess ? String(running.length) : null} />
+          <Stat label="Done this week" value={board.isSuccess ? String(doneThisWeek) : null} />
+          <Stat
+            label="Spent this week"
+            value={usage.isSuccess ? formatCost(usage.data.total.costUsd) : null}
+            hint={usage.isSuccess ? `${formatTokens(usage.data.total.totalTokens)} tokens` : undefined}
+          />
+        </View>
 
-      <Section title="Needs you">
-        {attention.isPending ? (
-          <RowsSkeleton />
-        ) : attention.isError ? (
-          <Notice tone="destructive" title="Couldn’t load what needs you">
-            {errorMessage(attention.error)}
-          </Notice>
-        ) : needs.length === 0 ? (
-          <Card>
-            <EmptyState
-              compact
-              icon={CircleCheck}
-              title="You’re all caught up"
-              description="Approvals, questions and results to review show up here."
-            />
-          </Card>
-        ) : (
-          <View style={styles.rows}>
-            {needs.slice(0, 8).map((item) => (
-              <AttentionRow key={item.id} item={item} org={org} />
-            ))}
-          </View>
-        )}
-      </Section>
-
-      <Section title="In progress">
-        {board.isPending ? (
-          <RowsSkeleton />
-        ) : board.isError ? (
-          <Notice tone="destructive" title="Couldn’t load the board">
-            {errorMessage(board.error)}
-          </Notice>
-        ) : running.length === 0 ? (
-          <Card>
-            <EmptyState
-              compact
-              title="Nothing in progress"
-              description="Tasks your departments are working on show up here."
-            />
-          </Card>
-        ) : (
-          <View style={styles.rows}>
-            {running.slice(0, 8).map((task) => (
-              <TaskRow key={task.id} task={task} org={org} />
-            ))}
-          </View>
-        )}
-      </Section>
-
-      {finished.length > 0 ? (
-        <Section title="Recently finished">
-          <View style={styles.rows}>
-            {finished.map((task) => (
-              <TaskRow key={task.id} task={task} org={org} />
-            ))}
-          </View>
+        <Section title="Needs you">
+          {attention.isPending ? (
+            <RowsSkeleton />
+          ) : attention.isError ? (
+            <Notice tone="destructive" title="Couldn’t load what needs you">
+              {errorMessage(attention.error)}
+            </Notice>
+          ) : needs.length === 0 ? (
+            <Card>
+              <EmptyState
+                compact
+                icon={CircleCheck}
+                title="You’re all caught up"
+                description="Approvals, questions and results to review show up here."
+              />
+            </Card>
+          ) : (
+            <View style={styles.rows}>
+              {needs.slice(0, 8).map((item) => (
+                <AttentionRow key={item.id} item={item} org={org} />
+              ))}
+            </View>
+          )}
         </Section>
-      ) : null}
-    </Screen>
+
+        <Section title="In progress">
+          {board.isPending ? (
+            <RowsSkeleton />
+          ) : board.isError ? (
+            <Notice tone="destructive" title="Couldn’t load the board">
+              {errorMessage(board.error)}
+            </Notice>
+          ) : running.length === 0 ? (
+            <Card>
+              <EmptyState
+                compact
+                title="Nothing in progress"
+                description="Tasks your departments are working on show up here."
+              />
+            </Card>
+          ) : (
+            <View style={styles.rows}>
+              {running.slice(0, 8).map((task) => (
+                <TaskRow key={task.id} task={task} org={org} />
+              ))}
+            </View>
+          )}
+        </Section>
+
+        {finished.length > 0 ? (
+          <Section title="Recently finished">
+            <View style={styles.rows}>
+              {finished.map((task) => (
+                <TaskRow key={task.id} task={task} org={org} />
+              ))}
+            </View>
+          </Section>
+        ) : null}
+      </Screen>
+    </AvoidKeyboard>
   );
 }
 

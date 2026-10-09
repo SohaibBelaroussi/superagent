@@ -1,10 +1,10 @@
-import { randomId } from '@superagent/client';
 import { router } from 'expo-router';
 import { ArrowUp } from 'lucide-react-native';
 import { useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 import { Avatar } from '../../ui/avatar';
 import { MAX_FONT_SCALE, makeStyles, radius, space, type, useTheme } from '../../ui/theme';
+import { handOff } from './handoff';
 
 /** One line to the chief of staff: the conversation opens with it sent. */
 export function QuickAsk() {
@@ -17,7 +17,7 @@ export function QuickAsk() {
     const message = text.trim();
     if (!message) return;
     setText('');
-    router.navigate({ pathname: '/chief', params: { send: message, nonce: randomId() } });
+    router.navigate({ pathname: '/chief', params: { handoff: handOff(message) } });
   };
 
   return (

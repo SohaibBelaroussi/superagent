@@ -218,8 +218,13 @@ export function AgentMessage({
       {showSpeaker ? <SpeakerLine speaker={speaker} at={at} /> : null}
       <div className="flex min-w-0 flex-col gap-1.5 pl-7">
         {parts.map((part, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: parts never move within a message.
-          <PartView key={index} part={part} name={name} />
+          // A live turn loses its first parts as they're stored: a call keeps its own key, so a call
+          // you opened stays open. Text has nothing to keep.
+          <PartView
+            key={part.type === 'tool' ? `tool:${part.callId}` : `${part.type}:${index}`}
+            part={part}
+            name={name}
+          />
         ))}
         {children}
       </div>

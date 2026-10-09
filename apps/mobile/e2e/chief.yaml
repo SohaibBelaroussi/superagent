@@ -1,6 +1,7 @@
 # Needs the tests' fake model (MAESTRO_MODEL_URL, see setup.js). It answers "pong (fake-chat) …" with the
-# start of your message, or, when the chief has a tool it calls first, "The tool said … The magic number
-# is 42."
+# first 20 characters of your message, or, when the chief has a tool it calls first, "The tool said …
+# The magic number is 42." The message carries this run's word (output.run, from setup.js), so an
+# earlier run's conversation on the server can't pass for this one.
 appId: dev.superagent.app
 name: A conversation with the chief
 tags:
@@ -12,12 +13,14 @@ tags:
 - assertVisible: "Chief of staff"
 - tapOn:
     id: "chief-message"
-- inputText: "Hello from the phone"
+- inputText: "Phone check ${output.run}"
 - tapOn: "Send"
 # Your message at once, then the chief's answer, streamed and then stored.
-- assertVisible: "Hello from the phone"
+- assertVisible: "Phone check ${output.run}"
 - extendedWaitUntil:
-    visible: "(pong \\(fake-chat\\) Hello from the phone|.*The magic number is 42\\.)"
+    visible:
+      text: "(pong \\(fake-chat\\) Phone check ${output.run}|.*The magic number is 42\\.)"
+      below: "Phone check ${output.run}"
     timeout: 30000
 - extendedWaitUntil:
     visible: "Routes your work to the departments"

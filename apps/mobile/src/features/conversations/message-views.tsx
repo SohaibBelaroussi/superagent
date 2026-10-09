@@ -285,7 +285,7 @@ function PartView({ part, name }: { part: MessagePart; name: (key: string) => st
         <Pressable
           accessibilityRole={url ? 'link' : undefined}
           disabled={!url}
-          onPress={() => url && void WebBrowser.openBrowserAsync(url)}
+          onPress={() => url && void WebBrowser.openBrowserAsync(url).catch(() => {})}
           style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs + 2 }}
         >
           <Link2 size={14} color={theme.colors.mutedForeground} />
@@ -339,8 +339,13 @@ export function AgentMessage({
         {parts.map((part, index) =>
           // A text block can start empty (a step that only called a tool): it takes no room.
           (part.type === 'text' || part.type === 'reasoning') && !part.text.trim() ? null : (
-            // biome-ignore lint/suspicious/noArrayIndexKey: parts never move within a message.
-            <PartView key={index} part={part} name={name} />
+            // A live turn loses its first parts as they're stored: a call keeps its own key, so a call
+            // you opened stays open. Text has nothing to keep.
+            <PartView
+              key={part.type === 'tool' ? `tool:${part.callId}` : `${part.type}:${index}`}
+              part={part}
+              name={name}
+            />
           ),
         )}
         {children}
