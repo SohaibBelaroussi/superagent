@@ -11,3 +11,5 @@ backups
 release
 **/test-results
 **/playwright-report
+# The phone app is built on its own (and its generated android/ folder is large): no image needs it.
+apps/mobile

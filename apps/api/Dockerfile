@@ -16,13 +16,15 @@ COPY apps/runner/package.json apps/runner/
 COPY apps/egress/package.json apps/egress/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
+COPY packages/client/package.json packages/client/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --filter @superagent/api... --filter @superagent/web...
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY apps/api apps/api
 RUN pnpm --filter @superagent/api build
-# The web app (decision D44): static files the API serves from WEB_DIR.
+# The web app (decision D44): static files the API serves from WEB_DIR. Its data layer is packages/client.
+COPY packages/client packages/client
 COPY apps/web apps/web
 RUN pnpm --filter @superagent/web build
 # --legacy: deploy without injectWorkspacePackages; workspace code is already bundled into dist/.
