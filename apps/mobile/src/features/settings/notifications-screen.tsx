@@ -36,7 +36,7 @@ function Toggle({
       disabled={disabled}
       onValueChange={onChange}
       trackColor={{ false: theme.colors.fillStrong, true: theme.colors.successIndicator }}
-      thumbColor={theme.colors.foreground}
+      thumbColor={value ? theme.colors.card : theme.colors.mutedForeground}
     />
   );
 }

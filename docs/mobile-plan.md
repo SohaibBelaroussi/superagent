@@ -301,7 +301,7 @@ Each milestone ends like the web app's: tests pass, a PR, one review, fixes, CI 
   A count shows on the tab, and on the icon where the launcher shows one.
 - **API:**
   - `PushService`, with the chief's finished answers reaching it as well as task events;
-  - device registrations: `PUT` and `DELETE /v1/push/device`, `GET /v1/push`, `POST /v1/push/test`;
+  - device registrations: `GET`, `PUT` and `DELETE /v1/push/device` and `POST /v1/push/device/test` for a phone, `GET /v1/push` and `PUT`/`DELETE /v1/push/config` for the owner;
   - the FCM sender: no SDK, just a token signed with the service account, sent to FCM's HTTP v1 API;
   - encrypted payloads;
   - a fake FCM server for tests.
