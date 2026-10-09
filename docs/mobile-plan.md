@@ -1,6 +1,6 @@
 # Superagent mobile app: development plan
 
-**Status:** planned 2026-10-09; P1 done the same day. Builds on the API of [api-plan.md](api-plan.md) (M0–M9 merged) and sits beside the web app of [web-plan.md](web-plan.md) (W1–W6 merged).
+**Status:** planned 2026-10-09; P1 and P2 done the same day. Builds on the API of [api-plan.md](api-plan.md) (M0–M9 merged) and sits beside the web app of [web-plan.md](web-plan.md) (W1–W6 merged).
 
 **Progress:**
 - P1 (foundation, sign-in and the board): done. Verified on the emulator against the API in development:
@@ -16,6 +16,14 @@
   - Hermes has no `crypto`: `src/boot.ts` installs expo-crypto's before anything needs it.
   - CMake 3.22's ninja can't handle pnpm's long paths on Windows: a config plugin asks every native module for CMake 3.31.6.
   - The query cache's timers kept Jest running for minutes after the tests: the test setup lets them go.
+- P2 (conversations): done. The conversation reducer, its reconciliation with the history, the stream, your pending messages and the words for tools and reports moved to `packages/client`, and the web app uses them as before. On the emulator, against the API driven by a scripted model:
+  - the chief's answer streamed in and gave way to the stored answer, shown once;
+  - a task's transcript stayed whole while a call waited for approval, and the rest of the turn streamed in after approving it;
+  - Home's quick ask opened the conversation with the message sent.
+
+  A message sent while the chief answers waits its turn: the Jest tests check the phone shows it so, and the API's integration tests the queue; the demo model answers the chief too fast to catch it on the emulator. `chief.yaml` runs a conversation in CI, on the tests' fake model. Found along the way:
+  - React Native's `maintainVisibleContentPosition` re-anchors on every change, so a turn replaced by its stored copy pulled the view away from the newest message. The chief's screen keeps its place by hand instead, only when older messages load, and only your own scrolling lets go of the end.
+  - An empty text block between two tool calls took room: empty parts aren't drawn.
 
 **Related docs:**
 - [decisions.md](decisions.md): D50–D56 cover the mobile app. It follows the web app's D45–D48 (sign-in, live updates, conversations, notifications) where a phone allows.

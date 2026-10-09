@@ -70,12 +70,13 @@ The [Maestro](https://maestro.dev) flows in `apps/mobile/e2e` drive a release bu
 
    - `MAESTRO_API_URL` is the API as this PC reaches it. The flows' setup script (`e2e/setup.js`) uses it to make a pairing code for each flow.
    - `MAESTRO_APP_SERVER` is the API as the app reaches it.
+   - `MAESTRO_MODEL_URL`, for `chief.yaml`: the tests' fake model, which `setup.js` then makes the server's default and fast models. Start it with `pnpm --filter @superagent/api exec tsx test/support/fake-openai-server.ts 4199` and set `http://127.0.0.1:4199/v1`. Against your development server this replaces your model settings, so set them back in the web app afterwards, or use a throwaway API.
 
 **What they leave behind:** a department called Phone check, without a lead, with a task in its inbox, plus a task for each run of `new-task.yaml`, and a device token for each flow. Against your development database, delete them in the web app afterwards, or point the flows at a throwaway API.
 
 **When a flow fails,** Maestro keeps its screenshots and logs in `%USERPROFILE%\.maestro\tests`.
 
-The flows: `board.yaml` (home, the board, a task), `new-task.yaml`, `sign-out.yaml`, and `sign-in.yaml`, which needs no server.
+The flows: `board.yaml` (home, the board, a task), `new-task.yaml`, `sign-out.yaml`, `chief.yaml` (a conversation with the chief, on the fake model), and `sign-in.yaml`, which needs no server.
 
 ## 4. Jest
 
