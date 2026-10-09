@@ -1285,3 +1285,73 @@ export const LiveEventSchema = z.discriminatedUnion('type', [
   }),
 ]);
 export type LiveEvent = z.infer<typeof LiveEventSchema>;
+
+// --- Push notifications (P3) ---
+
+/** What a phone can be told about: each kind has its own notification channel, and can be turned off. */
+export const PushKindSchema = z.enum(['approval', 'question', 'review', 'problem', 'chief']);
+export type PushKind = z.infer<typeof PushKindSchema>;
+
+export const PushDeviceInputSchema = z.object({
+  platform: z.enum(['android', 'ios']),
+  pushToken: z.string().min(1).max(4096).describe("The platform's push token (FCM's registration token)"),
+  key: z
+    .string()
+    .regex(/^[A-Za-z0-9+/]{43}=$/, '32 bytes, base64')
+    .describe('The key the phone made to read its notifications: payloads are encrypted with it (D54)'),
+  kinds: z.array(PushKindSchema).max(5),
+});
+export type PushDeviceInput = z.infer<typeof PushDeviceInputSchema>;
+
+export const PushDeviceSchema = z.object({
+  id: z.string(),
+  tokenId: z.string(),
+  tokenName: z.string(),
+  platform: z.enum(['android', 'ios']),
+  kinds: z.array(PushKindSchema),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+  lastSentAt: z.iso.datetime().nullable(),
+  lastError: z.string().nullable(),
+});
+export type PushDevice = z.infer<typeof PushDeviceSchema>;
+
+/** What a device sees of push: whether the server can send, and its own registration. */
+export const MyPushSchema = z.object({
+  configured: z.boolean().describe('The server has a Firebase service account to send with'),
+  device: PushDeviceSchema.nullable(),
+});
+export type MyPush = z.infer<typeof MyPushSchema>;
+
+/** Push as the owner manages it (admin): the Firebase project, and the devices that get pushes. */
+export const PushStatusSchema = z.object({
+  configured: z.boolean(),
+  projectId: z.string().nullable(),
+  clientEmail: z.string().nullable(),
+  devices: z.array(PushDeviceSchema),
+});
+export type PushStatus = z.infer<typeof PushStatusSchema>;
+
+export const PushConfigInputSchema = z.object({
+  serviceAccount: z
+    .string()
+    .min(2)
+    .max(20_000)
+    .describe("The Firebase project's service account key, as the JSON file Google gives"),
+});
+export type PushConfigInput = z.infer<typeof PushConfigInputSchema>;
+
+/**
+ * What a notification says, encrypted with the device's key before it leaves the server (D54). The phone
+ * draws it: its kind picks the channel and the actions.
+ */
+export const PushPayloadSchema = z.object({
+  kind: PushKindSchema.or(z.literal('test')),
+  title: z.string(),
+  body: z.string(),
+  taskId: z.string().nullable(),
+  /** The attention item it is about (approval:<runId>:<toolCallId>, task:<id>), for its actions. */
+  itemId: z.string().nullable(),
+  at: z.iso.datetime(),
+});
+export type PushPayload = z.infer<typeof PushPayloadSchema>;

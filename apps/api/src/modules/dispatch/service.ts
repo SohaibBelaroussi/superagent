@@ -107,6 +107,7 @@ export class DispatchService {
   private readonly chiefLock = new Mutex();
   private readonly chiefQueue: string[] = [];
   private chiefDraining = false;
+  private readonly chiefAnswerListeners = new Set<(text: string) => void>();
   private closing = false;
 
   constructor(private readonly deps: DispatchDeps) {}
@@ -192,14 +193,26 @@ export class DispatchService {
     return this.runtime().getActiveThreadRunId(CHIEF) !== undefined;
   }
 
+  /** Hears the chief's answers to the owner's messages, once each is finished (push, D54). */
+  onChiefAnswer(listener: (text: string) => void): () => void {
+    this.chiefAnswerListeners.add(listener);
+    return () => {
+      this.chiefAnswerListeners.delete(listener);
+    };
+  }
+
   private async startChiefTurn(messages: string[]): Promise<void> {
     const output = await this.agent('chief').stream(messages, {
       memory: { thread: CHIEF_THREAD, resource: OWNER_RESOURCE },
     });
-    // Nobody reads the output here: the owner follows the thread, where the turn ends either way.
-    Promise.resolve(output.text).catch((error: unknown) =>
-      this.deps.logger.warn("A chief of staff's turn failed", { error }),
-    );
+    // The owner follows the thread, where the turn ends either way. A finished answer is also told
+    // to whoever listens (push), not one that was stopped or failed.
+    Promise.all([output.text, output.finishReason])
+      .then(([text, reason]) => {
+        if (reason !== 'stop') return;
+        for (const listener of this.chiefAnswerListeners) listener(text);
+      })
+      .catch((error: unknown) => this.deps.logger.warn("A chief of staff's turn failed", { error }));
   }
 
   /** Waits for the chief's thread to stay idle for a moment, then sends what is queued as one turn. */

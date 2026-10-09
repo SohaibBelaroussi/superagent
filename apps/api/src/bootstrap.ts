@@ -49,6 +49,8 @@ import { ProviderGateway } from './modules/providers/gateway';
 import { GATEWAY_ID } from './modules/providers/model-ref';
 import { ProviderRegistry } from './modules/providers/registry';
 import { ProviderService } from './modules/providers/service';
+import { FcmSender } from './modules/push/fcm';
+import { PushService } from './modules/push/service';
 import { ScheduleService } from './modules/schedules/service';
 import { createScheduleTools } from './modules/schedules/tools';
 import { SettingsService } from './modules/settings/service';
@@ -83,6 +85,7 @@ export interface System {
   skills: SkillStore;
   plugins: PluginService;
   usage: UsageService;
+  push: PushService;
   mastra: Mastra;
   app: Hono<AppEnv>;
   /** Serves live views (WebSockets) on the server that serves `app`. */
@@ -362,6 +365,17 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       tasks,
       approvals: (task) => dispatch.pendingApprovals(task),
     });
+    const push = new PushService({
+      db,
+      box,
+      bus,
+      tokens,
+      tasks,
+      logger,
+      sender: new FcmSender({ fcmUrl: config.PUSH_FCM_URL, oauthUrl: config.PUSH_OAUTH_URL }),
+    });
+    push.start();
+    const stopChiefAnswers = dispatch.onChiefAnswer((text) => push.chiefAnswered(text));
 
     const http = await createApp({
       config,
@@ -390,6 +404,7 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       skills,
       plugins,
       usage,
+      push,
       keyCheck,
     });
     return {
@@ -415,10 +430,13 @@ export async function bootstrap(config: Config, options: BootstrapOptions = {}):
       skills,
       plugins,
       usage,
+      push,
       mastra,
       app: http.app,
       injectWebSocket: http.injectWebSocket,
       async close(drainTimeoutMs = 5_000) {
+        stopChiefAnswers();
+        push.stop();
         http.closeWebSockets();
         await schedules.stop();
         await dispatch.close(drainTimeoutMs);
