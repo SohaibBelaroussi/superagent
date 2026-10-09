@@ -216,7 +216,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save
           script: |
             adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
-            maestro --no-ansi test --debug-output "$RUNNER_TEMP/maestro" apps/mobile/e2e
+            maestro --no-ansi test --test-output-dir "$RUNNER_TEMP/maestro" apps/mobile/e2e
 
       - name: Flow screenshots and logs
         if: failure()
@@ -286,7 +286,7 @@ jobs:
           xcrun simctl boot "$udid"
           xcrun simctl bootstatus "$udid" -b
           xcrun simctl install "$udid" apps/mobile/ios/build/Build/Products/Release-iphonesimulator/superagent.app
-          maestro --no-ansi --device "$udid" test --include-tags smoke --debug-output "$RUNNER_TEMP/maestro" apps/mobile/e2e
+          maestro --no-ansi --device "$udid" test --include-tags smoke --test-output-dir "$RUNNER_TEMP/maestro" apps/mobile/e2e
 
       - name: Flow screenshots and logs
         if: failure()

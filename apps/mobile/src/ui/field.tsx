@@ -1,4 +1,4 @@
-import { type ReactNode, useId, useState } from 'react';
+import { type ReactNode, type Ref, useId, useState } from 'react';
 import { TextInput, type TextInputProps, View } from 'react-native';
 import { Text } from './text';
 import { MAX_FONT_SCALE, makeStyles, radius, space, type, useTheme } from './theme';
@@ -11,6 +11,8 @@ export interface TextFieldProps extends Omit<TextInputProps, 'style'> {
   mono?: boolean;
   /** Next to the label (a paste button). */
   accessory?: ReactNode;
+  /** The input itself, to move the focus to it. */
+  ref?: Ref<TextInput>;
 }
 
 /**

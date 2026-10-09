@@ -2,8 +2,8 @@ import { errorMessage } from '@superagent/client';
 import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
 import { ClipboardPaste, QrCode } from 'lucide-react-native';
-import { useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { ScrollView, type TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { normalizeServer, parsePairingLink } from '../../api/pairing';
 import { useSession } from '../../api/session';
@@ -27,6 +27,7 @@ export function SignInScreen() {
   const [withToken, setWithToken] = useState(false);
   const [server, setServer] = useState('');
   const [token, setToken] = useState('');
+  const tokenInput = useRef<TextInput>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const revoked = state.status === 'signed-out' && state.reason === 'revoked';
@@ -133,6 +134,9 @@ export function SignInScreen() {
               <TextField
                 label="Server"
                 testID="sign-in-server"
+                returnKeyType="next"
+                submitBehavior="submit"
+                onSubmitEditing={() => tokenInput.current?.focus()}
                 hint="Its tailnet address, like https://superagent.example.ts.net"
                 value={server}
                 onChangeText={setServer}
@@ -144,6 +148,11 @@ export function SignInScreen() {
               <TextField
                 label="Token"
                 testID="sign-in-token"
+                ref={tokenInput}
+                returnKeyType="go"
+                onSubmitEditing={() => {
+                  if (server.trim() && token.trim()) void submitToken();
+                }}
                 hint="An admin token is swapped for a token of this phone’s own, and isn’t kept."
                 value={token}
                 onChangeText={setToken}
