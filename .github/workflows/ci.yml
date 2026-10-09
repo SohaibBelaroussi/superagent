@@ -166,6 +166,9 @@ jobs:
           echo "MAESTRO_ADMIN_TOKEN=$token" >> "$GITHUB_ENV"
           docker compose up -d --wait postgres
           nohup pnpm --filter @superagent/api exec tsx src/main.ts > "$RUNNER_TEMP/api.log" 2>&1 &
+          # The tests' fake model, which the flows' setup script makes the chief and the leads use.
+          nohup pnpm --filter @superagent/api exec tsx test/support/fake-openai-server.ts 4199 \
+            > "$RUNNER_TEMP/model.log" 2>&1 &
           for _ in $(seq 1 60); do
             if curl -fsS -o /dev/null http://127.0.0.1:4111/ready; then exit 0; fi
             sleep 2
@@ -207,6 +210,7 @@ jobs:
         env:
           MAESTRO_API_URL: http://127.0.0.1:4111
           MAESTRO_APP_SERVER: http://10.0.2.2:4111
+          MAESTRO_MODEL_URL: http://127.0.0.1:4199/v1
         with:
           api-level: 35
           target: default
@@ -226,6 +230,7 @@ jobs:
           path: |
             ${{ runner.temp }}/maestro
             ${{ runner.temp }}/api.log
+            ${{ runner.temp }}/model.log
           retention-days: 7
           if-no-files-found: ignore
 
