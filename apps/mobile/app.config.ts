@@ -6,10 +6,15 @@ import type { ConfigContext, ExpoConfig } from 'expo/config';
  * - test: a release build for the end-to-end flows, which reach the stack on this computer;
  * - production: a release build for a phone, which reaches the server over HTTPS only.
  *
- * The first two may use plain HTTP to localhost (forwarded to this computer with `adb reverse`), and
+ * The first two may use plain HTTP to this computer (localhost, or 10.0.2.2 from the emulator), and
  * nowhere else.
  */
 const variant = process.env.APP_VARIANT ?? 'development';
+// A release bundle (Expo sets NODE_ENV=production for it) must say which build it is: one made for a
+// phone without saying so would otherwise be a development build, which allows plain HTTP.
+if (process.env.NODE_ENV === 'production' && !process.env.APP_VARIANT) {
+  throw new Error('Set APP_VARIANT for a release build: production for a phone, test for the flows');
+}
 if (!['development', 'test', 'production'].includes(variant)) {
   throw new Error(`APP_VARIANT must be development, test or production, not "${variant}"`);
 }

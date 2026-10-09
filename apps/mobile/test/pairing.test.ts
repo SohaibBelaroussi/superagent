@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { deviceName, normalizeServer, parsePairingLink } from '../src/api/pairing';
 
 const CODE = `sa_pair_${'p'.repeat(43)}`;
@@ -25,7 +25,7 @@ describe('pairing links', () => {
     });
   });
 
-  it('keeps plain HTTP to this computer, in development builds only', () => {
+  it('keeps plain HTTP to this computer, in development and test builds', () => {
     expect(parsePairingLink(link('http://localhost:5173'))).toEqual({
       server: 'http://localhost:5173',
       code: CODE,
@@ -38,6 +38,22 @@ describe('pairing links', () => {
     expect(parsePairingLink(link('ftp://example.com'))).toEqual({
       error: expect.stringContaining('https://'),
     });
+  });
+
+  it('takes HTTPS only in a build for a phone, or one that doesn’t say', () => {
+    for (const extra of [{ variant: 'production' }, {}]) {
+      jest.isolateModules(() => {
+        const constants: typeof import('expo-constants').default = require('expo-constants').default;
+        Object.assign(constants.expoConfig ?? {}, { extra });
+        const pairing: typeof import('../src/api/pairing') = require('../src/api/pairing');
+        for (const server of ['http://localhost:4111', 'http://10.0.2.2:4111']) {
+          expect(pairing.normalizeServer(server)).toEqual({ error: expect.stringContaining('https://') });
+        }
+        expect(pairing.normalizeServer('https://superagent.example.ts.net')).toEqual({
+          server: 'https://superagent.example.ts.net',
+        });
+      });
+    }
   });
 });
 

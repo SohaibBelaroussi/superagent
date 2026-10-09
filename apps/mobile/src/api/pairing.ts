@@ -13,7 +13,7 @@ const CODE = /^sa_pair_[A-Za-z0-9_-]{43}$/;
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '10.0.2.2'];
 
 /** Which build this is (app.config.ts): development and test builds may use plain HTTP to this computer. */
-export const variant: string = (Constants.expoConfig?.extra?.variant as string | undefined) ?? 'development';
+export const variant: string = (Constants.expoConfig?.extra?.variant as string | undefined) ?? 'production';
 
 /**
  * A server address as typed or carried by a link: its origin, `https://` when no scheme is given.

@@ -5,8 +5,13 @@
 import { afterAll, afterEach, beforeAll, jest } from '@jest/globals';
 import { timeoutManager } from '@tanstack/react-query';
 import { configure } from '@testing-library/react-native';
+import Constants from 'expo-constants';
 import { resetDevice } from './device';
 import { server } from './msw';
+
+// Under Jest the native module carries no app config: the tests run the app as the end-to-end flows
+// build it (APP_VARIANT=test), which may use plain HTTP to this computer.
+Object.assign(Constants.expoConfig ?? {}, { extra: { variant: 'test' } });
 
 // The query cache forgets what a test left behind minutes later. Those timers mustn't keep Jest
 // running once the tests are done.
