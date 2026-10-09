@@ -75,6 +75,11 @@
       "exclude": [
         "typescript"
       ]
+    },
+    "autolinking": {
+      "buildFromSource": [
+        "expo-notifications"
+      ]
     }
   }
 }

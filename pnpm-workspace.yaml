@@ -30,5 +30,7 @@ hoistPattern:
 
 # expo-notifications, patched (D54): a notification's actions run only once the phone is unlocked, and
 # a lock screen that hides private notifications shows only their kind. Pinned with the app's version.
+# It ships a prebuilt Android library that would skip the patch: the phone app builds it from source
+# (`expo.autolinking.buildFromSource` in apps/mobile/package.json).
 patchedDependencies:
   expo-notifications@57.0.22: patches/expo-notifications@57.0.22.patch
