@@ -1,11 +1,10 @@
+import { api, apiVoid, queryKeys } from '@superagent/client';
 import {
   KnowledgeDocumentListSchema,
   KnowledgeDocumentSchema,
   KnowledgeSearchResultSchema,
 } from '@superagent/shared';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, apiVoid } from './client';
-import { queryKeys } from './queries';
 
 /** The server's limit on one upload. */
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;

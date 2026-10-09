@@ -1,5 +1,5 @@
+import { errorMessage } from '@superagent/client';
 import type { ReactNode } from 'react';
-import { errorMessage } from '../api/client';
 import { Button } from '../ui/button';
 import { Notice, Skeleton } from '../ui/feedback';
 

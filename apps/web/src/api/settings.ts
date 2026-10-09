@@ -1,3 +1,4 @@
+import { api, apiVoid, queryKeys } from '@superagent/client';
 import {
   type AddModelInput,
   CreatedTokenSchema,
@@ -6,6 +7,7 @@ import {
   type InstallPluginInput,
   McpServerListSchema,
   McpServerSchema,
+  PairingCodeSchema,
   PluginListSchema,
   PluginPreviewSchema,
   PluginSchema,
@@ -29,8 +31,6 @@ import {
 } from '@superagent/shared';
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
-import { api, apiVoid } from './client';
-import { queryKeys } from './queries';
 
 /*
  * Settings: providers and their models, model roles and limits, devices, secrets, MCP servers, plugins
@@ -217,12 +217,14 @@ export function useUpdateSettings() {
  * asked for until there is one. Each token given is a new `attempt`, asked afresh: nothing is kept
  * from the one before (its refusal, or the list it read).
  */
-export function useTokens(adminToken: string | null, attempt: number) {
+/** The tokens, read with the admin token. `pollMs`: look again that often (a phone pairing meanwhile). */
+export function useTokens(adminToken: string | null, attempt: number, pollMs?: number) {
   return useQuery({
     queryKey: [...settingsKeys.tokens, attempt],
     queryFn: ({ signal }) => api(TokenListSchema, '/v1/tokens', { signal, token: adminToken ?? undefined }),
     select: (data) => data.items,
     enabled: Boolean(adminToken),
+    refetchInterval: pollMs,
     retry: false,
     // Dropped as soon as nothing shows it: the list was read with a token this page doesn't keep.
     gcTime: 0,
@@ -240,6 +242,25 @@ export function useCreateToken(adminToken: string | null) {
       }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: settingsKeys.tokens }),
     meta: { failure: 'Couldn’t create the token' },
+    ...FORGET,
+  });
+}
+
+/** A pairing code for a phone (D53), made with the admin token: it claims one device token, once. */
+export function useCreatePairing(adminToken: string | null) {
+  return useMutation({
+    mutationFn: () =>
+      api(PairingCodeSchema, '/v1/tokens/pairing', { method: 'POST', token: adminToken ?? undefined }),
+    meta: { failure: 'Couldn’t make a pairing code' },
+    ...FORGET,
+  });
+}
+
+/** Ends the codes nobody claimed, so one seen on the screen stops working when the dialog closes. */
+export function useWithdrawPairing(adminToken: string | null) {
+  return useMutation({
+    mutationFn: () => apiVoid('/v1/tokens/pairing', { method: 'DELETE', token: adminToken ?? undefined }),
+    meta: { failure: 'Couldn’t withdraw the pairing code' },
     ...FORGET,
   });
 }

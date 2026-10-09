@@ -1,3 +1,4 @@
+import { api, apiUrl, type LiveStatus, SseConnection, safeJson } from '@superagent/client';
 import {
   ChiefMessageResultSchema,
   ChiefStopResultSchema,
@@ -9,9 +10,7 @@ import {
 } from '@superagent/shared';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useReducer } from 'react';
-import { api } from './client';
 import { useSession } from './session';
-import { type LiveStatus, SseConnection, safeJson } from './sse';
 
 /** Whose conversation: yours with the chief of staff, or a task's lead's (its transcript). */
 export type ConversationSource = { kind: 'chief' } | { kind: 'task'; taskId: string };
@@ -186,7 +185,7 @@ export function useLiveConversation(source: ConversationSource, enabled: boolean
     const refresh = () => void queryClient.invalidateQueries({ queryKey: conversationKey(source) });
     let retry: ReturnType<typeof setTimeout> | undefined;
     const connection = new SseConnection({
-      path: `${basePath(source)}/stream`,
+      url: apiUrl(`${basePath(source)}/stream`),
       token,
       onStatus: (status) => dispatch({ type: 'status', status }),
       onFrame: (frame) => {

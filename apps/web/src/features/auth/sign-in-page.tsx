@@ -1,7 +1,7 @@
+import { ProblemError } from '@superagent/client';
 import { KeyRound } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router';
-import { ProblemError } from '../../api/client';
 import { useSession } from '../../api/session';
 import { useDocumentTitle } from '../../lib/title';
 import { Button } from '../../ui/button';

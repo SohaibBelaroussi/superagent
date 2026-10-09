@@ -1,11 +1,10 @@
+import { errorMessage, formatList } from '@superagent/client';
 import type { AgentDefinition, Department } from '@superagent/shared';
 import { Archive } from 'lucide-react';
 import { useId, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { errorMessage } from '../../api/client';
 import { useArchiveDepartment, useCapabilities, useUpdateDepartment } from '../../api/org';
 import { Loaded } from '../../layout/loaded';
-import { formatList } from '../../lib/format';
 import { useServerDraft } from '../../lib/server-draft';
 import { pastUnsaved, useReportUnsaved } from '../../lib/unsaved';
 import { Button } from '../../ui/button';

@@ -1,10 +1,9 @@
+import { departmentTone, formatDate } from '@superagent/client';
 import type { AgentDefinition, AgentRole, Department } from '@superagent/shared';
 import { Crown, Plus, UsersRound } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { cn } from '../../lib/cn';
-import { formatDate } from '../../lib/format';
-import { departmentTone } from '../../lib/tones';
 import { Avatar } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';

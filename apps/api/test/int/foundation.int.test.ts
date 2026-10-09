@@ -1,8 +1,11 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
-import type { CreatedToken, Me, TokenList } from '@superagent/shared';
+import type { CreatedToken, Me, PairingCode, TokenList } from '@superagent/shared';
+import { isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { System } from '../../src/bootstrap';
+import { pairingCodes } from '../../src/db/schema';
+import { APP_VERSION } from '../../src/version';
 import { scripted } from '../support/mock-model';
 import { authHeader, jsonHeaders, startTestSystem } from './helpers';
 
@@ -79,6 +82,7 @@ describe('foundation', () => {
         id: 'owner',
         name: 'Owner',
         token: { id: 'admin', name: 'admin (env)' },
+        version: APP_VERSION,
       });
     });
 
@@ -185,6 +189,120 @@ describe('foundation', () => {
       });
       expect(signOut.status).toBe(204);
       expect((await request('/v1/me', { headers: authHeader(laptop.token) })).status).toBe(401);
+    });
+  });
+
+  describe('pairing a phone', () => {
+    const makeCode = async (token?: string) =>
+      request('/v1/tokens/pairing', { method: 'POST', headers: authHeader(token) });
+    const claim = (code: string, name = 'App: Pixel 9, Android 16') =>
+      request('/v1/tokens/claim', {
+        method: 'POST',
+        headers: jsonHeaders(code),
+        body: JSON.stringify({ name }),
+      });
+
+    it('claims one device token with a code, once', async () => {
+      const made = await makeCode();
+      expect(made.status).toBe(201);
+      const { code, expiresAt } = (await made.json()) as PairingCode;
+      expect(code).toMatch(/^sa_pair_[A-Za-z0-9_-]{43}$/);
+      const minutes = (Date.parse(expiresAt) - Date.now()) / 60_000;
+      expect(minutes).toBeGreaterThan(9);
+      expect(minutes).toBeLessThanOrEqual(10);
+
+      const claimed = await claim(code);
+      expect(claimed.status).toBe(201);
+      const { token, record } = (await claimed.json()) as CreatedToken;
+      expect(token).toMatch(/^sa_[A-Za-z0-9_-]{43}$/);
+      expect(record.name).toBe('App: Pixel 9, Android 16');
+      const me = await request('/v1/me', { headers: authHeader(token) });
+      expect(((await me.json()) as Me).token).toEqual({ id: record.id, name: record.name });
+
+      // Spent: it's no longer a credential at all.
+      expect((await claim(code)).status).toBe(401);
+      const listed = (await (await request('/v1/tokens', { headers: authHeader() })).json()) as TokenList;
+      expect(listed.items.map((item) => item.id)).toContain(record.id);
+      expect(JSON.stringify(listed)).not.toContain(code);
+    });
+
+    it('lets a code do nothing but claim', async () => {
+      const { code } = (await (await makeCode()).json()) as PairingCode;
+      for (const [method, path] of [
+        ['GET', '/v1/me'],
+        ['GET', '/v1/tokens'],
+        ['POST', '/v1/tokens/pairing'],
+        ['GET', '/v1/board'],
+        ['GET', '/api/agents'],
+      ] as const) {
+        const res = await request(path, { method, headers: authHeader(code) });
+        expect(res.status, `${method} ${path}`).toBe(403);
+      }
+      // Still good for its one use.
+      expect((await claim(code)).status).toBe(201);
+    });
+
+    it('needs the admin token to make a code, and a code to claim', async () => {
+      const device = (await (
+        await request('/v1/tokens', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ name: 'laptop' }),
+        })
+      ).json()) as CreatedToken;
+      const asDevice = await makeCode(device.token);
+      expect(asDevice.status).toBe(403);
+      expect(await asDevice.json()).toMatchObject({ code: 'admin_token_required' });
+
+      for (const token of [undefined, device.token]) {
+        const res = await request('/v1/tokens/claim', {
+          method: 'POST',
+          headers: jsonHeaders(token),
+          body: JSON.stringify({ name: 'phone' }),
+        });
+        expect(res.status).toBe(403);
+        expect(await res.json()).toMatchObject({ code: 'pairing_code_required' });
+      }
+    });
+
+    it('refuses an expired code', async () => {
+      const { code } = (await (await makeCode()).json()) as PairingCode;
+      await system.db
+        .update(pairingCodes)
+        .set({ expiresAt: new Date(Date.now() - 1000) })
+        .where(isNull(pairingCodes.claimedAt));
+      expect((await claim(code)).status).toBe(401);
+    });
+
+    it('gives two racing claims one token', async () => {
+      const { code } = (await (await makeCode()).json()) as PairingCode;
+      const results = await Promise.all([claim(code, 'first'), claim(code, 'second')]);
+      expect(results.map((res) => res.status).sort()).toEqual([201, 401]);
+    });
+
+    it('keeps one code at a time: a new one ends the one before', async () => {
+      const first = (await (await makeCode()).json()) as PairingCode;
+      const second = (await (await makeCode()).json()) as PairingCode;
+      expect((await claim(first.code)).status).toBe(401);
+      expect((await claim(second.code)).status).toBe(201);
+    });
+
+    it('withdraws unclaimed codes when the admin asks', async () => {
+      const { code } = (await (await makeCode()).json()) as PairingCode;
+      const device = (await (
+        await request('/v1/tokens', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ name: 'laptop' }),
+        })
+      ).json()) as CreatedToken;
+      const withdraw = (token?: string) =>
+        request('/v1/tokens/pairing', { method: 'DELETE', headers: authHeader(token) });
+
+      expect((await withdraw(device.token)).status).toBe(403);
+      expect((await withdraw(code)).status).toBe(403);
+      expect((await withdraw()).status).toBe(204);
+      expect((await claim(code)).status).toBe(401);
     });
   });
 

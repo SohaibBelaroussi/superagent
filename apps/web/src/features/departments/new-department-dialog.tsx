@@ -1,7 +1,7 @@
+import { errorMessage, ProblemError } from '@superagent/client';
 import { DepartmentSlugSchema } from '@superagent/shared';
 import { type FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { errorMessage, ProblemError } from '../../api/client';
 import { useCreateDepartment } from '../../api/org';
 import { slugify } from '../../lib/slug';
 import { Button } from '../../ui/button';

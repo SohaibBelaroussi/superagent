@@ -1,7 +1,6 @@
+import { api, apiBlob, apiVoid, queryKeys } from '@superagent/client';
 import { SandboxListSchema, WorkspaceListingSchema } from '@superagent/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, apiBlob, apiVoid } from './client';
-import { queryKeys } from './queries';
 
 /*
  * Workspaces: the files a task's agents wrote in its sandbox, and the sandboxes themselves. Reading

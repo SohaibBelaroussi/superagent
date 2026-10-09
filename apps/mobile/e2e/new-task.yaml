@@ -1,0 +1,21 @@
+appId: dev.superagent.app
+name: A new task from the phone
+tags:
+  - server
+---
+- runFlow: common/pair.yaml
+- tapOn: "New task"
+- tapOn: "Phone check"
+- tapOn:
+    id: "new-task-title"
+- inputText: "Made on the phone"
+- tapOn:
+    id: "new-task-brief"
+- inputText: "Check that a task made on the phone reaches the board."
+- scrollUntilVisible:
+    element: "Create task"
+- tapOn: "Create task"
+# The department has no lead, so the task waits in the inbox.
+- assertVisible: "Added to the inbox"
+- assertVisible: "Made on the phone"
+- assertVisible: "Not sent to a lead yet."

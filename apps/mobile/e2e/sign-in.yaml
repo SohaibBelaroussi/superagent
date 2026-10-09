@@ -1,0 +1,22 @@
+# Needs no server, so it also runs on the iPhone simulator.
+appId: dev.superagent.app
+name: The sign-in screen
+tags:
+  - smoke
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Scan the pairing code"
+- assertVisible: "Or paste the pairing link"
+- tapOn: "Use a server address and a token"
+- tapOn:
+    id: "sign-in-server"
+- inputText: "http://192.168.1.20:4111"
+# The keyboard's own keys from here: the server's Return moves to the token, the token's signs in. On
+# the iPhone, Maestro can't tell what the keyboard covers, so a tap there would land on the keyboard.
+- pressKey: Enter
+- inputText: "sa_smoke_test_token_not_a_real_one"
+- pressKey: Enter
+# Plain HTTP reaches only localhost: anywhere else needs the server's https:// address.
+- assertVisible: "Couldn’t sign in"
+- assertVisible: ".*https://.*"

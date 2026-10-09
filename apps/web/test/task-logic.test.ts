@@ -1,9 +1,13 @@
+import {
+  attentionByTask,
+  attentionLine,
+  condenseEvents,
+  describeEvent,
+  type OrgLookup,
+  taskProgress,
+} from '@superagent/client';
 import type { AttentionItem } from '@superagent/shared';
 import { describe, expect, it } from 'vitest';
-import { attentionByTask, attentionLine } from '../src/features/tasks/attention';
-import { condenseEvents, describeEvent } from '../src/features/tasks/events';
-import type { OrgLookup } from '../src/features/tasks/org';
-import { taskProgress } from '../src/features/tasks/task-bits';
 import { ada, event, research, task } from './msw';
 
 const org: OrgLookup = {

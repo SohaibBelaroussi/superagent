@@ -1,9 +1,9 @@
+import { departmentTone, errorMessage, PRIORITIES } from '@superagent/client';
 import type { Task, TaskPriority } from '@superagent/shared';
 import { type FormEvent, useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { errorMessage } from '../../api/client';
 import { useCreateTask } from '../../api/queries';
-import { departmentTone, PRIORITIES, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
 import { FormFailure, Notice, Spinner } from '../../ui/feedback';

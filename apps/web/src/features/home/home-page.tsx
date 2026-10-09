@@ -1,14 +1,21 @@
+import {
+  errorMessage,
+  formatCost,
+  formatTokens,
+  type OrgLookup,
+  PRIORITIES,
+  plural,
+  taskProgress,
+} from '@superagent/client';
 import type { AttentionItem, Task, TaskPhase } from '@superagent/shared';
 import { ArrowRight, CircleCheck, Plus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { errorMessage } from '../../api/client';
 import { useAttention, useBoard, useProfile, useUsage } from '../../api/queries';
 import { useMe } from '../../api/session';
 import { cn } from '../../lib/cn';
-import { formatCost, formatTokens, plural } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
-import { PRIORITIES, TONE_TEXT } from '../../lib/tones';
+import { TONE_TEXT } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
 import { PhaseIcon } from '../../ui/icons';
@@ -18,8 +25,8 @@ import { RelativeTime } from '../../ui/time';
 import { QuickAsk } from '../conversations/quick-ask';
 import { KINDS } from '../inbox/kinds';
 import { NewTaskDialog } from '../tasks/new-task-dialog';
-import { type OrgLookup, useOrg } from '../tasks/org';
-import { DepartmentLabel, taskProgress } from '../tasks/task-bits';
+import { useOrg } from '../tasks/org';
+import { DepartmentLabel } from '../tasks/task-bits';
 
 /** With a lead now: sent, being worked on, or waiting for you. The inbox hasn't started yet. */
 const IN_PROGRESS = new Set<TaskPhase>(['queued', 'working', 'waiting']);

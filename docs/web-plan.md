@@ -42,7 +42,7 @@
   Browser tests against the release image open a task's empty Files and Browser tabs (the live view's WebSocket under the CSP) and sign an identity in through Chromium in its container.
 
 **Related docs:**
-- [decisions.md](decisions.md): D06 and D43–D48 cover the web app.
+- [decisions.md](decisions.md): D43–D49 cover the web app.
 - [api-plan.md](api-plan.md): the API it talks to.
 
 ## 1. Goal and scope

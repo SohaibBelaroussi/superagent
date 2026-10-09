@@ -1,22 +1,16 @@
+import { attentionLine, departmentTone, taskProgress } from '@superagent/client';
 import type { AgentDefinition, AttentionItem, Department, Task } from '@superagent/shared';
 import { CircleAlert } from 'lucide-react';
 import { Link } from 'react-router';
 import { cn } from '../../lib/cn';
-import { departmentTone, TONE_TEXT } from '../../lib/tones';
+import { TONE_TEXT } from '../../lib/tones';
 import { Avatar } from '../../ui/avatar';
 import { ProgressBar } from '../../ui/layout';
 import { focusRingInset } from '../../ui/recipes';
 import { RelativeTime } from '../../ui/time';
 import { Tooltip } from '../../ui/tooltip';
-import { attentionLine } from '../tasks/attention';
-import {
-  DepartmentLabel,
-  DueBadge,
-  PriorityBadge,
-  SourceBadge,
-  taskProgress,
-  UsageChip,
-} from '../tasks/task-bits';
+
+import { DepartmentLabel, DueBadge, PriorityBadge, SourceBadge, UsageChip } from '../tasks/task-bits';
 
 /**
  * A task on the board. The whole card opens the task; the few things on it you can point at (the

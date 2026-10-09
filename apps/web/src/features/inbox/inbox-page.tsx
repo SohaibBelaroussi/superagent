@@ -1,8 +1,8 @@
+import { errorMessage } from '@superagent/client';
 import type { Task } from '@superagent/shared';
 import { Bell, CircleCheck } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { errorMessage } from '../../api/client';
 import { useAttention, useBoard } from '../../api/queries';
 import { notificationsSupported, useNotificationsOn } from '../../lib/notifications';
 import { useDocumentTitle } from '../../lib/title';

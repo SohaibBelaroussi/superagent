@@ -1,7 +1,7 @@
+import { errorMessage, ProblemError } from '@superagent/client';
 import { type Provider, ProviderSlugSchema, type UpdateProviderInput } from '@superagent/shared';
 import { Plus, X } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
-import { errorMessage, ProblemError } from '../../api/client';
 import { useCreateProvider, useUpdateProvider } from '../../api/settings';
 import { slugify } from '../../lib/slug';
 import { Button } from '../../ui/button';

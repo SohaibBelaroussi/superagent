@@ -2,6 +2,7 @@ import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi';
 import {
   CreatedTokenSchema,
   CreateTokenInputSchema,
+  PairingCodeSchema,
   TokenListSchema,
   type TokenRecord,
 } from '@superagent/shared';
@@ -55,6 +56,54 @@ const createToken = createRoute({
   },
 });
 
+const createPairing = createRoute({
+  method: 'post',
+  path: '/tokens/pairing',
+  tags: ['tokens'],
+  summary: 'Make a pairing code for a phone',
+  description:
+    'Requires the admin token. The code claims one device token with POST /v1/tokens/claim, once, ' +
+    'within 10 minutes, and can do nothing else. Shown once.',
+  responses: {
+    201: { description: 'Pairing code made', content: { 'application/json': { schema: PairingCodeSchema } } },
+    403: adminOnly,
+  },
+});
+
+const withdrawPairings = createRoute({
+  method: 'delete',
+  path: '/tokens/pairing',
+  tags: ['tokens'],
+  summary: 'Withdraw unclaimed pairing codes',
+  description:
+    'Requires the admin token. Codes nobody has claimed stop working; the web app calls this when its ' +
+    'pairing dialog closes. Making a new code also ends the one before.',
+  responses: {
+    204: { description: 'Unclaimed codes withdrawn' },
+    403: adminOnly,
+  },
+});
+
+const claimToken = createRoute({
+  method: 'post',
+  path: '/tokens/claim',
+  tags: ['tokens'],
+  summary: 'Claim a device token with a pairing code',
+  description:
+    'Authenticate with the pairing code as the bearer token. The answer holds a new device token, named ' +
+    'as asked; the code is spent.',
+  request: { body: { required: true, content: { 'application/json': { schema: CreateTokenInputSchema } } } },
+  responses: {
+    201: {
+      description: 'Device token made',
+      content: { 'application/json': { schema: CreatedTokenSchema } },
+    },
+    400: problemResponse('Invalid request'),
+    401: problemResponse('The pairing code was used or has expired'),
+    403: problemResponse('Only a pairing code can claim a token'),
+  },
+});
+
 const revokeToken = createRoute({
   method: 'delete',
   path: '/tokens/{id}',
@@ -82,6 +131,34 @@ export function registerTokenRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): voi
     const { token, record } = await deps.tokens.create(name);
     deps.logger.info('API token created', { tokenId: record.id, name: record.name });
     return c.json({ token, record: toTokenRecord(record) }, 201);
+  });
+
+  v1.openapi(createPairing, async (c) => {
+    requireAdminToken(c);
+    const { code, expiresAt } = await deps.tokens.createPairing();
+    deps.logger.info('Pairing code made', { expiresAt: expiresAt.toISOString() });
+    return c.json({ code, expiresAt: expiresAt.toISOString() }, 201);
+  });
+
+  // Before DELETE /tokens/{id}, which would take "pairing" for an id.
+  v1.openapi(withdrawPairings, async (c) => {
+    requireAdminToken(c);
+    await deps.tokens.withdrawPairings();
+    deps.logger.info('Unclaimed pairing codes withdrawn');
+    return c.body(null, 204);
+  });
+
+  v1.openapi(claimToken, async (c) => {
+    const caller = currentUser(c);
+    if (caller.pairingId === undefined) {
+      throw new ApiError(403, 'pairing_code_required', 'Only a pairing code can claim a device token');
+    }
+    const { name } = c.req.valid('json');
+    const created = await deps.tokens.claimPairing(caller.pairingId, name);
+    if (!created)
+      throw new ApiError(401, 'pairing_code_invalid', 'This pairing code was used or has expired');
+    deps.logger.info('API token claimed with a pairing code', { tokenId: created.record.id, name });
+    return c.json({ token: created.token, record: toTokenRecord(created.record) }, 201);
   });
 
   v1.openapi(revokeToken, async (c) => {

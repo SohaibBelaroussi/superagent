@@ -1,10 +1,9 @@
+import { errorMessage, type OrgLookup } from '@superagent/client';
 import { type ReactNode, useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { errorMessage } from '../../api/client';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
 import { Page } from '../../ui/layout';
-import type { OrgLookup } from './org';
 
 /**
  * A page for a department or agent the lists don't have. They are fetched once more (it may be new:

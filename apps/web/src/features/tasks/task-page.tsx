@@ -1,9 +1,9 @@
+import { attentionLine, errorMessage, type OrgLookup, ProblemError } from '@superagent/client';
 import type { Task } from '@superagent/shared';
 import { canTransition } from '@superagent/shared/phases';
 import { Check, ChevronRight, CircleSlash, Ellipsis, Pencil, RotateCcw, Send } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
-import { errorMessage, ProblemError } from '../../api/client';
 import { useAttention, useCancelTask, useTask, useUpdateTask } from '../../api/queries';
 import { useDocumentTitle } from '../../lib/title';
 import { Button } from '../../ui/button';
@@ -18,9 +18,9 @@ import { RelativeTime } from '../../ui/time';
 import { toast } from '../../ui/toast';
 import { TaskTranscript } from '../conversations/task-transcript';
 import { ApprovalCard } from './approval-card';
-import { attentionLine } from './attention';
+
 import { EditTaskDialog } from './edit-task-dialog';
-import { type OrgLookup, useOrg } from './org';
+import { useOrg } from './org';
 import { TaskActivity } from './task-activity';
 import { DepartmentLabel, DueBadge, PhaseBadge, PriorityBadge, SourceBadge } from './task-bits';
 import { TaskBrowser } from './task-browser';

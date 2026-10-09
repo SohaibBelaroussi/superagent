@@ -377,6 +377,43 @@ test('manages devices with the admin token, which only the page keeps', async ({
   expect(JSON.stringify(await page.evaluate(() => ({ ...window.localStorage })))).not.toContain(ADMIN_TOKEN);
 });
 
+test('pairs a phone with a code it claims once, and sees it arrive', async ({ page, request }) => {
+  const name = `E2E phone ${Date.now().toString(36)}`;
+  await signIn(page);
+  await page.goto('/settings/devices');
+  await page.getByLabel('Admin token').fill(ADMIN_TOKEN);
+  await page.getByRole('button', { name: 'Show devices' }).click();
+  await expect(page.getByRole('list', { name: 'Devices' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Pair a phone' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Pair a phone' });
+  await expect(dialog.getByRole('img', { name: 'Pairing code for the superagent app' })).toBeVisible();
+  const link = new URL(await dialog.getByLabel('Or open this link on the phone').inputValue());
+  expect(link.protocol).toBe('superagent:');
+  expect(link.searchParams.get('server')).toBe(new URL(page.url()).origin);
+  const code = link.searchParams.get('code') ?? '';
+
+  // What the phone does with it: claim a token of its own, once.
+  const asCode = { authorization: `Bearer ${code}` };
+  expect((await request.get('/v1/me', { headers: asCode })).status()).toBe(403);
+  const claimed = await request.post('/v1/tokens/claim', { headers: asCode, data: { name } });
+  expect(claimed.status()).toBe(201);
+  const { token } = (await claimed.json()) as { token: string };
+  expect((await request.get('/v1/me', { headers: { authorization: `Bearer ${token}` } })).status()).toBe(200);
+  expect((await request.post('/v1/tokens/claim', { headers: asCode, data: { name } })).status()).toBe(401);
+
+  const paired = page.getByRole('dialog', { name: 'Phone paired' });
+  await expect(paired).toContainText(`“${name}” is signed in.`);
+  await paired.getByRole('button', { name: 'Done' }).click();
+  await expect(page.getByRole('list', { name: 'Devices' }).getByText(name)).toBeVisible();
+  await request.delete(
+    `/v1/tokens/${(await (await request.get('/v1/me', { headers: { authorization: `Bearer ${token}` } })).json()).token.id}`,
+    {
+      headers: auth,
+    },
+  );
+});
+
 test('shows what model calls cost, over the period chosen', async ({ page }) => {
   await signIn(page);
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Usage' }).click();

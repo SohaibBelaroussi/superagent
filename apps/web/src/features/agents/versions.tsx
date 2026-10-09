@@ -1,11 +1,10 @@
+import { errorMessage, formatDateTime, formatList } from '@superagent/client';
 import type { AgentDefinition, AgentVersion } from '@superagent/shared';
 import { History } from 'lucide-react';
 import { useState } from 'react';
-import { errorMessage } from '../../api/client';
 import { useActivateVersion, useAgentVersions } from '../../api/org';
 import { cn } from '../../lib/cn';
 import { diffLines, foldDiff } from '../../lib/diff';
-import { formatDateTime, formatList } from '../../lib/format';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { ConfirmDialog, Dialog } from '../../ui/dialog';

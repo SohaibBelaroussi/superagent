@@ -41,8 +41,17 @@ export const MeSchema = z.object({
   id: z.string(),
   name: z.string(),
   token: z.object({ id: z.string(), name: z.string() }),
+  /** The server's version. Optional: the phone app may meet a server older than this field. */
+  version: z.string().optional(),
 });
 export type Me = z.infer<typeof MeSchema>;
+
+/** A pairing code for a phone (D53): it claims one device token, once, before `expiresAt`. */
+export const PairingCodeSchema = z.object({
+  code: z.string().describe('Shown once, as a QR code and a link. Claim it with POST /v1/tokens/claim.'),
+  expiresAt: z.iso.datetime(),
+});
+export type PairingCode = z.infer<typeof PairingCodeSchema>;
 
 // --- Model providers (M1) ---
 

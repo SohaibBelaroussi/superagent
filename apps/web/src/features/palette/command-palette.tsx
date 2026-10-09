@@ -1,5 +1,6 @@
 import { Autocomplete } from '@base-ui/react/autocomplete';
 import { Dialog } from '@base-ui/react/dialog';
+import { departmentTone } from '@superagent/client';
 import {
   Building2,
   CalendarClock,
@@ -21,7 +22,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useAttention, useBoard } from '../../api/queries';
 import { cn } from '../../lib/cn';
 import { THEME_CHOICES, useTheme } from '../../lib/theme';
-import { departmentTone, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { Kbd } from '../../ui/feedback';
 import { dialogSurface, menuItem, menuLabel } from '../../ui/recipes';
 import type { ChiefDraft } from '../conversations/chief-page';

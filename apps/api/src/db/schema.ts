@@ -38,6 +38,22 @@ export const apiTokens = app.table('api_tokens', {
 
 export type ApiTokenRow = typeof apiTokens.$inferSelect;
 
+/**
+ * Pairing codes (D53): made with the admin token, shown to a phone as a QR code, and claimed once for a
+ * device token of its own, within minutes. Only hashes are kept, as for tokens.
+ */
+export const pairingCodes = app.table('pairing_codes', {
+  id: uuid('id').primaryKey(),
+  codeHash: text('code_hash').notNull().unique(),
+  createdAt: createdAt(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  claimedAt: timestamp('claimed_at', { withTimezone: true }),
+  /** The device token the claim made. */
+  tokenId: uuid('token_id').references(() => apiTokens.id, { onDelete: 'set null' }),
+});
+
+export type PairingCodeRow = typeof pairingCodes.$inferSelect;
+
 /** OpenAI-compatible model providers. Secrets are sealed with SecretBox (AES-256-GCM). */
 export const providers = app.table('providers', {
   id: uuid('id').primaryKey(),

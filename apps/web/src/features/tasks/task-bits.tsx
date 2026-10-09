@@ -1,8 +1,16 @@
+import {
+  departmentTone,
+  formatCost,
+  formatDate,
+  formatRelative,
+  formatTokens,
+  PHASES,
+  PRIORITIES,
+} from '@superagent/client';
 import type { Department, Task, TaskPhase, TaskPriority, UsageTotals } from '@superagent/shared';
 import { CalendarClock, Repeat, Sparkles } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { formatCost, formatDate, formatRelative, formatTokens } from '../../lib/format';
-import { departmentTone, PHASES, PRIORITIES, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { Badge } from '../../ui/badge';
 import { focusRing } from '../../ui/recipes';
 import { Tooltip } from '../../ui/tooltip';
@@ -103,14 +111,4 @@ export function UsageChip({ usage, className }: { usage: UsageTotals; className?
       </button>
     </Tooltip>
   );
-}
-
-/** How far along: the lead's percentage, else the share of its checklist that's done. */
-export function taskProgress(task: Task): { percent: number; label: string } | null {
-  const total = task.checklist.length;
-  const done = task.checklist.filter((item) => item.done).length;
-  if (task.progress !== null)
-    return { percent: task.progress, label: total ? `${done}/${total}` : `${task.progress}%` };
-  if (total > 0) return { percent: Math.round((done / total) * 100), label: `${done}/${total}` };
-  return null;
 }

@@ -1,6 +1,6 @@
+import { departmentTone, errorMessage, PRIORITIES, ProblemError } from '@superagent/client';
 import type { Schedule, TaskPriority, UpdateScheduleInput } from '@superagent/shared';
 import { type FormEvent, useEffect, useState } from 'react';
-import { errorMessage, ProblemError } from '../../api/client';
 import { useSettings } from '../../api/org';
 import { useCreateSchedule, useUpdateSchedule } from '../../api/schedules';
 import { cn } from '../../lib/cn';
@@ -13,7 +13,7 @@ import {
   fromCron,
   toCron,
 } from '../../lib/cron';
-import { departmentTone, PRIORITIES, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
 import { FormFailure, Notice, Spinner } from '../../ui/feedback';

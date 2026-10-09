@@ -1,15 +1,22 @@
+import {
+  attentionByTask,
+  BOARD_COLUMNS,
+  CLOSED_PHASES,
+  errorMessage,
+  type OrgLookup,
+  PHASES,
+  PRIORITIES,
+  plural,
+} from '@superagent/client';
 import type { AttentionItem, Task, TaskPhase } from '@superagent/shared';
 import { ChevronsLeftRight, Plus, SquareKanban } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { errorMessage } from '../../api/client';
 import { useAttention, useBoard } from '../../api/queries';
-import { plural } from '../../lib/format';
-import { BOARD_COLUMNS, CLOSED_PHASES, PHASES, PRIORITIES } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
 import { PhaseIcon } from '../../ui/icons';
-import { attentionByTask } from '../tasks/attention';
-import { type OrgLookup, useOrg } from '../tasks/org';
+
+import { useOrg } from '../tasks/org';
 import { TaskCard } from './task-card';
 
 /** Open columns put urgent work first; closed ones show the latest first. */

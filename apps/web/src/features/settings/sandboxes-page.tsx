@@ -1,8 +1,8 @@
+import { errorMessage, ProblemError } from '@superagent/client';
 import type { Sandbox } from '@superagent/shared';
 import { Box, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { errorMessage, ProblemError } from '../../api/client';
 import { useRemoveSandbox, useSandboxes } from '../../api/workspaces';
 import { cn } from '../../lib/cn';
 import { useDocumentTitle } from '../../lib/title';

@@ -1,3 +1,4 @@
+import { PHASES } from '@superagent/client';
 import type { TaskPhase } from '@superagent/shared';
 import {
   CircleCheck,
@@ -11,7 +12,7 @@ import {
   ScanEye,
 } from 'lucide-react';
 import { cn } from '../lib/cn';
-import { PHASES, TONE_TEXT } from '../lib/tones';
+import { TONE_TEXT } from '../lib/tones';
 
 const PHASE_ICONS: Record<TaskPhase, LucideIcon> = {
   inbox: Inbox,

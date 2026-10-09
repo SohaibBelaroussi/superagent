@@ -1,10 +1,9 @@
+import { errorMessage, formatBytes, formatList, plural } from '@superagent/client';
 import type { Plugin, PluginPreview } from '@superagent/shared';
 import { Package, Plus, Trash2 } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
-import { errorMessage } from '../../api/client';
 import { useInstallPlugin, usePlugins, usePreviewPlugin, useUninstallPlugin } from '../../api/settings';
 import { Loaded } from '../../layout/loaded';
-import { formatBytes, formatList, plural } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';

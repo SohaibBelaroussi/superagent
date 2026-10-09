@@ -1,7 +1,6 @@
+import { api, queryKeys } from '@superagent/client';
 import { DepartmentMemorySchema, type OwnerProfilePatch, OwnerProfileSchema } from '@superagent/shared';
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from './client';
-import { queryKeys } from './queries';
 
 /*
  * What the agents remember: your profile (the chief keeps it, every agent reads it) and each

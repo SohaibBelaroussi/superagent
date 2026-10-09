@@ -1,3 +1,4 @@
+import { departmentTone, type OrgLookup, type Tone } from '@superagent/client';
 import type { ConversationMessage, ConversationReport, MessagePart, ToolCallPart } from '@superagent/shared';
 import {
   Ban,
@@ -17,14 +18,14 @@ import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { Link } from 'react-router';
 import type { LivePart, ShownTurn } from '../../api/conversations';
 import { cn } from '../../lib/cn';
-import { departmentTone, TONE_TEXT, type Tone } from '../../lib/tones';
+import { TONE_TEXT } from '../../lib/tones';
 import { Avatar } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';
 import { CodeBlock } from '../../ui/code-block';
 import { Notice, Spinner } from '../../ui/feedback';
 import { Markdown, webUrl } from '../../ui/markdown';
 import { RelativeTime } from '../../ui/time';
-import type { OrgLookup } from '../tasks/org';
+
 import { summarizeTool } from './tool-summary';
 
 /** Who wrote something, as the conversation shows them. */

@@ -1,11 +1,10 @@
+import { errorMessage, randomId } from '@superagent/client';
 import type { ConversationMessage } from '@superagent/shared';
 import { ArrowDown, ArrowUp, ChevronsUp, Square } from 'lucide-react';
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { errorMessage } from '../../api/client';
 import { useConversation, useSendToChief, useStopChief } from '../../api/conversations';
 import { cn } from '../../lib/cn';
-import { randomId } from '../../lib/id';
 import { useDocumentTitle } from '../../lib/title';
 import { Avatar } from '../../ui/avatar';
 import { Button } from '../../ui/button';

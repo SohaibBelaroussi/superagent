@@ -8,9 +8,9 @@ A self-hosted personal assistant organized like a company, built on [Mastra](htt
 - **Departments** that do the work, each with a lead agent and specialist agents.
 - A **board** where you watch tasks move.
 
-Everything runs behind one HTTP API and ships as Docker images. A web app, served by the API, runs it from a browser or a phone; a mobile app comes later.
+Everything runs behind one HTTP API and ships as Docker images. A web app, served by the API, runs it from a browser; a phone app (Android first, iOS from the same code) runs it from your phone.
 
-> **Status:** the API is built (M0–M9, see the [plan](docs/api-plan.md)), and so is the web app: W1 (foundation, sign-in, home, the live board and tasks), W2 (the conversation with the chief of staff, task transcripts), W3 (the inbox, a command palette, notifications, adding the app to a home screen), W4 (departments, agents and their versions, notes, your profile, schedules, knowledge), W5 (settings: models and providers, devices, secrets, MCP servers, plugins and skills; usage and cost) and W6 (a task's files and its live browser, with takeover; identities and their sign-in; sandboxes). See the [web plan](docs/web-plan.md).
+> **Status:** the API is built (M0–M9, see the [plan](docs/api-plan.md)), and so is the web app: W1 (foundation, sign-in, home, the live board and tasks), W2 (the conversation with the chief of staff, task transcripts), W3 (the inbox, a command palette, notifications, adding the app to a home screen), W4 (departments, agents and their versions, notes, your profile, schedules, knowledge), W5 (settings: models and providers, devices, secrets, MCP servers, plugins and skills; usage and cost) and W6 (a task's files and its live browser, with takeover; identities and their sign-in; sandboxes). See the [web plan](docs/web-plan.md). The phone app is under way: P1 (pairing from the web app, home, the live board and tasks) is done. See the [mobile plan](docs/mobile-plan.md).
 
 ## Design
 
@@ -18,6 +18,7 @@ Everything runs behind one HTTP API and ships as Docker images. A web app, serve
 - [Decisions](docs/decisions.md)
 - [API development plan](docs/api-plan.md)
 - [Web app plan](docs/web-plan.md)
+- [Mobile app plan](docs/mobile-plan.md)
 - [Verified Mastra 1.74 notes](docs/notes/mastra-1.74.md)
 
 ## Quick start
@@ -55,6 +56,8 @@ You need Node 22.22+ (24 LTS recommended), pnpm 10 and Docker.
    ```
 
    It runs on http://127.0.0.1:5173 and talks to the API through Vite's proxy. Signing in swaps the admin token for a token for this browser, which is the only one kept; signing out revokes it.
+
+6. For the phone app, set up the Android tools and an emulator, then build it and pair it from the web app's Devices page: see the [mobile runbook](docs/runbooks/mobile.md).
 
 To run the packaged image instead, use `pnpm stack:up`. The container listens on http://127.0.0.1:4112 and serves the web app on the same address.
 
@@ -108,11 +111,12 @@ This runs the EE-import guard, lint, typecheck, unit tests and integration tests
 
 Other commands:
 - `pnpm test:e2e` runs against a running stack (`pnpm stack:up` first).
+- `pnpm test:mobile` runs the phone app's Maestro flows on the emulator ([mobile runbook](docs/runbooks/mobile.md)).
 - `pnpm test:web` runs the browser tests (Playwright) against a running stack. `PW_CHANNEL=msedge` or `chrome` uses an installed browser; otherwise run `pnpm --filter @superagent/web exec playwright install chromium` once.
 - `pnpm test:live` runs against your real model provider, using the `LIVE_LLM_*` keys in `.env`: connectivity checks, delegation and a task from dispatch to report.
 - `pnpm studio` opens Mastra Studio against the dev server. Log in with `STUDIO_TOKEN`.
 
-CI runs the same checks on every pull request. It also builds the images, runs the stack from them as a server would (`compose.prod.yaml`), runs the e2e and browser suites against it, then backs it up and restores the backup in a drill.
+CI runs the same checks on every pull request. It also builds the images, runs the stack from them as a server would (`compose.prod.yaml`), runs the e2e and browser suites against it, then backs it up and restores the backup in a drill. Beside it, it builds the phone app for an Android emulator and runs its flows there, and builds it for the iOS simulator.
 
 ## License
 

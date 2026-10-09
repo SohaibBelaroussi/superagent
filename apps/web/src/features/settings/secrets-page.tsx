@@ -1,11 +1,10 @@
+import { errorMessage, formatList } from '@superagent/client';
 import { type Secret, SecretNameSchema } from '@superagent/shared';
 import { KeyRound, Plus, Trash2 } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
-import { errorMessage } from '../../api/client';
 import { useDeleteSecret, usePutSecret, useSecrets } from '../../api/settings';
 import { Loaded } from '../../layout/loaded';
 import { cn } from '../../lib/cn';
-import { formatList } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';

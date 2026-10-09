@@ -1,6 +1,6 @@
+import { errorMessage, ProblemError } from '@superagent/client';
 import { MutationCache, QueryClient } from '@tanstack/react-query';
 import { toast } from '../ui/toast';
-import { errorMessage, ProblemError } from './client';
 
 declare module '@tanstack/react-query' {
   interface Register {

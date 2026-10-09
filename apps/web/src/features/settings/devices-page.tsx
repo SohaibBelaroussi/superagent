@@ -1,7 +1,7 @@
+import { errorMessage, ProblemError } from '@superagent/client';
 import type { TokenRecord } from '@superagent/shared';
-import { Copy, KeyRound, MonitorSmartphone, Plus } from 'lucide-react';
+import { Copy, KeyRound, MonitorSmartphone, Plus, Smartphone } from 'lucide-react';
 import { type FormEvent, useId, useState } from 'react';
-import { errorMessage, ProblemError } from '../../api/client';
 import { useMe } from '../../api/session';
 import { useCreateToken, useRevokeToken, useTokens } from '../../api/settings';
 import { cn } from '../../lib/cn';
@@ -15,6 +15,7 @@ import { Page, PageHeader, Panel } from '../../ui/layout';
 import { raisedSurface } from '../../ui/recipes';
 import { RelativeTime } from '../../ui/time';
 import { toast } from '../../ui/toast';
+import { PairPhoneDialog } from './pair-phone-dialog';
 
 /**
  * The tokens browsers and apps sign in with. Managing them takes the admin token: asked for here and
@@ -28,7 +29,9 @@ export function DevicesPage() {
     setAdminToken(token);
     setAttempt((count) => count + 1);
   };
-  const tokens = useTokens(adminToken, attempt);
+  const [pairing, setPairing] = useState(false);
+  // While a phone pairs, look for its token every couple of seconds.
+  const tokens = useTokens(adminToken, attempt, pairing ? 2_000 : undefined);
   const refused =
     tokens.error instanceof ProblemError && (tokens.error.status === 401 || tokens.error.status === 403)
       ? tokens.error.status === 403
@@ -50,9 +53,14 @@ export function DevicesPage() {
                 <Button variant="ghost" onClick={() => giveToken(null)}>
                   Forget the admin token
                 </Button>
-                <Button variant="primary" onClick={() => setCreating(true)}>
+                <Button onClick={() => setCreating(true)}>
                   <Plus aria-hidden />
                   New device token
+                </Button>
+                {/* Not before the list is in: the dialog spots the phone as the token that wasn't there. */}
+                <Button variant="primary" disabled={!tokens.data} onClick={() => setPairing(true)}>
+                  <Smartphone aria-hidden />
+                  Pair a phone
                 </Button>
               </>
             ) : undefined
@@ -72,6 +80,12 @@ export function DevicesPage() {
         <TokenList tokens={tokens.data} adminToken={adminToken} />
       )}
       <NewTokenDialog open={creating} onOpenChange={setCreating} adminToken={adminToken} />
+      <PairPhoneDialog
+        open={pairing}
+        onOpenChange={setPairing}
+        adminToken={adminToken}
+        tokens={tokens.data}
+      />
     </Page>
   );
 }

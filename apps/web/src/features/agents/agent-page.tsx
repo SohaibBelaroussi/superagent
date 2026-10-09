@@ -1,8 +1,8 @@
+import { departmentTone, errorMessage, formatDate, formatList } from '@superagent/client';
 import type { AgentDefinition, Department } from '@superagent/shared';
 import { Archive, Ellipsis, UserRound } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { errorMessage } from '../../api/client';
 import {
   useAgentVersions,
   useArchiveAgent,
@@ -12,10 +12,9 @@ import {
 } from '../../api/org';
 import { Loaded } from '../../layout/loaded';
 import { cn } from '../../lib/cn';
-import { formatDate, formatList } from '../../lib/format';
 import { useServerDraft } from '../../lib/server-draft';
 import { useDocumentTitle } from '../../lib/title';
-import { departmentTone, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { pastUnsaved, UnsavedChangesDialog, useUnsavedChanges } from '../../lib/unsaved';
 import { Avatar } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';

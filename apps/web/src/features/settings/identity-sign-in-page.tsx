@@ -1,8 +1,8 @@
+import { errorMessage, ProblemError } from '@superagent/client';
 import { ChevronLeft, LogIn } from 'lucide-react';
 import { useCallback } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useBrowserIdentity, useCloseSignIn, useOpenSignIn } from '../../api/browsers';
-import { errorMessage, ProblemError } from '../../api/client';
 import { useDocumentTitle } from '../../lib/title';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';
