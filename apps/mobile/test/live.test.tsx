@@ -2,34 +2,8 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { act, screen, waitFor } from '@testing-library/react-native';
 import { HttpResponse, http } from 'msw';
 import { AppState, type AppStateStatus } from 'react-native';
-import { api, event, server, signedIn, signedInHandlers, task } from './msw';
+import { api, event, liveStream, server, signedIn, signedInHandlers, task } from './msw';
 import { renderApp } from './render';
-
-/** An event stream the test writes to, one connection at a time. */
-function liveStream() {
-  const connections: Array<{ lastEventId: string | null; send(text: string): void; closed: boolean }> = [];
-  const handler = http.get(api('/v1/events'), ({ request }) => {
-    const connection = {
-      lastEventId: request.headers.get('last-event-id'),
-      closed: false,
-      send: (_text: string) => {},
-    };
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        connection.send = (text) => controller.enqueue(new TextEncoder().encode(text));
-      },
-      cancel() {
-        connection.closed = true;
-      },
-    });
-    request.signal.addEventListener('abort', () => {
-      connection.closed = true;
-    });
-    connections.push(connection);
-    return new HttpResponse(stream, { headers: { 'content-type': 'text/event-stream' } });
-  });
-  return { connections, handler };
-}
 
 describe('live updates', () => {
   it('show a task made elsewhere without a refresh', async () => {

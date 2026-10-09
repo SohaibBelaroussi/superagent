@@ -168,6 +168,32 @@ function eventStream(frames = 'id: 0\nevent: ready\ndata: {"lastEventId":0}\n\n'
   return new HttpResponse(stream, { headers: { 'content-type': 'text/event-stream' } });
 }
 
+/** An event stream the test writes to, one connection at a time. */
+export function liveStream() {
+  const connections: Array<{ lastEventId: string | null; send(text: string): void; closed: boolean }> = [];
+  const handler = http.get(api('/v1/events'), ({ request }) => {
+    const connection = {
+      lastEventId: request.headers.get('last-event-id'),
+      closed: false,
+      send: (_text: string) => {},
+    };
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        connection.send = (text) => controller.enqueue(new TextEncoder().encode(text));
+      },
+      cancel() {
+        connection.closed = true;
+      },
+    });
+    request.signal.addEventListener('abort', () => {
+      connection.closed = true;
+    });
+    connections.push(connection);
+    return new HttpResponse(stream, { headers: { 'content-type': 'text/event-stream' } });
+  });
+  return { connections, handler };
+}
+
 /** What a signed-in app reads on its screens, over `tasks` and what needs you. */
 export function signedInHandlers(options: { tasks?: Task[]; attention?: AttentionItem[] } = {}) {
   const tasks = options.tasks ?? [];

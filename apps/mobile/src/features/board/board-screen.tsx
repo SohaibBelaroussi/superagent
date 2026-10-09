@@ -83,14 +83,21 @@ export function BoardScreen() {
   const selected = Math.min(index ?? initial, pages.length - 1);
   const attentionFor = useMemo(() => attentionByTask(attention.data), [attention.data]);
 
+  // The opening page is chosen once the board arrives, then stays put: live updates don't move it.
+  useEffect(() => {
+    if (index === null && board.data) setIndex(initial);
+  }, [index, board.data, initial]);
+
+  // The strip and the pages follow the selected phase together, however it changed.
   useEffect(() => {
     const x = chipAt.current.get(selected);
     if (x !== undefined) strip.current?.scrollTo({ x: Math.max(0, x - space.lg), animated: true });
+    pager.current?.scrollToIndex({ index: selected, animated: true });
   }, [selected]);
 
-  const go = (next: number) => {
-    setIndex(next);
-    pager.current?.scrollToIndex({ index: next, animated: true });
+  const filter = (next: string | undefined) => {
+    setDepartmentId(next);
+    setIndex(null);
   };
   const onSwipe = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const next = Math.round(event.nativeEvent.contentOffset.x / width);
@@ -112,14 +119,14 @@ export function BoardScreen() {
         contentContainerStyle={styles.chips}
         testID="board-departments"
       >
-        <Chip label="All" selected={departmentId === undefined} onPress={() => setDepartmentId(undefined)} />
+        <Chip label="All" selected={departmentId === undefined} onPress={() => filter(undefined)} />
         {org.departments.map((department) => (
           <Chip
             key={department.id}
             label={department.name}
             dot={toneColors(theme, departmentTone(department.slug)).indicator}
             selected={departmentId === department.id}
-            onPress={() => setDepartmentId(department.id)}
+            onPress={() => filter(department.id)}
           />
         ))}
       </ScrollView>
@@ -139,7 +146,7 @@ export function BoardScreen() {
                 accessibilityRole="tab"
                 accessibilityState={{ selected: active }}
                 accessibilityLabel={board.isSuccess ? `${page.label}, ${page.tasks.length}` : page.label}
-                onPress={() => go(pageIndex)}
+                onPress={() => setIndex(pageIndex)}
                 onLayout={(event) => {
                   const { x } = event.nativeEvent.layout;
                   chipAt.current.set(pageIndex, x);

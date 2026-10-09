@@ -1,7 +1,18 @@
 import { describe, expect, it } from '@jest/globals';
 import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 import { HttpResponse, http } from 'msw';
-import { api, approval, research, server, signedIn, signedInHandlers, task, writing } from './msw';
+import {
+  api,
+  approval,
+  event,
+  liveStream,
+  research,
+  server,
+  signedIn,
+  signedInHandlers,
+  task,
+  writing,
+} from './msw';
 import { renderApp } from './render';
 
 describe('home', () => {
@@ -46,6 +57,27 @@ describe('the board', () => {
     await waitFor(() => expect(requested).toContain(writing.id));
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Working, 1' })).toBeOnTheScreen());
     expect(screen.getByRole('tab', { name: 'Needs you, 0' })).toBeOnTheScreen();
+  });
+
+  it('stays on the phase you’re looking at when live updates change the others', async () => {
+    signedIn();
+    const tasks = [task({ phase: 'working', title: 'Draft the summary' })];
+    const live = liveStream();
+    server.use(live.handler, ...signedInHandlers({ tasks }));
+    await renderApp('/board');
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Working, 1' })).toBeSelected());
+    await waitFor(() => expect(live.connections).toHaveLength(1));
+
+    // A task elsewhere starts waiting for you: the board would now open on it, but you stay put.
+    const asking = task({ phase: 'waiting', title: 'Find the papers' });
+    tasks.push(asking);
+    live.connections[0]?.send('id: 1\nevent: ready\ndata: {"lastEventId":1}\n\n');
+    live.connections[0]?.send(
+      `id: 2\nevent: task\ndata: ${JSON.stringify(event({ type: 'created', taskId: asking.id, taskNumber: asking.number }))}\n\n`,
+    );
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Needs you, 1' })).toBeOnTheScreen());
+    expect(screen.getByRole('tab', { name: 'Working, 1' })).toBeSelected();
+    expect(screen.getByText(/Draft the summary/)).toBeOnTheScreen();
   });
 });
 
