@@ -8,6 +8,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { LiveEventsProvider } from '../api/live';
 import { createQueryClient } from '../api/query-client';
 import { SessionProvider, useSession } from '../api/session';
+import { PushObserver } from '../push/observer';
 import { ThemeProvider, useTheme } from '../ui/theme';
 import { ToastHost } from '../ui/toast';
 
@@ -62,6 +63,7 @@ function Navigator() {
           <Stack.Screen name="tasks/[id]" options={{ title: '' }} />
           <Stack.Screen name="new-task" options={{ title: 'New task', presentation: 'modal' }} />
           <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+          <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="sign-in" options={{ headerShown: false }} />
@@ -69,6 +71,7 @@ function Navigator() {
         </Stack.Protected>
         <Stack.Screen name="pair" options={{ title: 'Pairing', presentation: 'modal' }} />
       </Stack>
+      {signedIn ? <PushObserver /> : null}
     </LiveEventsProvider>
   );
 }

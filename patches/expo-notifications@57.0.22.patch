@@ -1,0 +1,38 @@
+diff --git a/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt b/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
+index 610d3039cefd589647538ad8ba14587d29fab338..0023cec28b39330a33d5b3874b96c777f780e96d 100644
+--- a/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
++++ b/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
+@@ -76,7 +76,9 @@ open class ExpoNotificationBuilder(
+ 
+   protected fun buildButtonAction(action: NotificationAction): NotificationCompat.Action {
+     val intent = createNotificationResponseIntent(context, notification, action)
+-    return NotificationCompat.Action.Builder(icon, action.title, intent).build()
++    // superagent: an action (Approve, Decline) runs only once the phone is unlocked.
++    return NotificationCompat.Action.Builder(icon, action.title, intent)
++      .setAuthenticationRequired(true).build()
+   }
+ 
+   protected fun buildTextInputAction(action: TextInputNotificationAction): NotificationCompat.Action {
+@@ -86,6 +88,7 @@ open class ExpoNotificationBuilder(
+       .build()
+ 
+     return NotificationCompat.Action.Builder(icon, action.title, intent)
++      .setAuthenticationRequired(true)
+       .addRemoteInput(remoteInput).build()
+   }
+ 
+@@ -112,6 +115,14 @@ open class ExpoNotificationBuilder(
+     notificationContent.badgeCount?.toInt()?.let { builder.setNumber(it) }
+     notificationContent.categoryId?.let { addActionsToBuilder(builder, it) }
+ 
++    // superagent: where a lock screen hides private notifications, it shows only the subtext (the
++    // notification's kind), with no actions.
++    content.subText?.let { kind ->
++      val public = createBuilder().setSmallIcon(icon).setContentTitle(kind)
++      color?.let { public.color = it.toInt() }
++      builder.setPublicVersion(public.build())
++    }
++
+     applySoundsAndVibrations(content, builder)
+ 
+     if (content.body != null) {

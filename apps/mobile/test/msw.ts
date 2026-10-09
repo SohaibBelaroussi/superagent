@@ -227,6 +227,7 @@ export function signedInHandlers(options: { tasks?: Task[]; attention?: Attentio
     http.get(api('/v1/tasks/:id/events'), () => HttpResponse.json({ items: [] })),
     http.get(api('/v1/tasks/:id/artifacts'), () => HttpResponse.json({ items: [] })),
     http.get(api('/v1/events'), () => eventStream()),
+    http.get(api('/v1/push/device'), () => HttpResponse.json({ configured: false, device: null })),
   ];
 }
 

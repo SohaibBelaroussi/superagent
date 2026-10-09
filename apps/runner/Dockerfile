@@ -11,6 +11,8 @@ RUN corepack enable
 FROM base AS build
 WORKDIR /repo
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+# The lockfile checks the patches against their hashes, used or not.
+COPY patches patches
 COPY apps/api/package.json apps/api/
 COPY apps/runner/package.json apps/runner/
 COPY apps/egress/package.json apps/egress/

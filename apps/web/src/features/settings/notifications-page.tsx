@@ -1,5 +1,5 @@
-import { errorMessage } from '@superagent/client';
-import type { PushDevice, PushKind, PushStatus } from '@superagent/shared';
+import { errorMessage, PUSH_KINDS } from '@superagent/client';
+import type { PushDevice, PushStatus } from '@superagent/shared';
 import { BellRing, FileKey, Smartphone } from 'lucide-react';
 import { type ChangeEvent, useRef, useState } from 'react';
 import { useConfigurePush, usePushStatus, useRemovePush } from '../../api/settings';
@@ -12,14 +12,6 @@ import { Page, PageHeader, Panel } from '../../ui/layout';
 import { RelativeTime } from '../../ui/time';
 import { toast } from '../../ui/toast';
 import { AdminTokenForm, refusal } from './admin-token-form';
-
-const KINDS: Record<PushKind, string> = {
-  approval: 'Approvals',
-  question: 'Questions',
-  review: 'Results to review',
-  problem: 'Problems',
-  chief: 'The chief’s answers',
-};
 
 /**
  * Push notifications to phones (D54): the Firebase project they go through, and the phones that get
@@ -194,7 +186,7 @@ function DevicesPanel({ devices, configured }: { devices: PushDevice[]; configur
               ) : (
                 device.kinds.map((kind) => (
                   <Badge key={kind} tone="neutral">
-                    {KINDS[kind]}
+                    {PUSH_KINDS[kind].label}
                   </Badge>
                 ))
               )}
