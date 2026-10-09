@@ -7,7 +7,7 @@ import {
   storedPending,
 } from '@superagent/client';
 import * as Haptics from 'expo-haptics';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useIsFocused, useLocalSearchParams } from 'expo-router';
 import { ArrowDown, ArrowUp, ChevronsUp, Square } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, TextInput, View } from 'react-native';
@@ -22,6 +22,7 @@ import { AvoidKeyboard } from '../../ui/keyboard';
 import { Text } from '../../ui/text';
 import { MAX_FONT_SCALE, makeStyles, radius, space, type, useTheme } from '../../ui/theme';
 import { ConversationList } from './conversation-list';
+import { takeHandoff } from './handoff';
 import { useSpeakers } from './message-views';
 import { useStickToEnd } from './scroll';
 
@@ -33,30 +34,35 @@ const SUGGESTIONS = [
 
 /**
  * Your conversation with the chief of staff: its answers stream in, departments' reports appear. A
- * message written while it answers waits for that answer to end (D47). Home's quick ask arrives as
- * `send` (with a `nonce`, so the same words can come twice) and goes out once.
+ * message written while it answers waits for that answer to end (D47). Home's quick ask arrives as a
+ * `handoff` id (its words stay in memory, out of the route) and goes out once.
  */
 export function ChiefScreen() {
   const theme = useTheme();
   const styles = useStyles();
   const org = useOrg();
   const speaker = useSpeakers(org);
-  const conversation = useConversation({ kind: 'chief' }, { live: true });
+  // Native tabs keep the screen once opened: its stream is open only while it's in front.
+  const focused = useIsFocused();
+  const conversation = useConversation({ kind: 'chief' }, { live: focused });
   const { history, messages, arrived, turns, running: runningCalls, active: running, status } = conversation;
   const send = useSendToChief();
   const stop = useStopChief();
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [draft, setDraft] = useState('');
   const input = useRef<TextInput>(null);
-  const { props: scrolling, toEnd, keepPlace, away } = useStickToEnd();
+  const { props: scrolling, toEnd, keepPlace, away } = useStickToEnd(messages[0]?.id);
 
   // A message is pending until the history has it.
   const stored = storedPending(pending, messages);
   const shownPending = pending.filter((message) => !stored.has(message.key));
 
+  // Sending waits for the history: a pending message is matched against what it already holds.
+  const ready = history.isSuccess;
+
   function submit(text: string, key = randomId()) {
     const message = text.trim();
-    if (!message) return;
+    if (!message || !ready) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setPending((list) => [
       ...list.filter((item) => item.key !== key),
@@ -102,21 +108,18 @@ export function ChiefScreen() {
     return () => clearTimeout(timer);
   }, [running, status, pending]);
 
-  // Home's quick ask: sent once, then dropped from the route.
-  const handoff = useLocalSearchParams<{ send?: string; nonce?: string }>();
-  const handedOff = useRef<string | null>(null);
+  // Home's quick ask: sent once the history is in, then dropped from the route.
+  const { handoff } = useLocalSearchParams<{ handoff?: string }>();
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per handed-off message.
   useEffect(() => {
-    const nonce = handoff.nonce ?? handoff.send;
-    if (!handoff.send || !nonce || handedOff.current === nonce) return;
-    handedOff.current = nonce;
-    const text = handoff.send;
-    router.setParams({ send: undefined, nonce: undefined });
-    submit(text);
-  }, [handoff.send, handoff.nonce]);
+    if (!handoff || !ready) return;
+    router.setParams({ handoff: undefined });
+    const text = takeHandoff(handoff);
+    if (text) submit(text);
+  }, [handoff, ready]);
 
   const onSend = () => {
-    if (!draft.trim()) return;
+    if (!draft.trim() || !ready) return;
     submit(draft);
     setDraft('');
   };
@@ -180,7 +183,7 @@ export function ChiefScreen() {
             ) : null}
             {history.isPending ? (
               <ConversationSkeleton />
-            ) : history.isError ? (
+            ) : history.isError && !history.data ? (
               <Notice tone="destructive" title="Couldn’t load the conversation">
                 {errorMessage(history.error)}
               </Notice>
@@ -233,17 +236,20 @@ export function ChiefScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Send"
-            accessibilityState={{ disabled: !draft.trim() }}
-            disabled={!draft.trim()}
+            accessibilityState={{ disabled: !draft.trim() || !ready }}
+            disabled={!draft.trim() || !ready}
             onPress={onSend}
             hitSlop={6}
             style={({ pressed }) => [
               styles.send,
-              { backgroundColor: draft.trim() ? theme.colors.fillInverse : theme.colors.fill },
+              { backgroundColor: draft.trim() && ready ? theme.colors.fillInverse : theme.colors.fill },
               pressed && { backgroundColor: theme.colors.fillInverseActive },
             ]}
           >
-            <ArrowUp size={20} color={draft.trim() ? theme.colors.background : theme.colors.placeholder} />
+            <ArrowUp
+              size={20}
+              color={draft.trim() && ready ? theme.colors.background : theme.colors.placeholder}
+            />
           </Pressable>
         </View>
       </AvoidKeyboard>

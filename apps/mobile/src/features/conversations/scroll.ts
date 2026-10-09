@@ -9,9 +9,10 @@ const KEEP_PLACE_MS = 1000;
 /**
  * A conversation's scrolling: it stays at the newest message as the conversation grows, until you
  * scroll away from it (its own scrolling doesn't count), and it keeps your place when older messages
- * load above what you're reading. Spread `props` on the ScrollView.
+ * load above what you're reading. Spread `props` on the ScrollView. `firstId` is the oldest message
+ * shown: older ones have arrived when it changes.
  */
-export function useStickToEnd() {
+export function useStickToEnd(firstId?: string) {
   const scroll = useRef<ScrollView>(null);
   const atEnd = useRef(true);
   /** You dragged it since it was last taken to the end. */
@@ -20,6 +21,10 @@ export function useStickToEnd() {
   const height = useRef(0);
   /** Older messages are on their way: when they render, the view shifts by what they added. */
   const keeping = useRef(false);
+  const first = useRef(firstId);
+  first.current = firstId;
+  /** The oldest message when they were asked for: growth below it (a streaming answer) isn't them. */
+  const keptFirst = useRef<string | undefined>(undefined);
   const [away, setAway] = useState(false);
 
   const toEnd = (animated = true) => {
@@ -31,6 +36,7 @@ export function useStickToEnd() {
 
   const keepPlace = (load: () => Promise<unknown>) => {
     keeping.current = true;
+    keptFirst.current = first.current;
     void load().finally(() =>
       setTimeout(() => {
         keeping.current = false;
@@ -56,7 +62,7 @@ export function useStickToEnd() {
     onContentSizeChange: (_width: number, contentHeight: number) => {
       const grown = contentHeight - height.current;
       height.current = contentHeight;
-      if (keeping.current && grown > 0) {
+      if (keeping.current && grown > 0 && first.current !== keptFirst.current) {
         keeping.current = false;
         scroll.current?.scrollTo({ y: offset.current + grown, animated: false });
       } else if (atEnd.current) {

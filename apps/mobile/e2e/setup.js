@@ -35,14 +35,25 @@ const post = (path, body = {}) =>
 
 // With MAESTRO_MODEL_URL (the tests' fake model, as in CI), the chief and the leads answer with it.
 if (typeof MAESTRO_MODEL_URL !== 'undefined' && MAESTRO_MODEL_URL) {
-  const provider =
-    get('/v1/providers').items.find((item) => item.slug === 'e2e-model') ??
-    post('/v1/providers', {
+  let provider = get('/v1/providers').items.find((item) => item.slug === 'e2e-model');
+  if (!provider) {
+    provider = post('/v1/providers', {
       slug: 'e2e-model',
       name: 'Test model',
       baseUrl: MAESTRO_MODEL_URL,
       apiKey: 'e2e',
     });
+  } else if (provider.baseUrl !== MAESTRO_MODEL_URL) {
+    // The fake model moved (another port): point the provider at it.
+    read(
+      http.request(`${MAESTRO_API_URL}/v1/providers/${provider.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ baseUrl: MAESTRO_MODEL_URL }),
+      }),
+      'PATCH /v1/providers',
+    );
+  }
   post(`/v1/providers/${provider.id}/refresh-models`);
   const model = { provider: 'e2e-model', model: 'fake-chat' };
   read(
@@ -63,6 +74,9 @@ const seeded = get(`/v1/tasks?departmentId=${department.id}&phase=inbox&limit=20
 if (!seeded.some((task) => task.title === TASK.title)) {
   post('/v1/tasks', { departmentId: department.id, ...TASK, dispatch: false });
 }
+
+// A word no earlier run left on the server, for flows that must find their own messages.
+output.run = Date.now().toString(36);
 
 const pairing = post('/v1/tokens/pairing');
 output.pairLink = `superagent://pair?server=${encodeURIComponent(MAESTRO_APP_SERVER)}&code=${pairing.code}`;

@@ -32,7 +32,8 @@ export function TaskTranscript({ task, org }: { task: Task; org: OrgLookup }) {
       </View>
     );
   }
-  if (history.isError) {
+  // A failed refresh keeps what was loaded.
+  if (history.isError && !history.data) {
     return (
       <Notice tone="destructive" title="Couldn’t load the transcript">
         {errorMessage(history.error)}

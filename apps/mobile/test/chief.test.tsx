@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 import type { ConversationMessage, LiveEvent, ToolCallPart } from '@superagent/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 import { HttpResponse, http } from 'msw';
+import { redirectSystemPath } from '../src/app/+native-intent';
 import { api, liveStream, server, signedIn, signedInHandlers, task } from './msw';
 import { renderApp } from './render';
 
@@ -26,20 +27,36 @@ const said = (id: string, text: string, author = 'chief'): ConversationMessage =
 });
 const frame = (event: LiveEvent) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 
-/** The chief's side of the server: its history (which the test grows) and what you send it. */
-function chief(history: ConversationMessage[], delivery: 'started' | 'queued' = 'started') {
+/**
+ * The chief's side of the server: its history (which the test grows), how often it was read, and what
+ * you send it. `refuse` fails that many sends first.
+ */
+function chief(history: ConversationMessage[], delivery: 'started' | 'queued' = 'started', refuse = 0) {
   const sent: string[] = [];
   const stops: number[] = [];
+  const reads = { count: 0 };
+  let refusals = refuse;
   const live = liveStream('/v1/chief/stream');
   return {
     sent,
     stops,
+    reads,
     live,
     handlers: [
       live.handler,
-      http.get(api('/v1/chief/messages'), () => HttpResponse.json({ items: history, nextCursor: null })),
+      http.get(api('/v1/chief/messages'), () => {
+        reads.count += 1;
+        return HttpResponse.json({ items: history, nextCursor: null });
+      }),
       http.post(api('/v1/chief/messages'), async ({ request }) => {
         const { message } = (await request.json()) as { message: string };
+        if (refusals > 0) {
+          refusals -= 1;
+          return HttpResponse.json(
+            { type: 'about:blank', title: 'Unavailable', status: 503, detail: 'The server is restarting.' },
+            { status: 503, headers: { 'content-type': 'application/problem+json' } },
+          );
+        }
         sent.push(message);
         history.push(yours(message));
         return HttpResponse.json({ delivery }, { status: 202 });
@@ -56,7 +73,7 @@ describe('the chief of staff', () => {
   it('streams its answer in, then shows the stored one once, without a repeat', async () => {
     signedIn();
     const history: ConversationMessage[] = [];
-    const { sent, live, handlers } = chief(history);
+    const { sent, reads, live, handlers } = chief(history);
     server.use(...handlers, ...signedInHandlers());
     await renderApp('/chief');
 
@@ -77,13 +94,18 @@ describe('the chief of staff', () => {
     expect(await screen.findByText('Two tasks are running.')).toBeOnTheScreen();
     expect(screen.getByText('Answering…')).toBeOnTheScreen();
 
-    // …and gives way to the stored answer: once on screen, never twice.
+    // …and gives way to the stored answer: once on screen, never twice, after the history has it.
+    const before = reads.count;
     history.push(said('a1', 'Two tasks are running.'));
     live.connections[0]?.send(
       frame({ type: 'run-end', runId: 'r1', outcome: 'finished', error: null, messageIds: ['a1'] }),
     );
     await waitFor(() => expect(screen.getByText('Routes your work to the departments')).toBeOnTheScreen());
+    await waitFor(() => expect(reads.count).toBeGreaterThan(before));
     await waitFor(() => expect(screen.getAllByText('Two tasks are running.')).toHaveLength(1));
+    // Still once when the live copy is gone.
+    await new Promise((resolve) => setTimeout(resolve, 1_800));
+    expect(screen.getAllByText('Two tasks are running.')).toHaveLength(1);
     expect(screen.getAllByText('What’s on the board?')).toHaveLength(1);
   });
 
@@ -119,6 +141,58 @@ describe('the chief of staff', () => {
     await fireEvent.press(screen.getByRole('button', { name: 'Ask' }));
     await waitFor(() => expect(sent).toEqual(['Anything urgent?']));
     expect(await screen.findByText('Anything urgent?')).toBeOnTheScreen();
+  });
+});
+
+describe('the chief of staff and links', () => {
+  it('lets a link from outside open only the pairing screen', () => {
+    expect(
+      redirectSystemPath({
+        path: 'superagent://pair?server=http%3A%2F%2F10.0.2.2%3A4111&code=x',
+        initial: true,
+      }),
+    ).toBe('/pair?server=http%3A%2F%2F10.0.2.2%3A4111&code=x');
+    expect(
+      redirectSystemPath({ path: 'superagent://chief?send=Cancel%20every%20task', initial: false }),
+    ).toBeNull();
+    expect(redirectSystemPath({ path: '/chief?handoff=abc', initial: false })).toBeNull();
+    expect(redirectSystemPath({ path: 'superagent://tasks/1', initial: true })).toBeNull();
+    expect(redirectSystemPath({ path: 'superagent://pairing-elsewhere', initial: true })).toBeNull();
+  });
+
+  it('sends nothing a route made up', async () => {
+    signedIn();
+    const history: ConversationMessage[] = [];
+    const { sent, handlers } = chief(history);
+    server.use(...handlers, ...signedInHandlers());
+    await renderApp('/chief?send=Cancel%20every%20task&handoff=made-up&nonce=1');
+
+    expect(await screen.findByText('What can I take off your plate?')).toBeOnTheScreen();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(sent).toEqual([]);
+  });
+
+  it('says a message wasn’t sent, and sends it again on Retry', async () => {
+    signedIn();
+    const history: ConversationMessage[] = [];
+    const { sent, live, handlers } = chief(history, 'started', 1);
+    server.use(...handlers, ...signedInHandlers());
+    await renderApp('/chief');
+    await waitFor(() => expect(live.connections).toHaveLength(1));
+    live.connections[0]?.send(frame({ type: 'ready', running: false }));
+
+    await fireEvent.changeText(
+      await screen.findByLabelText('Message the chief of staff'),
+      'Anything urgent?',
+    );
+    await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText(/^Not sent: /)).toBeOnTheScreen();
+    expect(sent).toEqual([]);
+
+    await fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(sent).toEqual(['Anything urgent?']));
+    await waitFor(() => expect(screen.queryByText(/^Not sent: /)).toBeNull());
+    expect(screen.getAllByText('Anything urgent?')).toHaveLength(1);
   });
 });
 

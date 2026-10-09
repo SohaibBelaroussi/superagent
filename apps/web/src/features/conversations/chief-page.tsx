@@ -53,9 +53,12 @@ export function ChiefPage() {
   const stored = storedPending(pending, messages);
   const shownPending = pending.filter((message) => !stored.has(message.key));
 
+  // Sending waits for the history: a pending message is matched against what it already holds.
+  const ready = history.isSuccess;
+
   function submit(text: string, key = randomId()) {
     const message = text.trim();
-    if (!message) return;
+    if (!message || !ready) return;
     setPending((list) => [
       ...list.filter((item) => item.key !== key),
       pendingMessage(key, message, messages),
@@ -100,19 +103,19 @@ export function ChiefPage() {
     return () => clearTimeout(timer);
   }, [running, status, pending]);
 
-  // A message written on the home page arrives in the navigation state: send it once, even when the
-  // effect runs twice (StrictMode) before the cleared state has rendered.
+  // A message written on the home page arrives in the navigation state: send it once the history is
+  // in, and once only, even when the effect runs twice (StrictMode) before the cleared state has rendered.
   const location = useLocation();
   const navigate = useNavigate();
   const handoff = (location.state as ChiefDraft | null)?.send;
   const handedOff = useRef<string | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per handed-off message.
   useEffect(() => {
-    if (!handoff || handedOff.current === location.key) return;
+    if (!handoff || !ready || handedOff.current === location.key) return;
     handedOff.current = location.key;
     navigate(location.pathname, { replace: true, state: null });
     submit(handoff);
-  }, [handoff, location.key]);
+  }, [handoff, location.key, ready]);
 
   function onSubmit(event?: FormEvent) {
     event?.preventDefault();
@@ -184,7 +187,7 @@ export function ChiefPage() {
             ) : null}
             {history.isPending ? (
               <ConversationSkeleton />
-            ) : history.isError ? (
+            ) : history.isError && !history.data ? (
               <Notice
                 tone="destructive"
                 title="Couldn’t load the conversation"
@@ -252,7 +255,13 @@ export function ChiefPage() {
             <span className="pl-1 text-caption text-placeholder">
               Enter to send · Shift + Enter for a new line
             </span>
-            <Button type="submit" variant="primary" size="icon-sm" tooltip="Send" disabled={!draft.trim()}>
+            <Button
+              type="submit"
+              variant="primary"
+              size="icon-sm"
+              tooltip="Send"
+              disabled={!draft.trim() || !ready}
+            >
               <ArrowUp aria-hidden />
             </Button>
           </div>

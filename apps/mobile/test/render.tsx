@@ -8,10 +8,13 @@ import { getMockContext } from 'expo-router/testing-library';
 function appContext() {
   // Routes load synchronously, as `renderRouter` has them.
   process.env.EXPO_ROUTER_IMPORT_MODE = 'sync';
-  return getMockContext({
+  const context = getMockContext({
     appDir: './src/app',
     overrides: { '(tabs)/_layout': { default: () => <Slot /> } },
   });
+  // As the app's own route context does, leave out `+native-intent` (it's not a screen).
+  const routes = context.keys().filter((key) => !/(^|\/)\+native-intent(\.[tj]sx?)?$/.test(key));
+  return Object.assign((id: string) => context(id), { ...context, keys: () => routes });
 }
 
 // Loading the routes transforms the app, Expo Router and React Native's components. On a cold cache,
