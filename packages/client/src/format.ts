@@ -96,3 +96,16 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/** A tool call's arguments, indented for reading: JSON as JSON (parsed when it came as a string). */
+export function prettyArgs(args: unknown): string | null {
+  if (args === undefined || args === null) return null;
+  if (typeof args === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(args), null, 2);
+    } catch {
+      return args;
+    }
+  }
+  return JSON.stringify(args, null, 2);
+}

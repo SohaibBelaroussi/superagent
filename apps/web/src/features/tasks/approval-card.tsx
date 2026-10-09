@@ -1,4 +1,4 @@
-import { decisionKey } from '@superagent/client';
+import { decisionKey, prettyArgs } from '@superagent/client';
 import type { AttentionItem } from '@superagent/shared';
 import { ShieldCheck, ShieldQuestion, ShieldX } from 'lucide-react';
 import { type ReactNode, useRef, useState } from 'react';
@@ -11,18 +11,6 @@ import { Field, Textarea } from '../../ui/field';
 import { RelativeTime } from '../../ui/time';
 
 type Kind = 'approve' | 'decline';
-
-function prettyArgs(args: unknown): string | null {
-  if (args === undefined || args === null) return null;
-  if (typeof args === 'string') {
-    try {
-      return JSON.stringify(JSON.parse(args), null, 2);
-    } catch {
-      return args;
-    }
-  }
-  return JSON.stringify(args, null, 2);
-}
 
 /** A tool call waiting for you, with what it would do and the two answers. */
 export function ApprovalCard({
