@@ -143,6 +143,9 @@
   --foreground: var(--gray-10);
   --muted-foreground: var(--gray-8);
   --placeholder: var(--gray-7);
+  /* A QR code reads dark on light in both themes: cameras look for that. */
+  --qr-paper: oklch(1 0 0);
+  --qr-ink: oklch(0.16 0 0);
 
   /*
    * The fill ladder: anything sitting above its parent surface. Rungs are alphas of one tint (light
@@ -358,6 +361,8 @@ html.light {
   --color-foreground: var(--foreground);
   --color-muted-foreground: var(--muted-foreground);
   --color-placeholder: var(--placeholder);
+  --color-qr-paper: var(--qr-paper);
+  --color-qr-ink: var(--qr-ink);
   --color-brand: var(--brand);
   --color-brand-strong: var(--brand-strong);
   --color-brand-foreground: var(--brand-foreground);
