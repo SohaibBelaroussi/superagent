@@ -17,6 +17,7 @@ import {
   ProviderSchema,
   type ProviderTestInput,
   ProviderTestResultSchema,
+  PushStatusSchema,
   type PutSecretInput,
   SecretListSchema,
   SecretSchema,
@@ -444,5 +445,43 @@ export function useSkill(id: string | null) {
     queryKey: settingsKeys.skill(id ?? ''),
     queryFn: ({ signal }) => api(SkillSchema, `/v1/skills/${encodeURIComponent(id ?? '')}`, { signal }),
     enabled: Boolean(id),
+  });
+}
+
+/** Push notifications (D54): the Firebase project and the devices that get pushes. Admin only. */
+export function usePushStatus(adminToken: string | null, attempt: number) {
+  return useQuery({
+    queryKey: ['push', attempt],
+    queryFn: ({ signal }) => api(PushStatusSchema, '/v1/push', { signal, token: adminToken ?? undefined }),
+    enabled: Boolean(adminToken),
+    retry: false,
+    // Read with a token this page doesn't keep: dropped once nothing shows it.
+    gcTime: 0,
+  });
+}
+
+/** Sets the Firebase service account (its key file's text): checked with Google, then sealed. */
+export function useConfigurePush(adminToken: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (serviceAccount: string) =>
+      api(PushStatusSchema, '/v1/push/config', {
+        method: 'PUT',
+        json: { serviceAccount },
+        token: adminToken ?? undefined,
+      }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['push'] }),
+    meta: { silent: true },
+    ...FORGET,
+  });
+}
+
+export function useRemovePush(adminToken: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiVoid('/v1/push/config', { method: 'DELETE', token: adminToken ?? undefined }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['push'] }),
+    meta: { failure: 'Couldn’t stop push notifications' },
+    ...FORGET,
   });
 }

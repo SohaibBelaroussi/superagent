@@ -1,4 +1,5 @@
 import {
+  BellRing,
   Box,
   CircleUserRound,
   Cpu,
@@ -35,6 +36,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     label: 'Devices',
     icon: MonitorSmartphone,
     keywords: 'tokens sign in phone browser revoke',
+  },
+  {
+    path: 'notifications',
+    label: 'Notifications',
+    icon: BellRing,
+    keywords: 'push phone firebase fcm alerts',
   },
   { path: 'secrets', label: 'Secrets', icon: KeyRound, keywords: 'vault credentials keys' },
   { path: 'mcp', label: 'MCP servers', icon: Plug, keywords: 'tools servers integrations' },
