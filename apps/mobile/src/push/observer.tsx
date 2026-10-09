@@ -1,5 +1,5 @@
 import { queryKeys } from '@superagent/client';
-import type { MyPush } from '@superagent/shared';
+import type { MyPush, PushDevice } from '@superagent/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Notifications from 'expo-notifications';
 import { type Href, router, usePathname } from 'expo-router';
@@ -10,7 +10,7 @@ import { toast } from '../ui/toast';
 import { answerNotification } from './answer';
 import { type NotificationData, notificationData } from './notifications';
 import { onPushInApp } from './receive';
-import { pushAvailable, sendNewToken } from './registration';
+import { pushAvailable, restoreRegistration, sendNewToken } from './registration';
 
 // A notification drawn while the app is in front (it shows a banner instead, so rarely) goes to the
 // shade quietly. A push's own data message is never shown as it is.
@@ -84,32 +84,45 @@ export function PushObserver() {
     return () => onPushInApp(null);
   }, [queryClient]);
 
-  const tokenChecked = useRef(false);
+  // Once per start: the token FCM has now (it may have replaced it while the app was closed), or the
+  // registration again if the server dropped it while this phone still holds its key.
+  const checked = useRef(false);
+  const configured = myPush.data?.configured ?? false;
   useEffect(() => {
-    if (!pushAvailable() || !loaded) return;
-    if (!device) {
-      tokenChecked.current = true;
-      return;
+    if (!pushAvailable() || !loaded || checked.current) return;
+    checked.current = true;
+    const keep = (next: PushDevice | null) => {
+      if (next) queryClient.setQueryData<MyPush>(queryKeys.myPush, { configured: true, device: next });
+    };
+    if (device) {
+      void Notifications.getDevicePushTokenAsync()
+        .then((token) => sendNewToken(String(token.data), device.kinds))
+        .then(keep)
+        .catch(() => {});
+    } else if (configured) {
+      void restoreRegistration()
+        .then(keep)
+        .catch(() => {});
     }
-    const send = (token: string) =>
-      sendNewToken(device.kinds, token)
+  }, [loaded, device, configured, queryClient]);
+
+  // A token FCM replaces while the app runs, sent with the kinds chosen now.
+  const registered = Boolean(device);
+  useEffect(() => {
+    if (!pushAvailable() || !registered) return;
+    const subscription = Notifications.addPushTokenListener((token) => {
+      const kinds = queryClient.getQueryData<MyPush>(queryKeys.myPush)?.device?.kinds;
+      if (!kinds) return;
+      void sendNewToken(String(token.data), kinds)
         .then((next) => {
           if (next) queryClient.setQueryData<MyPush>(queryKeys.myPush, { configured: true, device: next });
         })
         .catch(() => {
           // Sent again at the next start.
         });
-    // FCM may have replaced the token while the app was closed: once per start, for a phone that
-    // was registered already (one registering now has just sent it).
-    if (!tokenChecked.current) {
-      tokenChecked.current = true;
-      void Notifications.getDevicePushTokenAsync()
-        .then((token) => send(String(token.data)))
-        .catch(() => {});
-    }
-    const subscription = Notifications.addPushTokenListener((token) => void send(String(token.data)));
+    });
     return () => subscription.remove();
-  }, [loaded, device, queryClient]);
+  }, [registered, queryClient]);
 
   const count = attention.data?.length;
   useEffect(() => {

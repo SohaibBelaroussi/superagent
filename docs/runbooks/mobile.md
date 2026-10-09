@@ -95,7 +95,12 @@ The API sends notifications itself, through Firebase Cloud Messaging (D54). FCM 
 4. **Give the API the service account.** In the Firebase console, open Project settings, Service accounts, and generate a new private key: a JSON file. In the web app, open Settings, Notifications, give the admin token, and choose that file. The API checks it with Google and keeps it sealed, like provider keys; delete the downloaded file afterwards. Stop notifications there to forget it.
 5. **Turn them on, on the phone:** Settings, Notifications, Get notifications. Android asks for the permission. Pick the kinds, and send a test.
 
-**What a notification does.** Each kind has its own channel, which Android's settings can tune or silence. Approve, Decline, Answer, Accept and Reply work from the notification without opening the app, once the phone is unlocked. On a lock screen that hides private notifications (Android's setting), a notification shows only its kind. A tap opens its task, or the chief. With the app open, it shows as a banner inside the app instead.
+**What a notification does.**
+- Each kind has its own channel, which Android's settings can tune or silence.
+- Approve, Decline, Answer, Accept and Reply work from the notification without opening the app, once the phone is unlocked. That needs Android 12 or later; on older phones, notifications have no buttons, and a tap opens the app.
+- The lock screen shows a notification's text unless Android hides sensitive content there (Settings, Notifications, "Sensitive notifications" off). Then it shows only the kind. Turn that off if tool calls and task titles shouldn't show on a locked phone.
+- A tap opens its task, or the chief. With the app open, it shows as a banner inside the app instead.
+- The app acts only on notifications it drew from an encrypted push. A message sent to the phone some other way (by someone holding the service account) can't use its buttons.
 
 **When one doesn't arrive:** the web app's Notifications page lists each phone with the last error FCM gave. A phone FCM no longer knows (the app was uninstalled) is dropped, as is one whose device token is revoked. Android can hold notifications back in battery saver and Doze. On the emulator, it must be a Google APIs image (the one in section 1 is).
 

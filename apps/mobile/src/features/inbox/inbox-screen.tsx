@@ -11,6 +11,7 @@ import { useSignedIn } from '../../api/session';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
 import { TextField } from '../../ui/field';
+import { AvoidKeyboard } from '../../ui/keyboard';
 import { Screen } from '../../ui/screen';
 import { Card, Section } from '../../ui/surface';
 import { Text } from '../../ui/text';
@@ -63,67 +64,70 @@ export function InboxScreen() {
   const items = (attention.data ?? []).filter((item) => !done.has(itemKey(item)));
 
   return (
-    <Screen
-      edges={['top', 'left', 'right']}
-      onRefresh={() => void attention.refetch()}
-      refreshing={attention.isRefetching}
-    >
-      <View style={styles.header}>
-        <Text variant="display" accessibilityRole="header">
-          Inbox
-        </Text>
-        <Text variant="bodySmall" color="mutedForeground">
-          {attention.isSuccess
-            ? items.length === 0
-              ? 'Nothing needs you.'
-              : `${items.length} ${items.length === 1 ? 'thing needs' : 'things need'} you.`
-            : ' '}
-        </Text>
-      </View>
-
-      {attention.isPending ? (
-        <View style={{ gap: space.md }}>
-          <Skeleton style={styles.skeleton} />
-          <Skeleton style={styles.skeleton} />
+    // Answers are typed here: the keyboard mustn't cover them.
+    <AvoidKeyboard style={{ flex: 1 }}>
+      <Screen
+        edges={['top', 'left', 'right']}
+        onRefresh={() => void attention.refetch()}
+        refreshing={attention.isRefetching}
+      >
+        <View style={styles.header}>
+          <Text variant="display" accessibilityRole="header">
+            Inbox
+          </Text>
+          <Text variant="bodySmall" color="mutedForeground">
+            {attention.isSuccess
+              ? items.length === 0
+                ? 'Nothing needs you.'
+                : `${items.length} ${items.length === 1 ? 'thing needs' : 'things need'} you.`
+              : ' '}
+          </Text>
         </View>
-      ) : attention.isError ? (
-        <Notice
-          tone="destructive"
-          title="Couldn’t load what needs you"
-          action={<Button title="Try again" size="sm" onPress={() => void attention.refetch()} />}
-        >
-          {errorMessage(attention.error)}
-        </Notice>
-      ) : items.length === 0 ? (
-        <Card>
-          <EmptyState
-            icon={CircleCheck}
-            title="You’re all caught up"
-            description="Approvals, questions, problems and results to review show up here."
-          />
-        </Card>
-      ) : (
-        ORDER.map((kind) => {
-          const group = items.filter((item) => item.kind === kind);
-          if (group.length === 0) return null;
-          return (
-            <Section key={kind} title={`${GROUPS[kind]} · ${group.length}`}>
-              <View style={{ gap: space.md }}>
-                {group.map((item) => (
-                  <InboxItem
-                    key={item.id}
-                    item={item}
-                    task={item.taskId ? tasks.get(item.taskId) : undefined}
-                    org={org}
-                    onDone={() => setDone((current) => new Set(current).add(itemKey(item)))}
-                  />
-                ))}
-              </View>
-            </Section>
-          );
-        })
-      )}
-    </Screen>
+
+        {attention.isPending ? (
+          <View style={{ gap: space.md }}>
+            <Skeleton style={styles.skeleton} />
+            <Skeleton style={styles.skeleton} />
+          </View>
+        ) : attention.isError ? (
+          <Notice
+            tone="destructive"
+            title="Couldn’t load what needs you"
+            action={<Button title="Try again" size="sm" onPress={() => void attention.refetch()} />}
+          >
+            {errorMessage(attention.error)}
+          </Notice>
+        ) : items.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon={CircleCheck}
+              title="You’re all caught up"
+              description="Approvals, questions, problems and results to review show up here."
+            />
+          </Card>
+        ) : (
+          ORDER.map((kind) => {
+            const group = items.filter((item) => item.kind === kind);
+            if (group.length === 0) return null;
+            return (
+              <Section key={kind} title={`${GROUPS[kind]} · ${group.length}`}>
+                <View style={{ gap: space.md }}>
+                  {group.map((item) => (
+                    <InboxItem
+                      key={item.id}
+                      item={item}
+                      task={item.taskId ? tasks.get(item.taskId) : undefined}
+                      org={org}
+                      onDone={() => setDone((current) => new Set(current).add(itemKey(item)))}
+                    />
+                  ))}
+                </View>
+              </Section>
+            );
+          })
+        )}
+      </Screen>
+    </AvoidKeyboard>
   );
 }
 

@@ -111,9 +111,10 @@ export class PushService {
 
   // --- Devices ---
 
-  async mine(tokenId: string): Promise<MyPush> {
+  /** What a token's device sees of push. The admin token (`null`) has no device. */
+  async mine(tokenId: string | null): Promise<MyPush> {
     const [config] = await this.deps.db.select({ id: pushConfig.id }).from(pushConfig);
-    const device = (await this.devices(tokenId))[0] ?? null;
+    const device = tokenId ? ((await this.devices(tokenId))[0] ?? null) : null;
     return { configured: Boolean(config), device };
   }
 
@@ -121,19 +122,29 @@ export class PushService {
   async register(tokenId: string, input: PushDeviceInput): Promise<PushDevice> {
     const [existing] = await this.deps.db.select().from(pushDevices).where(eq(pushDevices.tokenId, tokenId));
     const id = existing?.id ?? uuidv7();
+    // The last error stays until the phone has a new push token (the app sends its token at each start).
+    const sameToken = existing ? this.sameToken(existing, input.pushToken) : false;
     const values = {
       platform: input.platform,
       pushTokenEnc: this.deps.box.seal(input.pushToken, tokenContext(id)),
       keyEnc: this.deps.box.seal(input.key, keyContext(id)),
       kinds: [...new Set(input.kinds)],
       updatedAt: new Date(),
-      lastError: null,
+      ...(sameToken ? {} : { lastError: null }),
     };
     if (existing) await this.deps.db.update(pushDevices).set(values).where(eq(pushDevices.id, id));
     else await this.deps.db.insert(pushDevices).values({ id, tokenId, ...values });
     const device = (await this.devices(tokenId))[0];
     if (!device) throw new ApiError(404, 'device_not_found', 'This device token was revoked');
     return device;
+  }
+
+  private sameToken(row: PushDeviceRow, pushToken: string): boolean {
+    try {
+      return this.deps.box.open(row.pushTokenEnc, tokenContext(row.id)) === pushToken;
+    } catch {
+      return false;
+    }
   }
 
   async unregister(tokenId: string): Promise<boolean> {
@@ -167,14 +178,14 @@ export class PushService {
   chiefAnswered(text: string): void {
     const body = text.trim();
     if (!body) return;
-    void this.notify('chief', {
+    this.notify('chief', {
       kind: 'chief',
       title: 'Chief of staff',
       body: clip(body),
       taskId: null,
       itemId: null,
       at: new Date().toISOString(),
-    });
+    }).catch((error: unknown) => this.deps.logger.warn('The chief’s answer wasn’t pushed', { error }));
   }
 
   private async onEvent(event: TaskEvent): Promise<void> {
@@ -285,11 +296,15 @@ export class PushService {
     } catch (failure) {
       error = (failure as Error).message;
     }
-    await this.deps.db
-      .update(pushDevices)
-      .set(error ? { lastError: clip(error, 500) } : { lastSentAt: new Date(), lastError: null })
-      .where(eq(pushDevices.id, row.id));
     if (error) this.deps.logger.warn('A push notification wasn’t sent', { deviceId: row.id, error });
+    try {
+      await this.deps.db
+        .update(pushDevices)
+        .set(error ? { lastError: clip(error, 500) } : { lastSentAt: new Date(), lastError: null })
+        .where(eq(pushDevices.id, row.id));
+    } catch (failure) {
+      this.deps.logger.warn('Couldn’t record how a push went', { deviceId: row.id, error: failure });
+    }
     return error;
   }
 
@@ -313,7 +328,11 @@ export class PushService {
         });
         return null;
       }
-    })();
+    })().catch((error: unknown) => {
+      // Asked again next time (the database may be back).
+      this.account = null;
+      throw error;
+    });
     return this.account;
   }
 

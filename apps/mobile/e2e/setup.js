@@ -75,7 +75,8 @@ if (typeof MAESTRO_MODEL_URL !== 'undefined' && MAESTRO_MODEL_URL) {
 
   // One result to review at a time: a new one once the last was accepted.
   const reviews =
-    get('/v1/departments').items.find((item) => item.slug === REVIEWS.slug) ?? post('/v1/departments', REVIEWS);
+    get('/v1/departments').items.find((item) => item.slug === REVIEWS.slug) ??
+    post('/v1/departments', REVIEWS);
   if (!get('/v1/agents').items.some((agent) => agent.key === REVIEW_LEAD)) {
     post('/v1/agents', {
       key: REVIEW_LEAD,

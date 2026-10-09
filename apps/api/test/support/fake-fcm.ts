@@ -25,6 +25,12 @@ export interface FakeFcm {
   tokensIssued: number;
   /** Push tokens FCM no longer knows: sending to them answers 404 UNREGISTERED. */
   gone: Set<string>;
+  /** Answers this many sends with 503, as FCM does when it's struggling. */
+  failSends: number;
+  /** Google refuses every service account (its OAuth server is down, or the key was deleted). */
+  refuseTokens: boolean;
+  /** Forgets the access tokens it issued: the next send answers 401. */
+  revokeAccess(): void;
   close(): Promise<void>;
 }
 
@@ -41,7 +47,7 @@ export async function startFakeFcm(): Promise<FakeFcm> {
   const messages: SentMessage[] = [];
   const gone = new Set<string>();
   const issued = new Set<string>();
-  const state = { tokensIssued: 0 };
+  const state = { tokensIssued: 0, failSends: 0, refuseTokens: false };
 
   const server = createServer(async (req, res) => {
     let raw = '';
@@ -64,6 +70,7 @@ export async function startFakeFcm(): Promise<FakeFcm> {
       const scope = valid
         ? (JSON.parse(Buffer.from(claims, 'base64url').toString()) as { scope?: string }).scope
         : '';
+      if (state.refuseTokens) return send(503, { error: 'temporarily_unavailable' });
       if (!valid || scope !== 'https://www.googleapis.com/auth/firebase.messaging') {
         return send(400, { error: 'invalid_grant', error_description: 'Invalid JWT Signature.' });
       }
@@ -77,6 +84,10 @@ export async function startFakeFcm(): Promise<FakeFcm> {
     if (req.method === 'POST' && sendPath) {
       const bearer = (req.headers.authorization ?? '').replace(/^Bearer /, '');
       if (!issued.has(bearer)) return send(401, { error: { status: 'UNAUTHENTICATED' } });
+      if (state.failSends > 0) {
+        state.failSends -= 1;
+        return send(503, { error: { code: 503, status: 'UNAVAILABLE' } });
+      }
       const { message } = JSON.parse(raw) as {
         message: { token: string; data: Record<string, string>; android: unknown };
       };
@@ -112,6 +123,19 @@ export async function startFakeFcm(): Promise<FakeFcm> {
       return state.tokensIssued;
     },
     gone,
+    get failSends() {
+      return state.failSends;
+    },
+    set failSends(count: number) {
+      state.failSends = count;
+    },
+    get refuseTokens() {
+      return state.refuseTokens;
+    },
+    set refuseTokens(refuse: boolean) {
+      state.refuseTokens = refuse;
+    },
+    revokeAccess: () => issued.clear(),
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

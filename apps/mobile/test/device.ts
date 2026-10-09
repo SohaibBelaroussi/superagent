@@ -119,9 +119,12 @@ export const notifications = {
     };
     return { ...notificationState.permission };
   }),
+  // As on Android, asking for the token also announces it to the token listeners.
   getDevicePushTokenAsync: jest.fn(async () => {
     if (!notificationState.fcmToken) throw new Error('Default FirebaseApp is not initialized');
-    return { type: 'android', data: notificationState.fcmToken };
+    const token = { type: 'android', data: notificationState.fcmToken };
+    for (const listener of [...notificationState.tokenListeners]) listener(token);
+    return token;
   }),
   setBadgeCountAsync: jest.fn(async (count: number) => {
     notificationState.badge = count;

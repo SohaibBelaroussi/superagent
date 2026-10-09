@@ -97,8 +97,9 @@ export class FcmSender {
     if (response.ok) return { ok: true };
     const text = (await response.text()).slice(0, 500);
     if (response.status === 401) this.access = null;
-    // The app was uninstalled, or its token replaced: its registration can go.
-    const gone = response.status === 404 || text.includes('UNREGISTERED');
+    // The app was uninstalled, or its token replaced: its registration can go. Only FCM's own word for
+    // it counts: a 404 alone could be a wrong project, and would drop every phone.
+    const gone = text.includes('UNREGISTERED');
     return { ok: false, gone, error: `FCM answered ${response.status}: ${text}` };
   }
 

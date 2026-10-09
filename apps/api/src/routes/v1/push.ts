@@ -112,7 +112,10 @@ function deviceToken(c: Parameters<typeof currentUser>[0]): string {
 }
 
 export function registerPushRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): void {
-  v1.openapi(getMine, async (c) => c.json(await deps.push.mine(currentUser(c).tokenId), 200));
+  v1.openapi(getMine, async (c) => {
+    const { tokenId } = currentUser(c);
+    return c.json(await deps.push.mine(tokenId === ADMIN_TOKEN_ID ? null : tokenId), 200);
+  });
 
   v1.openapi(putMine, async (c) => {
     const device = await deps.push.register(deviceToken(c), c.req.valid('json'));

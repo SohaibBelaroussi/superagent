@@ -1,17 +1,39 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import type { MyPush, PushDevice, PushPayload } from '@superagent/shared';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 import { HttpResponse, http } from 'msw';
 import { AppState, Platform } from 'react-native';
 import { PUSH_TASK } from '../src/push/background';
 import { openPush } from '../src/push/crypto';
-import * as registration from '../src/push/registration';
-import { keystoreText, notifications, phone, putInKeystore, tasks } from './device';
+import { forgetPush } from '../src/push/registration';
+import { keystoreText, kvStore, notifications, phone, putInKeystore, tasks } from './device';
 import { api, approval, PHONE, server, signedIn, signedInHandlers, task } from './msw';
 import { renderApp } from './render';
 
 const PUSH_KEY = 'superagent.push-key';
+
+/**
+ * The phone these tests run on: Android 16 (API 36) unless a test says otherwise. Push is Android's
+ * for now, and Jest runs as iOS. Each test ends with the phone's push forgotten, as after signing out.
+ */
+function runOnAndroid() {
+  const os = Platform.OS;
+  const version = Object.getOwnPropertyDescriptor(Platform, 'Version');
+  beforeEach(() => {
+    Platform.OS = 'android';
+    androidVersion(36);
+  });
+  afterEach(async () => {
+    Platform.OS = os;
+    if (version) Object.defineProperty(Platform, 'Version', version);
+    await forgetPush();
+  });
+}
+
+function androidVersion(api: number): void {
+  Object.defineProperty(Platform, 'Version', { value: api, configurable: true, writable: true });
+}
 
 /** What the server does with a payload (D54): AES-256-GCM with the phone's key. */
 function seal(key: Buffer, payload: PushPayload): Record<string, string> {
@@ -40,6 +62,21 @@ function approvalPush(overrides: Partial<PushPayload> = {}): PushPayload {
     itemId: `approval:run-${waiting.number}:call-1`,
     at: new Date().toISOString(),
     ...overrides,
+  };
+}
+
+/** This phone's registration as the server answers it. */
+function registered(kinds: string[]): PushDevice {
+  return {
+    id: 'push-1',
+    tokenId: 'phone-1',
+    tokenName: PHONE,
+    platform: 'android',
+    kinds: kinds as PushDevice['kinds'],
+    createdAt: '2026-10-09T09:00:00.000Z',
+    updatedAt: new Date().toISOString(),
+    lastSentAt: null,
+    lastError: null,
   };
 }
 
@@ -82,13 +119,7 @@ function tapped(identifier: string, actionIdentifier: string, userText?: string)
 }
 
 describe('push', () => {
-  const os = Platform.OS;
-  beforeEach(() => {
-    Platform.OS = 'android';
-  });
-  afterEach(() => {
-    Platform.OS = os;
-  });
+  runOnAndroid();
 
   it('reads only what was sealed with this phone’s key', () => {
     const key = randomBytes(32);
@@ -132,6 +163,43 @@ describe('push', () => {
       'decline',
     ]);
     expect(phone.categories.get('question')?.map((action) => action.identifier)).toEqual(['reply']);
+  });
+
+  it('acts only on notifications it drew', async () => {
+    signedIn();
+    const seen: string[] = [];
+    server.use(
+      http.post(api('/v1/attention/:id/approve'), ({ params }) => {
+        seen.push(String(params.id));
+        return HttpResponse.json({});
+      }),
+    );
+    const data = {
+      kind: 'approval',
+      taskId: waiting.id,
+      itemId: 'approval:run-9:call-9',
+      title: 'Approve?',
+      body: '',
+    };
+    const action = (identifier: string, trigger: unknown, content: unknown) => ({
+      actionIdentifier: 'approve',
+      notification: { date: 5, request: { identifier, content, trigger } },
+    });
+    // Drawn by FCM from a message sent around the encryption, our actions borrowed through its category.
+    await runTask(action('fcm-1', { type: 'push', remoteMessage: {} }, { dataString: JSON.stringify(data) }));
+    // Data that looks like ours, without this install's mark.
+    await runTask(action('fake-1', { channelId: 'approval' }, { dataString: JSON.stringify(data) }));
+    expect(seen).toEqual([]);
+  });
+
+  it('offers no actions before Android 12, which can’t make them wait for the phone to unlock', async () => {
+    androidVersion(30);
+    const key = holdKey();
+    await runTask({ data: seal(key, approvalPush()) });
+    expect(
+      phone.shade.get(`approval:run-${waiting.number}:call-1`)?.content.categoryIdentifier,
+    ).toBeUndefined();
+    expect(phone.categories.size).toBe(0);
   });
 
   it('drops a push this phone can’t read', async () => {
@@ -223,13 +291,12 @@ describe('push', () => {
 });
 
 describe('push with the app open', () => {
+  runOnAndroid();
   const state = AppState.currentState;
   beforeEach(() => {
-    jest.spyOn(registration, 'pushAvailable').mockReturnValue(true);
     AppState.currentState = 'active';
   });
   afterEach(() => {
-    jest.restoreAllMocks();
     AppState.currentState = state;
   });
 
@@ -249,51 +316,72 @@ describe('push with the app open', () => {
     expect(phone.badge).toBe(1);
   });
 
-  it('opens a notification’s task when it’s tapped', async () => {
+  it('opens a notification’s task when it’s tapped, and only one it drew', async () => {
     signedIn();
+    const key = holdKey();
     server.use(...signedInHandlers({ tasks: [waiting] }));
     await renderApp('/');
     await waitFor(() => expect(phone.responseListeners).toHaveLength(1));
-
-    await act(async () => {
-      phone.responseListeners[0]?.({
-        actionIdentifier: notifications.DEFAULT_ACTION_IDENTIFIER,
-        notification: {
-          date: 1_760_000_000_000,
-          request: {
-            identifier: 'approval:run-1:call-1',
-            content: { data: { kind: 'approval', taskId: waiting.id, itemId: 'approval:run-1:call-1' } },
-          },
-        },
+    const tap = (notification: unknown) =>
+      act(async () => {
+        phone.responseListeners[0]?.({
+          actionIdentifier: notifications.DEFAULT_ACTION_IDENTIFIER,
+          notification,
+        });
       });
+
+    // One FCM drew from a message of its own, with the same data: not ours, so nothing opens.
+    const id = `approval:run-${waiting.number}:call-1`;
+    const data = { kind: 'approval', taskId: waiting.id, itemId: id, title: 'Approve web_search?', body: '' };
+    await tap({ date: 1, request: { identifier: 'fcm-1', content: { data }, trigger: { type: 'push' } } });
+    await tap({
+      date: 2,
+      request: { identifier: 'fcm-2', content: { data }, trigger: { channelId: 'approval' } },
     });
+    expect(screen.queryByText('Find the papers')).toBeNull();
+
+    // One the app drew.
+    AppState.currentState = 'background';
+    await runTask({ data: seal(key, approvalPush()) });
+    const shown = phone.shade.get(id);
+    await tap({ date: 3, request: { identifier: id, content: shown?.content, trigger: shown?.trigger } });
     expect(await screen.findByText('Find the papers')).toBeOnTheScreen();
+  });
+
+  it('registers again, as it was, when the server dropped this phone', async () => {
+    signedIn();
+    const key = holdKey();
+    kvStore.setItemSync('push.kinds', JSON.stringify(['approval', 'chief']));
+    phone.permission = { granted: true, canAskAgain: true };
+    const puts: unknown[] = [];
+    server.use(
+      http.get(api('/v1/push/device'), () => HttpResponse.json({ configured: true, device: null })),
+      http.put(api('/v1/push/device'), async ({ request }) => {
+        puts.push(await request.json());
+        return HttpResponse.json(registered(['approval', 'chief']));
+      }),
+      ...signedInHandlers(),
+    );
+    await renderApp('/');
+
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]).toEqual({
+      platform: 'android',
+      pushToken: 'fcm-token-1',
+      key: key.toString('base64'),
+      kinds: ['approval', 'chief'],
+    });
   });
 });
 
 describe('notification settings', () => {
-  beforeEach(() => {
-    jest.spyOn(registration, 'pushAvailable').mockReturnValue(true);
-  });
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
+  runOnAndroid();
 
   function pushRoutes(configured = true) {
     let mine: MyPush = { configured, device: null };
     const puts: Array<{ platform: string; pushToken: string; key: string; kinds: string[] }> = [];
     const calls: string[] = [];
-    const device = (kinds: string[]): PushDevice => ({
-      id: 'push-1',
-      tokenId: 'phone-1',
-      tokenName: PHONE,
-      platform: 'android',
-      kinds: kinds as PushDevice['kinds'],
-      createdAt: '2026-10-09T09:00:00.000Z',
-      updatedAt: new Date().toISOString(),
-      lastSentAt: null,
-      lastError: null,
-    });
+    const device = registered;
     const handlers = [
       http.get(api('/v1/push/device'), () => HttpResponse.json(mine)),
       http.put(api('/v1/push/device'), async ({ request }) => {

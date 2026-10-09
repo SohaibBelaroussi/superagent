@@ -1,7 +1,9 @@
 import { createDecipheriv, randomBytes } from 'node:crypto';
 import type { CreatedToken, MyPush, PushDevice, PushPayload, PushStatus, Task } from '@superagent/shared';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { System } from '../../src/bootstrap';
+import { pushDevices } from '../../src/db/schema';
 import { type FakeFcm, startFakeFcm } from '../support/fake-fcm';
 import { authHeader, jsonHeaders, startTestSystem } from './helpers';
 
@@ -130,6 +132,110 @@ describe('push notifications', () => {
     });
   });
 
+  it('tells a phone about questions, results to review and problems', async () => {
+    const phone = await deviceToken('App: everything else');
+    const { key } = await register(phone, 'fcm-rest', ['question', 'review', 'problem']);
+    const before = fcm.messages.length;
+    const received = () =>
+      fcm.messages
+        .slice(before)
+        .filter((message) => message.token === 'fcm-rest')
+        .map((message) => decrypt(key, message.data));
+
+    const actor = 'agent:research-lead';
+    await system.tasks.note(task.id, 'reported', actor, {
+      outcome: 'blocked',
+      summary: 'Which years count?',
+    });
+    // A finished report isn't a question.
+    await system.tasks.note(task.id, 'reported', actor, { outcome: 'done', summary: 'Found them.' });
+    await system.tasks.note(task.id, 'phase_changed', actor, { from: 'working', to: 'review' });
+    await system.tasks.note(task.id, 'phase_changed', 'system', {
+      from: 'working',
+      to: 'failed',
+      reason: 'The model refused.',
+    });
+    await system.tasks.note(task.id, 'not_dispatched', 'system', {
+      cause: 'no_lead',
+      reason: 'Nobody leads it.',
+    });
+
+    await vi.waitFor(() => expect(received()).toHaveLength(4));
+    const n = task.number;
+    expect(received().map(({ kind, title, body, itemId }) => ({ kind, title, body, itemId }))).toEqual(
+      expect.arrayContaining([
+        {
+          kind: 'question',
+          title: `#${n} has a question`,
+          body: 'Which years count?',
+          itemId: `task:${task.id}`,
+        },
+        {
+          kind: 'review',
+          title: `#${n} is ready for review`,
+          body: 'Find the papers',
+          itemId: `task:${task.id}`,
+        },
+        { kind: 'problem', title: `#${n} failed`, body: 'The model refused.', itemId: `task:${task.id}` },
+        {
+          kind: 'problem',
+          title: `#${n} wasn’t sent to a lead`,
+          body: 'Nobody leads it.',
+          itemId: `task:${task.id}`,
+        },
+      ]),
+    );
+  });
+
+  it('keeps its access token, gets a new one when FCM refuses it, and says what went wrong', async () => {
+    const phone = await deviceToken('App: sturdy');
+    await register(phone, 'fcm-sturdy', ['approval']);
+    const test = () => send('POST', '/v1/push/device/test', {}, phone);
+
+    expect((await test()).status).toBe(204);
+    const issued = fcm.tokensIssued;
+    expect((await test()).status).toBe(204);
+    // One access token for both.
+    expect(fcm.tokensIssued).toBe(issued);
+
+    fcm.revokeAccess();
+    expect((await test()).status).toBe(502);
+    // FCM said 401: the next send gets a fresh token, and goes through.
+    expect((await test()).status).toBe(204);
+    expect(fcm.tokensIssued).toBe(issued + 1);
+
+    fcm.failSends = 1;
+    const failed = await test();
+    expect(failed.status).toBe(502);
+    expect(JSON.stringify(await failed.json())).toContain('503');
+    // The phone stays registered, its last error shown to the owner until a send goes through.
+    const listed = (await (await request('/v1/push', { headers: authHeader() })).json()) as PushStatus;
+    expect(listed.devices.find((device) => device.tokenName === 'App: sturdy')?.lastError).toMatch(/503/);
+    // The app sends its token again at each start: that keeps the error.
+    await register(phone, 'fcm-sturdy', ['approval']);
+    const again = (await (await request('/v1/push/device', { headers: authHeader(phone) })).json()) as MyPush;
+    expect(again.device?.lastError).toMatch(/503/);
+    expect((await test()).status).toBe(204);
+
+    // Google stops handing out tokens: the cached one is refused (401), then a new one can't be had.
+    fcm.revokeAccess();
+    fcm.refuseTokens = true;
+    try {
+      expect((await test()).status).toBe(502);
+      const refused = await test();
+      expect(refused.status).toBe(502);
+      expect(JSON.stringify(await refused.json())).toContain('Google refused the service account');
+    } finally {
+      fcm.refuseTokens = false;
+    }
+  });
+
+  it('shows the admin token no device of its own', async () => {
+    const mine = await request('/v1/push/device', { headers: authHeader() });
+    expect(mine.status).toBe(200);
+    expect(((await mine.json()) as MyPush).device).toBeNull();
+  });
+
   it('forgets a phone whose token is revoked, or that FCM no longer knows', async () => {
     const phone = await deviceToken('App: to revoke');
     const gone = await deviceToken('App: uninstalled');
@@ -154,6 +260,10 @@ describe('push notifications', () => {
       expect(names).not.toContain('App: uninstalled');
     });
     expect(fcm.messages.slice(before).map((m) => m.token)).not.toContain('fcm-revoked');
+    // Gone from the table, not just hidden.
+    expect(await system.db.select().from(pushDevices).where(eq(pushDevices.tokenId, me.token.id))).toEqual(
+      [],
+    );
   });
 
   it('stops this device’s pushes when it asks', async () => {
