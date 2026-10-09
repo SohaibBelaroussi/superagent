@@ -161,8 +161,9 @@ export class TokenService {
   }
 
   /**
-   * A pairing code for a phone (D53): it works once, for `PAIRING_TTL_MS`. Codes that ended over a day
-   * ago are cleared on the way.
+   * A pairing code for a phone (D53): it works once, for `PAIRING_TTL_MS`. It replaces any code still
+   * waiting, so at most one can be claimed at a time. Codes that ended over a day ago are cleared on
+   * the way.
    */
   async createPairing(): Promise<{ code: string; expiresAt: Date }> {
     const code = generatePairingCode();
@@ -170,8 +171,21 @@ export class TokenService {
     await this.db
       .delete(pairingCodes)
       .where(lt(pairingCodes.expiresAt, new Date(Date.now() - 24 * 3_600_000)));
+    await this.withdrawPairings();
     await this.db.insert(pairingCodes).values({ id: uuidv7(), codeHash: hashToken(code), expiresAt });
     return { code, expiresAt };
+  }
+
+  /**
+   * Ends the pairing codes nobody has claimed: one seen on a screen, or in a photo of it, stops
+   * working once the dialog that showed it closes.
+   */
+  async withdrawPairings(): Promise<void> {
+    const now = new Date();
+    await this.db
+      .update(pairingCodes)
+      .set({ expiresAt: now })
+      .where(and(isNull(pairingCodes.claimedAt), gt(pairingCodes.expiresAt, now)));
   }
 
   /**

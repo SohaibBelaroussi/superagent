@@ -57,7 +57,8 @@ export function DevicesPage() {
                   <Plus aria-hidden />
                   New device token
                 </Button>
-                <Button variant="primary" onClick={() => setPairing(true)}>
+                {/* Not before the list is in: the dialog spots the phone as the token that wasn't there. */}
+                <Button variant="primary" disabled={!tokens.data} onClick={() => setPairing(true)}>
                   <Smartphone aria-hidden />
                   Pair a phone
                 </Button>

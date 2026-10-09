@@ -2,7 +2,7 @@ import { errorMessage } from '@superagent/client';
 import type { TokenRecord } from '@superagent/shared';
 import { CircleCheck, Copy } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
-import { useCreatePairing } from '../../api/settings';
+import { useCreatePairing, useWithdrawPairing } from '../../api/settings';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
 import { Notice, Spinner } from '../../ui/feedback';
@@ -49,6 +49,7 @@ export function PairPhoneDialog({
   tokens: TokenRecord[] | undefined;
 }) {
   const pairing = useCreatePairing(adminToken);
+  const withdraw = useWithdrawPairing(adminToken);
   /** The tokens there were when the code was made: a new one is the phone. */
   const [before, setBefore] = useState<ReadonlySet<string> | null>(null);
   const now = useNow(open && pairing.isSuccess);
@@ -70,7 +71,8 @@ export function PairPhoneDialog({
   const close = (next: boolean) => {
     onOpenChange(next);
     if (!next) {
-      // The code is a credential until it's used: forget it with the dialog.
+      // The code is a credential until it's used: forget it with the dialog, and end it on the server.
+      if (asked.current) withdraw.mutate();
       asked.current = false;
       pairing.reset();
       setBefore(null);

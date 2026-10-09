@@ -256,6 +256,15 @@ export function useCreatePairing(adminToken: string | null) {
   });
 }
 
+/** Ends the codes nobody claimed, so one seen on the screen stops working when the dialog closes. */
+export function useWithdrawPairing(adminToken: string | null) {
+  return useMutation({
+    mutationFn: () => apiVoid('/v1/tokens/pairing', { method: 'DELETE', token: adminToken ?? undefined }),
+    meta: { failure: 'Couldn’t withdraw the pairing code' },
+    ...FORGET,
+  });
+}
+
 export function useRevokeToken(adminToken: string | null) {
   const queryClient = useQueryClient();
   return useMutation({

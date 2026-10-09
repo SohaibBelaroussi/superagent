@@ -70,6 +70,20 @@ const createPairing = createRoute({
   },
 });
 
+const withdrawPairings = createRoute({
+  method: 'delete',
+  path: '/tokens/pairing',
+  tags: ['tokens'],
+  summary: 'Withdraw unclaimed pairing codes',
+  description:
+    'Requires the admin token. Codes nobody has claimed stop working; the web app calls this when its ' +
+    'pairing dialog closes. Making a new code also ends the one before.',
+  responses: {
+    204: { description: 'Unclaimed codes withdrawn' },
+    403: adminOnly,
+  },
+});
+
 const claimToken = createRoute({
   method: 'post',
   path: '/tokens/claim',
@@ -124,6 +138,14 @@ export function registerTokenRoutes(v1: OpenAPIHono<AppEnv>, deps: AppDeps): voi
     const { code, expiresAt } = await deps.tokens.createPairing();
     deps.logger.info('Pairing code made', { expiresAt: expiresAt.toISOString() });
     return c.json({ code, expiresAt: expiresAt.toISOString() }, 201);
+  });
+
+  // Before DELETE /tokens/{id}, which would take "pairing" for an id.
+  v1.openapi(withdrawPairings, async (c) => {
+    requireAdminToken(c);
+    await deps.tokens.withdrawPairings();
+    deps.logger.info('Unclaimed pairing codes withdrawn');
+    return c.body(null, 204);
   });
 
   v1.openapi(claimToken, async (c) => {

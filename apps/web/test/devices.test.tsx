@@ -26,11 +26,17 @@ const NEW_TOKEN = `sa_device_${'n'.repeat(40)}`;
 const PAIR_CODE = `sa_pair_${'p'.repeat(43)}`;
 
 /**
- * The pairing route, before the token routes: each code works for 10 minutes, the first one for
- * `firstExpiresInMs` if given (to watch one run out).
+ * The pairing routes, before the token routes: each code works for 10 minutes, the first one for
+ * `firstExpiresInMs` if given (to watch one run out). Withdrawals are counted.
  */
-function pairingHandlers(state: { made: number }, firstExpiresInMs?: number) {
+function pairingHandlers(state: { made: number; withdrawn: number }, firstExpiresInMs?: number) {
   return [
+    http.delete(api('/v1/tokens/pairing'), ({ request }) => {
+      if (request.headers.get('authorization') !== `Bearer ${ADMIN_TOKEN}`)
+        return problem(403, 'Admin only.');
+      state.withdrawn += 1;
+      return new HttpResponse(null, { status: 204 });
+    }),
     http.post(api('/v1/tokens/pairing'), ({ request }) => {
       if (request.headers.get('authorization') !== `Bearer ${ADMIN_TOKEN}`)
         return problem(403, 'Admin only.');
@@ -195,7 +201,7 @@ describe('devices', () => {
 
   it('pairs a phone with a QR code or a link, and sees it arrive', async () => {
     const seen = { auth: [] as string[], created: [] as unknown[], revoked: [] as string[] };
-    const pairing = { made: 0 };
+    const pairing = { made: 0, withdrawn: 0 };
     const tokens = tokenHandlers(seen);
     let phoneClaimed = false;
     server.use(
@@ -246,6 +252,8 @@ describe('devices', () => {
     await user.click(within(paired).getByRole('button', { name: 'Done' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(screen.queryByDisplayValue(new RegExp(code))).toBeNull();
+    // Closing the dialog ends the code on the server too.
+    await waitFor(() => expect(pairing.withdrawn).toBe(1));
     expect(
       within(screen.getByRole('list', { name: 'Devices' })).getByText('App: Pixel 9, Android 16'),
     ).toBeVisible();
@@ -254,7 +262,7 @@ describe('devices', () => {
 
   it('offers a new code once one has expired', async () => {
     const seen = { auth: [] as string[], created: [] as unknown[], revoked: [] as string[] };
-    const pairing = { made: 0 };
+    const pairing = { made: 0, withdrawn: 0 };
     server.use(...pairingHandlers(pairing, 1_500), ...tokenHandlers(seen), ...signedInHandlers());
     renderApp('/settings/devices');
     const user = userEvent.setup();

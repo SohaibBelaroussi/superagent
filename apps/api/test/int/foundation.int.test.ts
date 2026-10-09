@@ -279,6 +279,31 @@ describe('foundation', () => {
       const results = await Promise.all([claim(code, 'first'), claim(code, 'second')]);
       expect(results.map((res) => res.status).sort()).toEqual([201, 401]);
     });
+
+    it('keeps one code at a time: a new one ends the one before', async () => {
+      const first = (await (await makeCode()).json()) as PairingCode;
+      const second = (await (await makeCode()).json()) as PairingCode;
+      expect((await claim(first.code)).status).toBe(401);
+      expect((await claim(second.code)).status).toBe(201);
+    });
+
+    it('withdraws unclaimed codes when the admin asks', async () => {
+      const { code } = (await (await makeCode()).json()) as PairingCode;
+      const device = (await (
+        await request('/v1/tokens', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ name: 'laptop' }),
+        })
+      ).json()) as CreatedToken;
+      const withdraw = (token?: string) =>
+        request('/v1/tokens/pairing', { method: 'DELETE', headers: authHeader(token) });
+
+      expect((await withdraw(device.token)).status).toBe(403);
+      expect((await withdraw(code)).status).toBe(403);
+      expect((await withdraw()).status).toBe(204);
+      expect((await claim(code)).status).toBe(401);
+    });
   });
 
   describe('limits and resilience', () => {
