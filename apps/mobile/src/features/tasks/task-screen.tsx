@@ -13,7 +13,7 @@ import { Stack } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { Check, CircleSlash, ExternalLink, RotateCcw, Send, Square, SquareCheck } from 'lucide-react-native';
 import { type RefObject, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   useAttention,
@@ -28,6 +28,7 @@ import {
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';
 import { TextField } from '../../ui/field';
+import { AvoidKeyboard } from '../../ui/keyboard';
 import { Markdown, safeUrl } from '../../ui/markdown';
 import { Segmented } from '../../ui/segmented';
 import { Card, Section } from '../../ui/surface';
@@ -117,7 +118,7 @@ function TaskBody({ task }: { task: Task }) {
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.screen}>
       <Stack.Screen options={{ title: `#${task.number}` }} />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <AvoidKeyboard style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={{ gap: space.sm }}>
             <View style={styles.metaRow}>
@@ -197,7 +198,7 @@ function TaskBody({ task }: { task: Task }) {
           {canCancel ? <CancelTask task={task} /> : null}
         </ScrollView>
         {task.closedAt ? null : <Composer task={task} inputRef={composer} />}
-      </KeyboardAvoidingView>
+      </AvoidKeyboard>
     </SafeAreaView>
   );
 }

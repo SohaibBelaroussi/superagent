@@ -3,11 +3,12 @@ import type { TaskPriority } from '@superagent/shared';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Switch, View } from 'react-native';
+import { Pressable, ScrollView, Switch, View } from 'react-native';
 import { useCreateTask, useOrg } from '../../api/queries';
 import { Button } from '../../ui/button';
 import { Notice } from '../../ui/feedback';
 import { TextField } from '../../ui/field';
+import { AvoidKeyboard } from '../../ui/keyboard';
 import { Segmented } from '../../ui/segmented';
 import { Text } from '../../ui/text';
 import { makeStyles, radius, space, toneColors, useTheme } from '../../ui/theme';
@@ -55,7 +56,7 @@ export function NewTaskScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <AvoidKeyboard style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {create.isError ? (
           <Notice tone="destructive" title="Couldn’t create the task">
@@ -95,9 +96,17 @@ export function NewTaskScreen() {
             </View>
           )}
         </View>
-        <TextField label="Title" value={title} onChangeText={setTitle} maxLength={200} autoFocus />
+        <TextField
+          label="Title"
+          testID="new-task-title"
+          value={title}
+          onChangeText={setTitle}
+          maxLength={200}
+          autoFocus
+        />
         <TextField
           label="Brief"
+          testID="new-task-brief"
           hint="What to do, and what a good result looks like. The lead reads it as written."
           value={brief}
           onChangeText={setBrief}
@@ -136,7 +145,7 @@ export function NewTaskScreen() {
           onPress={submit}
         />
       </ScrollView>
-    </KeyboardAvoidingView>
+    </AvoidKeyboard>
   );
 }
 

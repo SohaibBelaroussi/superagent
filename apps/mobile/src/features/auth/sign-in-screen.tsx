@@ -3,13 +3,14 @@ import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
 import { ClipboardPaste, QrCode } from 'lucide-react-native';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { normalizeServer, parsePairingLink } from '../../api/pairing';
 import { useSession } from '../../api/session';
 import { Button } from '../../ui/button';
 import { Notice } from '../../ui/feedback';
 import { TextField } from '../../ui/field';
+import { AvoidKeyboard } from '../../ui/keyboard';
 import { Logo } from '../../ui/logo';
 import { Text } from '../../ui/text';
 import { makeStyles, space } from '../../ui/theme';
@@ -69,7 +70,7 @@ export function SignInScreen() {
 
   return (
     <SafeAreaView style={styles.screen}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <AvoidKeyboard style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.hero}>
             <Logo size={56} />
@@ -131,6 +132,7 @@ export function SignInScreen() {
             <View style={{ gap: space.md }}>
               <TextField
                 label="Server"
+                testID="sign-in-server"
                 hint="Its tailnet address, like https://superagent.example.ts.net"
                 value={server}
                 onChangeText={setServer}
@@ -141,6 +143,7 @@ export function SignInScreen() {
               />
               <TextField
                 label="Token"
+                testID="sign-in-token"
                 hint="An admin token is swapped for a token of this phone’s own, and isn’t kept."
                 value={token}
                 onChangeText={setToken}
@@ -173,7 +176,7 @@ export function SignInScreen() {
             />
           )}
         </ScrollView>
-      </KeyboardAvoidingView>
+      </AvoidKeyboard>
     </SafeAreaView>
   );
 }
