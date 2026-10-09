@@ -23,8 +23,9 @@ COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY apps/runner apps/runner
 RUN pnpm --filter @superagent/runner build
+# The phone app's patches (patches/) don't apply to the runner's dependencies.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm --filter @superagent/runner deploy --prod --legacy /out
+    pnpm --filter @superagent/runner deploy --prod --legacy --config.allow-unused-patches=true /out
 
 # --- runtime: the bundle and its production dependencies, as the node user ---
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
