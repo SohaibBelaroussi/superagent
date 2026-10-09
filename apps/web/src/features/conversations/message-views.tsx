@@ -1,4 +1,4 @@
-import { departmentTone, type Tone } from '@superagent/client';
+import { departmentTone, type OrgLookup, type Tone } from '@superagent/client';
 import type { ConversationMessage, ConversationReport, MessagePart, ToolCallPart } from '@superagent/shared';
 import {
   Ban,
@@ -25,7 +25,7 @@ import { CodeBlock } from '../../ui/code-block';
 import { Notice, Spinner } from '../../ui/feedback';
 import { Markdown, webUrl } from '../../ui/markdown';
 import { RelativeTime } from '../../ui/time';
-import type { OrgLookup } from '../tasks/org';
+
 import { summarizeTool } from './tool-summary';
 
 /** Who wrote something, as the conversation shows them. */

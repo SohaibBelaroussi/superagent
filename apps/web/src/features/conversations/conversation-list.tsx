@@ -1,7 +1,7 @@
+import type { OrgLookup } from '@superagent/client';
 import type { ConversationMessage } from '@superagent/shared';
 import type { ReactNode } from 'react';
 import type { ShownTurn } from '../../api/conversations';
-import type { OrgLookup } from '../tasks/org';
 import {
   MessageView,
   OwnerBubble,

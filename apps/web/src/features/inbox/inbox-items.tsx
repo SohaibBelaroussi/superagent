@@ -1,3 +1,4 @@
+import type { OrgLookup } from '@superagent/client';
 import type { AttentionItem, Task } from '@superagent/shared';
 import { ArrowUp, Check, Send } from 'lucide-react';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
@@ -11,7 +12,6 @@ import { composerSurface } from '../../ui/recipes';
 import { RelativeTime } from '../../ui/time';
 import { toast } from '../../ui/toast';
 import { ApprovalCard } from '../tasks/approval-card';
-import type { OrgLookup } from '../tasks/org';
 import { DepartmentLabel } from '../tasks/task-bits';
 import { KINDS } from './kinds';
 

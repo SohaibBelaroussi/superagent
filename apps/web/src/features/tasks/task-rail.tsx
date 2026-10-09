@@ -1,4 +1,12 @@
-import { departmentTone, formatCost, formatDateTime, formatTokens, PRIORITIES } from '@superagent/client';
+import {
+  departmentTone,
+  formatCost,
+  formatDateTime,
+  formatTokens,
+  type OrgLookup,
+  PRIORITIES,
+  taskProgress,
+} from '@superagent/client';
 import type { Artifact, Task } from '@superagent/shared';
 import { Check, ExternalLink, FileText } from 'lucide-react';
 import { Link } from 'react-router';
@@ -9,8 +17,8 @@ import { Skeleton } from '../../ui/feedback';
 import { DetailRow, Panel, ProgressBar } from '../../ui/layout';
 import { Markdown, webUrl } from '../../ui/markdown';
 import { RelativeTime } from '../../ui/time';
-import type { OrgLookup } from './org';
-import { DepartmentLabel, PhaseBadge, taskProgress } from './task-bits';
+
+import { DepartmentLabel, PhaseBadge } from './task-bits';
 
 function RailPanel({
   title,

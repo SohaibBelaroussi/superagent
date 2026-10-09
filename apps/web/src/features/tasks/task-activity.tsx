@@ -1,4 +1,4 @@
-import { errorMessage } from '@superagent/client';
+import { condenseEvents, describeEvent, errorMessage, type OrgLookup } from '@superagent/client';
 import { ChevronsUp } from 'lucide-react';
 import { useState } from 'react';
 import { useTaskEvents } from '../../api/queries';
@@ -7,8 +7,7 @@ import { TONE_TEXT } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { Notice, Skeleton } from '../../ui/feedback';
 import { RelativeTime } from '../../ui/time';
-import { condenseEvents, describeEvent } from './events';
-import type { OrgLookup } from './org';
+import { EVENT_ICONS } from './events';
 
 /** How much history shows at first; the rest is one click away. */
 const SHOWN = 200;
@@ -47,7 +46,7 @@ export function TaskActivity({ taskId, org }: { taskId: string; org: OrgLookup }
       <ol className="flex flex-col" aria-label="History">
         {items.map((event, index) => {
           const described = describeEvent(event, org);
-          const Icon = described.icon;
+          const Icon = EVENT_ICONS[described.icon];
           const last = index === items.length - 1;
           return (
             <li key={event.seq} className={cn('relative flex gap-3', !last && 'pb-4')}>

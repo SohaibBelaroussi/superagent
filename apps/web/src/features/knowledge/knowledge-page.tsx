@@ -1,4 +1,11 @@
-import { departmentTone, errorMessage, formatBytes, plural, randomId } from '@superagent/client';
+import {
+  departmentTone,
+  errorMessage,
+  formatBytes,
+  type OrgLookup,
+  plural,
+  randomId,
+} from '@superagent/client';
 import type { KnowledgeDocument, KnowledgeHit } from '@superagent/shared';
 import { CircleAlert, CircleCheck, FileText, Library, Search, Trash2, Upload } from 'lucide-react';
 import { type DragEvent, type ReactNode, useDeferredValue, useRef, useState } from 'react';
@@ -22,7 +29,7 @@ import { raisedSurface } from '../../ui/recipes';
 import { Select } from '../../ui/select';
 import { RelativeTime } from '../../ui/time';
 import { toast } from '../../ui/toast';
-import { type OrgLookup, useOrg } from '../tasks/org';
+import { useOrg } from '../tasks/org';
 
 const SHARED = 'shared';
 const ALL = 'all';

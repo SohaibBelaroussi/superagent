@@ -1,11 +1,11 @@
-import { errorMessage } from '@superagent/client';
+import { errorMessage, type OrgLookup } from '@superagent/client';
 import type { Task } from '@superagent/shared';
 import { TERMINAL_PHASES } from '@superagent/shared/phases';
 import { ChevronsUp, MessagesSquare } from 'lucide-react';
 import { useConversation } from '../../api/conversations';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';
-import type { OrgLookup } from '../tasks/org';
+
 import { ConversationList } from './conversation-list';
 import { useSpeakers } from './message-views';
 

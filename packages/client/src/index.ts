@@ -10,4 +10,5 @@ export * from './id';
 export * from './live';
 export * from './queries';
 export * from './sse';
+export * from './tasks';
 export * from './tones';
