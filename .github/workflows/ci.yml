@@ -242,6 +242,8 @@ jobs:
     env:
       MAESTRO_CLI_NO_ANALYTICS: '1'
       MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: 'true'
+      # Maestro's driver can take minutes to start on a freshly booted simulator (milliseconds).
+      MAESTRO_DRIVER_STARTUP_TIMEOUT: '240000'
     steps:
       - uses: actions/checkout@v7
 
