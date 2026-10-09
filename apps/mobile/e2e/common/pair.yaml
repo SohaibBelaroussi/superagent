@@ -1,0 +1,12 @@
+# Signs the app in to the stack from a fresh start: a pairing code from setup.js, its link opened as
+# if scanned, the server it names checked, then confirmed.
+appId: dev.superagent.app
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Scan the pairing code"
+- runScript: ../setup.js
+- openLink: ${output.pairLink}
+- assertVisible: ${MAESTRO_APP_SERVER}
+- tapOn: "Pair this phone"
+- assertVisible: "Good (morning|afternoon|evening).*"

@@ -106,7 +106,12 @@ export function BoardScreen() {
         <IconButton icon={Plus} label="New task" onPress={() => router.push('/new-task')} />
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chips}
+        testID="board-departments"
+      >
         <Chip label="All" selected={departmentId === undefined} onPress={() => setDepartmentId(undefined)} />
         {org.departments.map((department) => (
           <Chip

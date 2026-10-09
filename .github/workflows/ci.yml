@@ -124,3 +124,175 @@ jobs:
       - name: Stop the stack
         if: always()
         run: docker compose -f compose.yaml -f compose.prod.yaml --profile app down -v
+
+  # The phone app on an Android emulator: a release build (APP_VARIANT=test) driven by the Maestro flows
+  # in apps/mobile/e2e, against the API run from source with its database.
+  mobile-android:
+    name: Android app on an emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      MAESTRO_CLI_NO_ANALYTICS: '1'
+      MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      # Gradle and Maestro both run on Java 17, which the runner has.
+      - name: Use Java 17
+        run: echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Start the API with a throwaway .env
+        run: |
+          password=$(openssl rand -hex 16)
+          token="sa_$(openssl rand -hex 32)"
+          echo "::add-mask::$token"
+          {
+            echo "POSTGRES_PASSWORD=$password"
+            echo "DATABASE_URL=postgres://superagent:$password@127.0.0.1:5432/superagent"
+            echo "SUPERAGENT_ADMIN_TOKEN=$token"
+            echo "SUPERAGENT_ENCRYPTION_KEY=$(openssl rand -base64 32)"
+            echo "MASTRA_TELEMETRY_DISABLED=true"
+          } > .env
+          echo "MAESTRO_ADMIN_TOKEN=$token" >> "$GITHUB_ENV"
+          docker compose up -d --wait postgres
+          nohup pnpm --filter @superagent/api exec tsx src/main.ts > "$RUNNER_TEMP/api.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:4111/ready; then exit 0; fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/api.log"
+          exit 1
+
+      # Release, for the emulator's architecture only. The CMake version the app's config plugin names
+      # (apps/mobile/plugins/cmake-version.js) isn't on the runner.
+      - name: Build the app
+        working-directory: apps/mobile
+        env:
+          APP_VARIANT: test
+          NODE_ENV: production
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "cmake;3.31.6" > /dev/null
+          pnpm exec expo prebuild --platform android --no-install
+          cd android
+          ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 --no-daemon --console=plain
+
+      - name: Install Maestro
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/maestro.zip" \
+            https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.11.0/maestro.zip
+          echo "5384593cb4e7a106489e75a821d157dd43f4e438df6bc308b72e82c685e1283a  $RUNNER_TEMP/maestro.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-cli"
+          echo "$RUNNER_TEMP/maestro-cli/maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Allow the emulator to use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # The app reaches the API at 10.0.2.2, the emulator's name for this machine; the flows' setup
+      # script reaches it at 127.0.0.1. Each line of the script runs on its own.
+      - name: Run the flows on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          MAESTRO_API_URL: http://127.0.0.1:4111
+          MAESTRO_APP_SERVER: http://10.0.2.2:4111
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save
+          script: |
+            adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+            maestro --no-ansi test --debug-output "$RUNNER_TEMP/maestro" apps/mobile/e2e
+
+      - name: Flow screenshots and logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: maestro-android
+          path: |
+            ${{ runner.temp }}/maestro
+            ${{ runner.temp }}/api.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Stop the database
+        if: always()
+        run: docker compose down -v
+
+  # The same app built for the iPhone simulator (no Apple account needed): it must build, and its
+  # sign-in screen must work. Flows that need the server run on Android only.
+  mobile-ios:
+    name: iPhone app on a simulator
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      MAESTRO_CLI_NO_ANALYTICS: '1'
+      MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the app for the simulator
+        working-directory: apps/mobile
+        env:
+          APP_VARIANT: test
+          NODE_ENV: production
+        run: |
+          set -o pipefail
+          pnpm exec expo prebuild --platform ios --no-install
+          cd ios
+          pod install
+          xcodebuild -workspace superagent.xcworkspace -scheme superagent -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO | xcbeautify --renderer github-actions
+
+      - name: Install Maestro
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/maestro.zip" \
+            https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.11.0/maestro.zip
+          echo "5384593cb4e7a106489e75a821d157dd43f4e438df6bc308b72e82c685e1283a  $RUNNER_TEMP/maestro.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-cli"
+          echo "$RUNNER_TEMP/maestro-cli/maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Run the sign-in flow on a simulator
+        run: |
+          # An iPhone on the newest iOS the runner has.
+          udid=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices | to_entries | sort_by(.key) | reverse | .[].value[]
+              | select(.name | startswith("iPhone"))][0].udid')
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          xcrun simctl install "$udid" apps/mobile/ios/build/Build/Products/Release-iphonesimulator/superagent.app
+          maestro --no-ansi --device "$udid" test --include-tags smoke --debug-output "$RUNNER_TEMP/maestro" apps/mobile/e2e
+
+      - name: Flow screenshots and logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: maestro-ios
+          path: ${{ runner.temp }}/maestro
+          retention-days: 7
+          if-no-files-found: ignore

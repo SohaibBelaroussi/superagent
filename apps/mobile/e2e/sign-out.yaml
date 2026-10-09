@@ -1,0 +1,17 @@
+appId: dev.superagent.app
+name: Settings, and signing out
+tags:
+  - server
+---
+- runFlow: common/pair.yaml
+- tapOn: "Settings"
+- assertVisible: ${MAESTRO_APP_SERVER}
+- assertVisible: "Live"
+- scrollUntilVisible:
+    element: "Sign out"
+- tapOn: "Sign out"
+- assertVisible: "Sign out\\?"
+# The dialog's positive button (Android): "Sign out", not "Stay signed in".
+- tapOn:
+    id: "android:id/button1"
+- assertVisible: "Scan the pairing code"

@@ -1,0 +1,28 @@
+appId: dev.superagent.app
+name: Home, the board and a task
+tags:
+  - server
+---
+- runFlow: common/pair.yaml
+- assertVisible: "Needs you"
+- assertVisible: "In progress"
+- tapOn: "Board"
+# With many departments, the chip may be further along the row.
+- repeat:
+    times: 6
+    while:
+      notVisible: "Phone check"
+    commands:
+      - swipe:
+          from:
+            id: "board-departments"
+          direction: LEFT
+- tapOn: "Phone check"
+- assertVisible: "Phone check, shown"
+- tapOn: "Inbox, \\d+"
+- scrollUntilVisible:
+    element: ".*Phone check: on the board.*"
+- tapOn: ".*Phone check: on the board.*"
+- assertVisible: "Brief"
+- assertVisible: "Seeded for the phone app’s end-to-end flows."
+- assertVisible: "Not sent to a lead yet."

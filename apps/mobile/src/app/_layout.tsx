@@ -67,7 +67,7 @@ function Navigator() {
           <Stack.Screen name="sign-in" options={{ headerShown: false }} />
           <Stack.Screen name="scan" options={{ headerShown: false, presentation: 'fullScreenModal' }} />
         </Stack.Protected>
-        <Stack.Screen name="pair" options={{ title: 'Pair this phone', presentation: 'modal' }} />
+        <Stack.Screen name="pair" options={{ title: 'Pairing', presentation: 'modal' }} />
       </Stack>
     </LiveEventsProvider>
   );
