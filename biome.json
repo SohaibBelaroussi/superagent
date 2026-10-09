@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!docs", "!**/drizzle", "!**/dist", "!**/.mastra"]
+    "includes": ["**", "!docs", "!**/drizzle", "!**/dist", "!**/.mastra", "!apps/mobile/src/ui/tokens.ts"]
   },
   "formatter": {
     "enabled": true,

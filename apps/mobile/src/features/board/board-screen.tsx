@@ -123,38 +123,38 @@ export function BoardScreen() {
         ref={strip}
         horizontal
         showsHorizontalScrollIndicator={false}
-        accessibilityRole="tablist"
-        accessibilityLabel="Phases"
         contentContainerStyle={styles.phases}
       >
-        {pages.map((page, pageIndex) => {
-          const active = pageIndex === selected;
-          return (
-            <Pressable
-              key={page.key}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: active }}
-              accessibilityLabel={`${page.label}, ${page.tasks.length}`}
-              onPress={() => go(pageIndex)}
-              onLayout={(event) => {
-                const { x } = event.nativeEvent.layout;
-                chipAt.current.set(pageIndex, x);
-                // The selected phase's place is known only now when the board first draws.
-                if (pageIndex === selected)
-                  strip.current?.scrollTo({ x: Math.max(0, x - space.lg), animated: false });
-              }}
-              style={[styles.phase, active && styles.phaseActive]}
-            >
-              {page.key === 'closed' ? null : <PhaseIcon phase={page.key} size={15} />}
-              <Text variant="label" color={active ? 'foreground' : 'mutedForeground'}>
-                {page.label}
-              </Text>
-              <Text variant="meta" color="mutedForeground" numeric>
-                {board.isSuccess ? page.tasks.length : '–'}
-              </Text>
-            </Pressable>
-          );
-        })}
+        <View accessibilityRole="tablist" accessibilityLabel="Phases" style={styles.phaseRow}>
+          {pages.map((page, pageIndex) => {
+            const active = pageIndex === selected;
+            return (
+              <Pressable
+                key={page.key}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={board.isSuccess ? `${page.label}, ${page.tasks.length}` : page.label}
+                onPress={() => go(pageIndex)}
+                onLayout={(event) => {
+                  const { x } = event.nativeEvent.layout;
+                  chipAt.current.set(pageIndex, x);
+                  // The selected phase's place is known only now when the board first draws.
+                  if (pageIndex === selected)
+                    strip.current?.scrollTo({ x: Math.max(0, x - space.lg), animated: false });
+                }}
+                style={[styles.phase, active && styles.phaseActive]}
+              >
+                {page.key === 'closed' ? null : <PhaseIcon phase={page.key} size={15} />}
+                <Text variant="label" color={active ? 'foreground' : 'mutedForeground'}>
+                  {page.label}
+                </Text>
+                <Text variant="meta" color="mutedForeground" numeric>
+                  {board.isSuccess ? page.tasks.length : '–'}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
       </ScrollView>
 
       {board.isError ? (
@@ -277,7 +277,8 @@ const useStyles = makeStyles((theme) => ({
     backgroundColor: theme.colors.fill,
   },
   chipDot: { width: 6, height: 6, borderRadius: 3 },
-  phases: { gap: space.xs, paddingHorizontal: space.md, paddingBottom: space.sm },
+  phases: { paddingHorizontal: space.md, paddingBottom: space.sm },
+  phaseRow: { flexDirection: 'row', gap: space.xs },
   phase: {
     flexDirection: 'row',
     alignItems: 'center',

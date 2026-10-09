@@ -51,7 +51,9 @@ export function LiveEventsProvider({ token, children }: { token: string | null; 
       stream.stop();
       stream = null;
     };
-    const follow = (state: AppStateStatus) => (state === 'active' ? open() : close());
+    // Only the background closes it: the state starts 'unknown' on some phones, and iOS says
+    // 'inactive' while its app switcher or a system sheet is over the app.
+    const follow = (state: AppStateStatus | null | undefined) => (state === 'background' ? close() : open());
 
     follow(AppState.currentState);
     const subscription = AppState.addEventListener('change', follow);
