@@ -1,5 +1,15 @@
-import { departmentTone, type OrgLookup, type Tone } from '@superagent/client';
-import type { ConversationMessage, ConversationReport, MessagePart, ToolCallPart } from '@superagent/shared';
+import {
+  type OrgLookup,
+  type ReportIcon,
+  reportKind,
+  type Speaker,
+  speakerFor,
+  splitReport,
+  TOOL_STATUS,
+  TURN_ENDINGS,
+  textOf,
+} from '@superagent/client';
+import type { ConversationMessage, MessagePart, ToolCallPart } from '@superagent/shared';
 import {
   Ban,
   Bell,
@@ -28,40 +38,10 @@ import { RelativeTime } from '../../ui/time';
 
 import { summarizeTool } from './tool-summary';
 
-/** Who wrote something, as the conversation shows them. */
-export interface Speaker {
-  name: string;
-  tone: Tone;
-}
-
 /** Agents by key: the chief, or a department's agent in its department's colour. */
 export function useSpeakers(org: OrgLookup): (key: string | null) => Speaker {
-  return useMemo(
-    () => (key) => {
-      if (!key) return { name: 'Agent', tone: 'neutral' };
-      if (key === 'chief') return { name: 'Chief of staff', tone: 'neutral' };
-      const agent = org.agentByKey(key);
-      const department = agent?.departmentId ? org.department(agent.departmentId) : undefined;
-      return {
-        name: agent?.name ?? key,
-        tone: department ? departmentTone(department.slug) : 'neutral',
-      };
-    },
-    [org],
-  );
+  return useMemo(() => (key) => speakerFor(org, key), [org]);
 }
-
-/** A pending message of yours: on its way, waiting for the chief's turn to end, or not sent. */
-export interface PendingMessage {
-  key: string;
-  text: string;
-  state: 'sending' | 'started' | 'queued' | 'failed';
-  error?: string;
-}
-
-/** A message's text, its paragraphs joined. */
-export const textOf = (parts: MessagePart[]) =>
-  parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n\n');
 
 export function OwnerBubble({ text, children }: { text: string; children?: ReactNode }) {
   return (
@@ -85,14 +65,7 @@ function SpeakerLine({ speaker, at }: { speaker: Speaker; at?: string }) {
   );
 }
 
-const STATUS: Record<ToolCallPart['status'], { label: string | null; icon: LucideIcon | null; tone: Tone }> =
-  {
-    pending: { label: null, icon: null, tone: 'neutral' },
-    approval: { label: 'Waiting for your approval', icon: Hand, tone: 'amber' },
-    done: { label: null, icon: null, tone: 'neutral' },
-    failed: { label: 'Failed', icon: CircleX, tone: 'red' },
-    declined: { label: 'Declined', icon: Ban, tone: 'neutral' },
-  };
+const STATUS_ICONS = { Ban, CircleX, Hand } as const;
 
 /** The tool calls running right now: a call without a result elsewhere has none. */
 export const RunningCalls = createContext<ReadonlySet<string>>(new Set());
@@ -101,9 +74,9 @@ export const RunningCalls = createContext<ReadonlySet<string>>(new Set());
 export function ToolCallRow({ part, name }: { part: ToolCallPart; name: (key: string) => string }) {
   const runningCalls = useContext(RunningCalls);
   const summary = summarizeTool(part, name);
-  const status = STATUS[part.status];
+  const status = TOOL_STATUS[part.status];
   const running = part.status === 'pending' && runningCalls.has(part.callId);
-  const Icon = status.icon ?? summary.icon;
+  const Icon = status.icon ? STATUS_ICONS[status.icon] : summary.icon;
   const prompt =
     part.delegate && typeof (part.args as { prompt?: unknown })?.prompt === 'string'
       ? (part.args as { prompt: string }).prompt
@@ -254,46 +227,24 @@ export function AgentMessage({
   );
 }
 
-const REPORT_KINDS: Record<string, { label: string; tone: Tone; icon: LucideIcon }> = {
-  'task-done': { label: 'Done', tone: 'green', icon: CircleCheck },
-  'task-blocked': { label: 'Has a question', tone: 'orange', icon: MessageCircleQuestion },
-  'task-failed': { label: 'Failed', tone: 'red', icon: CircleX },
-  'approval-needed': { label: 'Needs your approval', tone: 'amber', icon: Hand },
-  'task-stalled': { label: 'Stalled', tone: 'red', icon: TriangleAlert },
-  'task-interrupted': { label: 'Interrupted', tone: 'orange', icon: TriangleAlert },
+const REPORT_ICONS: Record<ReportIcon, LucideIcon> = {
+  Bell,
+  CircleCheck,
+  CircleX,
+  Hand,
+  MessageCircleQuestion,
+  TriangleAlert,
 };
-
-/**
- * "#12 Title: what happened" → its parts, so the task can be a link. The report's task title says where
- * the summary starts (a title can hold ": " too); without it, the first ": " does.
- */
-export function splitReport(
-  text: string,
-  report: ConversationReport | null = null,
-): { number: number; title: string; summary: string } | null {
-  if (report?.taskNumber != null && report.taskTitle) {
-    const prefix = `#${report.taskNumber} ${report.taskTitle}: `;
-    if (text.startsWith(prefix)) {
-      return { number: report.taskNumber, title: report.taskTitle, summary: text.slice(prefix.length) };
-    }
-  }
-  const match = /^#(\d+) ([^\n]*?): ([\s\S]+)$/.exec(text);
-  return match ? { number: Number(match[1]), title: match[2] ?? '', summary: match[3] ?? '' } : null;
-}
 
 /** A department's report to the chief, linked to its task. */
 export function ReportCard({ message, org }: { message: ConversationMessage; org: OrgLookup }) {
   const report = message.report;
-  const kind = (report && REPORT_KINDS[report.kind]) ?? {
-    label: 'Update',
-    tone: 'neutral' as Tone,
-    icon: Bell,
-  };
+  const kind = reportKind(report);
   const slug = report?.source.startsWith('dept:') ? report.source.slice(5) : null;
   const department = slug ? org.departmentBySlug(slug) : undefined;
   const text = textOf(message.parts);
   const split = splitReport(text, report);
-  const Icon = kind.icon;
+  const Icon = REPORT_ICONS[kind.icon];
   const label = `Report${report?.taskNumber ? ` on #${report.taskNumber}` : ''}`;
   return (
     <article aria-label={label} className="flex flex-col gap-2 rounded-xl bg-card px-4 py-3 shadow-raised">
@@ -344,11 +295,6 @@ export function BriefCard({ message, lead }: { message: ConversationMessage; lea
     </section>
   );
 }
-
-const ENDINGS = {
-  stopped: 'Stopped.',
-  suspended: 'Paused until you decide on the tool call.',
-} as const;
 
 /**
  * A turn being taken: its text as it arrives, tool calls as they run. What the history already shows
@@ -418,7 +364,7 @@ export function TurnView({
           {turn.end.error ?? 'The model call failed.'}
         </Notice>
       ) : turn.end && turn.end.outcome !== 'finished' ? (
-        <p className="pl-7 text-caption text-muted-foreground">{ENDINGS[turn.end.outcome]}</p>
+        <p className="pl-7 text-caption text-muted-foreground">{TURN_ENDINGS[turn.end.outcome]}</p>
       ) : null}
     </div>
   );

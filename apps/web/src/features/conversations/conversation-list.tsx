@@ -1,24 +1,10 @@
-import type { OrgLookup } from '@superagent/client';
+import { type OrgLookup, PENDING_NOTES, type PendingMessage, type Speaker } from '@superagent/client';
 import type { ConversationMessage } from '@superagent/shared';
 import type { ReactNode } from 'react';
 import type { ShownTurn } from '../../api/conversations';
-import {
-  MessageView,
-  OwnerBubble,
-  type PendingMessage,
-  RunningCalls,
-  type Speaker,
-  TurnView,
-} from './message-views';
+import { MessageView, OwnerBubble, RunningCalls, TurnView } from './message-views';
 
 const NONE: ReadonlySet<string> = new Set();
-
-const PENDING_NOTE: Record<PendingMessage['state'], string> = {
-  sending: 'Sending…',
-  started: 'Sent',
-  queued: 'Sends once the current answer is done',
-  failed: 'Not sent',
-};
 
 /**
  * A conversation in order: stored messages, what reached the agent since, your messages on their way,
@@ -59,8 +45,8 @@ export function ConversationList({
         <OwnerBubble text={message.text}>
           <span className="flex items-center gap-2 text-caption text-muted-foreground">
             {message.state === 'failed'
-              ? (message.error ?? PENDING_NOTE.failed)
-              : PENDING_NOTE[message.state]}
+              ? (message.error ?? PENDING_NOTES.failed)
+              : PENDING_NOTES[message.state]}
             {message.state === 'failed' && onRetry ? (
               <button
                 type="button"

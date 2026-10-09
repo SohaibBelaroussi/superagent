@@ -1,5 +1,11 @@
-import { errorMessage, randomId } from '@superagent/client';
-import type { ConversationMessage } from '@superagent/shared';
+import {
+  errorMessage,
+  LOST_AFTER_MS,
+  type PendingMessage,
+  pendingMessage,
+  randomId,
+  storedPending,
+} from '@superagent/client';
 import { ArrowDown, ArrowUp, ChevronsUp, Square } from 'lucide-react';
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
@@ -13,7 +19,7 @@ import { composerSurface } from '../../ui/recipes';
 import { StatusDot } from '../../ui/status-dot';
 import { useOrg } from '../tasks/org';
 import { ConversationList } from './conversation-list';
-import { type PendingMessage, textOf, useSpeakers } from './message-views';
+import { useSpeakers } from './message-views';
 import { useStickToBottom } from './scroll';
 
 const SUGGESTIONS = [
@@ -21,34 +27,6 @@ const SUGGESTIONS = [
   'What needs my attention today?',
   'Start a research task: compare the top open-source agent frameworks.',
 ];
-
-/** How long a queued message may wait once the chief is idle (it goes out within a second) before it's offered again. */
-const LOST_AFTER_MS = 15_000;
-
-type Pending = PendingMessage & {
-  /** Your stored messages with the same text when it was sent: none of them is this one. */
-  known: ReadonlySet<string>;
-};
-
-/**
- * The pending messages the history now has, each with the stored message that is it. Each stored message
- * of yours (with its text, and not there when it was sent) stands for one pending message, in order, so
- * sending the same words twice works.
- */
-function storedPending(pending: Pending[], messages: ConversationMessage[]): Map<string, string> {
-  const stored = new Map<string, string>();
-  const used = new Set<string>();
-  for (const item of pending) {
-    const match = messages.find(
-      (m) => m.role === 'owner' && !used.has(m.id) && !item.known.has(m.id) && textOf(m.parts) === item.text,
-    );
-    if (match) {
-      used.add(match.id);
-      stored.set(item.key, match.id);
-    }
-  }
-  return stored;
-}
 
 /** Where the home page's quick message travels, to be sent once the chief's page is open. */
 export interface ChiefDraft {
@@ -64,7 +42,7 @@ export function ChiefPage() {
   const { history, messages, arrived, turns, running: runningCalls, active: running, status } = conversation;
   const send = useSendToChief();
   const stop = useStopChief();
-  const [pending, setPending] = useState<Pending[]>([]);
+  const [pending, setPending] = useState<PendingMessage[]>([]);
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -78,12 +56,9 @@ export function ChiefPage() {
   function submit(text: string, key = randomId()) {
     const message = text.trim();
     if (!message) return;
-    const known = new Set(
-      messages.filter((m) => m.role === 'owner' && textOf(m.parts) === message).map((m) => m.id),
-    );
     setPending((list) => [
       ...list.filter((item) => item.key !== key),
-      { key, text: message, state: 'sending', known },
+      pendingMessage(key, message, messages),
     ]);
     toBottom();
     send.mutate(message, {

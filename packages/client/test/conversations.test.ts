@@ -1,7 +1,18 @@
-import type { ConversationMessage, LiveEvent, ToolCallPart } from '@superagent/shared';
-import { describe, expect, it } from 'vitest';
-import { type LiveState, liveReducer, reconcile } from '../src/api/conversations';
-import { summarizeTool } from '../src/features/conversations/tool-summary';
+import type { ConversationMessage, ConversationPage, LiveEvent, ToolCallPart } from '@superagent/shared';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  ConversationStream,
+  conversationMessages,
+  type LiveState,
+  liveReducer,
+  pendingMessage,
+  reconcile,
+  reportKind,
+  splitReport,
+  storedPending,
+} from '../src/conversations';
+import { configureClient, setApiToken } from '../src/http';
+import { summarizeTool } from '../src/tools';
 
 const initial: LiveState = { status: 'live', running: false, turns: [], arrived: [] };
 const play = (events: LiveEvent[], state = initial, at = 1_000) =>
@@ -147,7 +158,10 @@ describe('the history with live turns', () => {
 describe('tool calls in words', () => {
   const name = (key: string) => (key === 'scout' ? 'Scout' : key);
   it('says what each of our tools did', () => {
-    expect(summarizeTool(tool('c', 'done'), name).title).toBe('Searched the web for “agent memory”');
+    expect(summarizeTool(tool('c', 'done'), name)).toEqual({
+      icon: 'Search',
+      title: 'Searched the web for “agent memory”',
+    });
     expect(
       summarizeTool(
         tool('c', 'done', {
@@ -176,5 +190,123 @@ describe('tool calls in words', () => {
     expect(summarizeTool(tool('c', 'done', { tool: 'github_create_issue' }), name).title).toBe(
       'Used github_create_issue',
     );
+  });
+});
+
+describe('your messages on their way', () => {
+  const yours = (id: string, text: string): ConversationMessage => ({
+    ...agentMessage(id, [{ type: 'text', text }]),
+    role: 'owner',
+    author: null,
+  });
+
+  it('finds each in the history once it’s stored, even the same words twice', () => {
+    const before = [yours('m1', 'Status?')];
+    const first = pendingMessage('a', 'Status?', before);
+    const second = pendingMessage('b', 'Status?', before);
+    // The earlier "Status?" is neither of them.
+    expect(storedPending([first, second], before).size).toBe(0);
+
+    const after = [...before, yours('m2', 'Status?')];
+    expect(storedPending([first, second], after)).toEqual(new Map([['a', 'm2']]));
+    const both = [...after, yours('m3', 'Status?')];
+    expect(storedPending([first, second], both)).toEqual(
+      new Map([
+        ['a', 'm2'],
+        ['b', 'm3'],
+      ]),
+    );
+  });
+});
+
+describe('reports', () => {
+  it('split into the task and what happened, even when the title holds a colon', () => {
+    expect(splitReport('#3 Proofread: done.')).toEqual({ number: 3, title: 'Proofread', summary: 'done.' });
+    const colon = { ...report.report, taskNumber: 4, taskTitle: 'Plan: Q4' } as ConversationMessage['report'];
+    expect(splitReport('#4 Plan: Q4: drafted.', colon)).toEqual({
+      number: 4,
+      title: 'Plan: Q4',
+      summary: 'drafted.',
+    });
+    expect(splitReport('No task here')).toBeNull();
+  });
+
+  it('show their kind, or an update', () => {
+    expect(reportKind(report.report)).toEqual({ label: 'Done', tone: 'green', icon: 'CircleCheck' });
+    expect(reportKind(null).label).toBe('Update');
+  });
+});
+
+describe('a conversation’s history', () => {
+  it('reads the pages oldest first, each message once', () => {
+    const say = (id: string) => agentMessage(id, [{ type: 'text', text: id }]);
+    // Newest page first, as they load; the conversation grew between the two, so they overlap.
+    const pages: ConversationPage[] = [
+      { items: [say('c'), say('d')], nextCursor: '2026-10-08T10:00:00.000Z' },
+      { items: [say('a'), say('b'), say('c')], nextCursor: null },
+    ];
+    expect(conversationMessages(pages).map((message) => message.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(conversationMessages(undefined)).toEqual([]);
+  });
+});
+
+describe('ConversationStream', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    configureClient({ baseUrl: 'http://superagent.test' });
+    setApiToken('sa_device_token');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    configureClient({ baseUrl: '' });
+    setApiToken(null);
+  });
+
+  it('passes on the turn and says when the history changed, once more just after a turn ends', async () => {
+    let push!: (text: string) => void;
+    const urls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      urls.push(String(url));
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          push = (text) => controller.enqueue(new TextEncoder().encode(text));
+        },
+      });
+      return new Response(body, { status: 200 });
+    });
+    const events: string[] = [];
+    let stale = 0;
+    const stream = new ConversationStream(
+      { kind: 'task', taskId: 'task-1' },
+      'sa_device_token',
+      {
+        onEvent: (event) => events.push(event.type),
+        onStatus: () => {},
+        onStale: () => {
+          stale += 1;
+        },
+      },
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
+    );
+    stream.start();
+    await vi.waitFor(() => expect(urls).toEqual(['http://superagent.test/v1/tasks/task-1/stream']));
+
+    push('event: ready\ndata: {"type":"ready","running":true}\n\n');
+    push('event: run-start\ndata: {"type":"run-start","runId":"r1","agent":"lead"}\n\n');
+    push('event: text\ndata: {"type":"text","runId":"r1","id":"t1","delta":"Hello"}\n\n');
+    // Not a live event: skipped.
+    push('event: text\ndata: {"nope":true}\n\n');
+    await vi.waitFor(() => expect(events).toEqual(['ready', 'run-start', 'text']));
+    expect(stale).toBe(2);
+
+    push(
+      'event: run-end\ndata: {"type":"run-end","runId":"r1","outcome":"finished","error":null,"messageIds":["m1"]}\n\n',
+    );
+    await vi.waitFor(() => expect(events.at(-1)).toBe('run-end'));
+    expect(stale).toBe(3);
+    // Closing the stream doesn't cancel the second look: the answer may be stored a moment later.
+    stream.stop();
+    vi.advanceTimersByTime(1500);
+    expect(stale).toBe(4);
   });
 });
