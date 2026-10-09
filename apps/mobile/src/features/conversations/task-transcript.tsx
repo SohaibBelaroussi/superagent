@@ -1,11 +1,12 @@
 import { errorMessage, type OrgLookup } from '@superagent/client';
 import type { Task } from '@superagent/shared';
 import { TERMINAL_PHASES } from '@superagent/shared/phases';
-import { ChevronsUp, MessagesSquare } from 'lucide-react';
+import { ChevronsUp } from 'lucide-react-native';
+import { View } from 'react-native';
 import { useConversation } from '../../api/conversations';
 import { Button } from '../../ui/button';
-import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';
-
+import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
+import { radius, space } from '../../ui/theme';
 import { ConversationList } from './conversation-list';
 import { useSpeakers } from './message-views';
 
@@ -24,26 +25,17 @@ export function TaskTranscript({ task, org }: { task: Task; org: OrgLookup }) {
 
   if (history.isPending) {
     return (
-      <div role="status" className="flex flex-col gap-3">
-        <span className="sr-only">Loading the transcript…</span>
-        <Skeleton className="h-16 rounded-xl" />
-        <Skeleton className="h-4 w-1/2" />
-        <Skeleton className="h-4 w-2/3" />
-      </div>
+      <View accessibilityLabel="Loading the transcript" style={{ gap: space.md }}>
+        <Skeleton style={{ height: 64, borderRadius: radius.card }} />
+        <Skeleton style={{ height: 16, width: '50%' }} />
+        <Skeleton style={{ height: 16, width: '66%' }} />
+      </View>
     );
   }
   // A failed refresh keeps what was loaded.
   if (history.isError && !history.data) {
     return (
-      <Notice
-        tone="destructive"
-        title="Couldn’t load the transcript"
-        action={
-          <Button size="sm" onClick={() => history.refetch()}>
-            Retry
-          </Button>
-        }
-      >
+      <Notice tone="destructive" title="Couldn’t load the transcript">
         {errorMessage(history.error)}
       </Notice>
     );
@@ -51,8 +43,6 @@ export function TaskTranscript({ task, org }: { task: Task; org: OrgLookup }) {
   if (messages.length === 0 && arrived.length === 0 && turns.length === 0) {
     return (
       <EmptyState
-        compact
-        icon={<MessagesSquare />}
         title="Nothing yet"
         description={
           task.phase === 'inbox'
@@ -63,18 +53,17 @@ export function TaskTranscript({ task, org }: { task: Task; org: OrgLookup }) {
     );
   }
   return (
-    <div className="flex flex-col gap-5">
+    <View style={{ gap: space.xl }}>
       {history.hasNextPage ? (
         <Button
+          title="Earlier messages"
           variant="ghost"
           size="sm"
-          className="self-start"
-          disabled={history.isFetchingNextPage}
-          onClick={() => history.fetchNextPage()}
-        >
-          {history.isFetchingNextPage ? <Spinner className="size-3.5" /> : <ChevronsUp aria-hidden />}
-          Earlier messages
-        </Button>
+          icon={ChevronsUp}
+          busy={history.isFetchingNextPage}
+          onPress={() => void history.fetchNextPage()}
+          style={{ alignSelf: 'flex-start' }}
+        />
       ) : null}
       <ConversationList
         messages={messages}
@@ -85,6 +74,6 @@ export function TaskTranscript({ task, org }: { task: Task; org: OrgLookup }) {
         speaker={speaker}
         defaultAgent={lead}
       />
-    </div>
+    </View>
   );
 }

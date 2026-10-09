@@ -18,6 +18,10 @@ export default function TabsLayout() {
         <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="house" md="home" />
       </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="chief">
+        <NativeTabs.Trigger.Label>Chief</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf="bubble.left.and.bubble.right" md="forum" />
+      </NativeTabs.Trigger>
       <NativeTabs.Trigger name="board">
         <NativeTabs.Trigger.Label>Board</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="rectangle.split.3x1" md="view_kanban" />

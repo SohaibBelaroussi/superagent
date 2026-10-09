@@ -3,6 +3,7 @@
  * definitions, the live event stream, and the words and tones both show. No React and no DOM: each
  * app passes in what differs (the server's address, `fetch`, how it hears the network come back).
  */
+export * from './conversations';
 export * from './events';
 export * from './format';
 export * from './http';
@@ -12,3 +13,4 @@ export * from './queries';
 export * from './sse';
 export * from './tasks';
 export * from './tones';
+export * from './tools';

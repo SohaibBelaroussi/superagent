@@ -1,8 +1,7 @@
-import { type OrgLookup, PENDING_NOTES, type PendingMessage, type Speaker } from '@superagent/client';
+import type { OrgLookup, PendingMessage, ShownTurn, Speaker } from '@superagent/client';
 import type { ConversationMessage } from '@superagent/shared';
 import type { ReactNode } from 'react';
-import type { ShownTurn } from '../../api/conversations';
-import { MessageView, OwnerBubble, RunningCalls, TurnView } from './message-views';
+import { MessageView, PendingBubble, RunningCalls, TurnView } from './message-views';
 
 const NONE: ReadonlySet<string> = new Set();
 
@@ -41,24 +40,11 @@ export function ConversationList({
   const pendingRow = (message: PendingMessage) => {
     previous = null;
     rows.push(
-      <div key={message.key} className={message.state === 'failed' ? undefined : 'opacity-70'}>
-        <OwnerBubble text={message.text}>
-          <span className="flex items-center gap-2 text-caption text-muted-foreground">
-            {message.state === 'failed'
-              ? (message.error ?? PENDING_NOTES.failed)
-              : PENDING_NOTES[message.state]}
-            {message.state === 'failed' && onRetry ? (
-              <button
-                type="button"
-                className="text-foreground underline underline-offset-4"
-                onClick={() => onRetry(message)}
-              >
-                Retry
-              </button>
-            ) : null}
-          </span>
-        </OwnerBubble>
-      </div>,
+      <PendingBubble
+        key={message.key}
+        message={message}
+        onRetry={onRetry ? () => onRetry(message) : undefined}
+      />,
     );
   };
 
@@ -93,12 +79,7 @@ export function ConversationList({
     previous = author;
   }
   for (const message of pending) if (message.state === 'queued') pendingRow(message);
-  return (
-    <RunningCalls value={running}>
-      {/* A log: screen readers announce what is added at its end. */}
-      <div role="log" aria-label="Conversation" className="flex flex-col gap-5">
-        {rows}
-      </div>
-    </RunningCalls>
-  );
+  // The rows go straight into the parent's scroll view, which spaces them, so it can keep your place
+  // when earlier messages load above them.
+  return <RunningCalls value={running}>{rows}</RunningCalls>;
 }

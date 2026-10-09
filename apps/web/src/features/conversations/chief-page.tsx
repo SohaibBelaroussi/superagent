@@ -1,5 +1,11 @@
-import { errorMessage, randomId } from '@superagent/client';
-import type { ConversationMessage } from '@superagent/shared';
+import {
+  errorMessage,
+  LOST_AFTER_MS,
+  type PendingMessage,
+  pendingMessage,
+  randomId,
+  storedPending,
+} from '@superagent/client';
 import { ArrowDown, ArrowUp, ChevronsUp, Square } from 'lucide-react';
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
@@ -13,7 +19,7 @@ import { composerSurface } from '../../ui/recipes';
 import { StatusDot } from '../../ui/status-dot';
 import { useOrg } from '../tasks/org';
 import { ConversationList } from './conversation-list';
-import { type PendingMessage, textOf, useSpeakers } from './message-views';
+import { useSpeakers } from './message-views';
 import { useStickToBottom } from './scroll';
 
 const SUGGESTIONS = [
@@ -21,34 +27,6 @@ const SUGGESTIONS = [
   'What needs my attention today?',
   'Start a research task: compare the top open-source agent frameworks.',
 ];
-
-/** How long a queued message may wait once the chief is idle (it goes out within a second) before it's offered again. */
-const LOST_AFTER_MS = 15_000;
-
-type Pending = PendingMessage & {
-  /** Your stored messages with the same text when it was sent: none of them is this one. */
-  known: ReadonlySet<string>;
-};
-
-/**
- * The pending messages the history now has, each with the stored message that is it. Each stored message
- * of yours (with its text, and not there when it was sent) stands for one pending message, in order, so
- * sending the same words twice works.
- */
-function storedPending(pending: Pending[], messages: ConversationMessage[]): Map<string, string> {
-  const stored = new Map<string, string>();
-  const used = new Set<string>();
-  for (const item of pending) {
-    const match = messages.find(
-      (m) => m.role === 'owner' && !used.has(m.id) && !item.known.has(m.id) && textOf(m.parts) === item.text,
-    );
-    if (match) {
-      used.add(match.id);
-      stored.set(item.key, match.id);
-    }
-  }
-  return stored;
-}
 
 /** Where the home page's quick message travels, to be sent once the chief's page is open. */
 export interface ChiefDraft {
@@ -64,7 +42,7 @@ export function ChiefPage() {
   const { history, messages, arrived, turns, running: runningCalls, active: running, status } = conversation;
   const send = useSendToChief();
   const stop = useStopChief();
-  const [pending, setPending] = useState<Pending[]>([]);
+  const [pending, setPending] = useState<PendingMessage[]>([]);
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -75,15 +53,15 @@ export function ChiefPage() {
   const stored = storedPending(pending, messages);
   const shownPending = pending.filter((message) => !stored.has(message.key));
 
+  // Sending waits for the history: a pending message is matched against what it already holds.
+  const ready = history.isSuccess;
+
   function submit(text: string, key = randomId()) {
     const message = text.trim();
-    if (!message) return;
-    const known = new Set(
-      messages.filter((m) => m.role === 'owner' && textOf(m.parts) === message).map((m) => m.id),
-    );
+    if (!message || !ready) return;
     setPending((list) => [
       ...list.filter((item) => item.key !== key),
-      { key, text: message, state: 'sending', known },
+      pendingMessage(key, message, messages),
     ]);
     toBottom();
     send.mutate(message, {
@@ -125,19 +103,19 @@ export function ChiefPage() {
     return () => clearTimeout(timer);
   }, [running, status, pending]);
 
-  // A message written on the home page arrives in the navigation state: send it once, even when the
-  // effect runs twice (StrictMode) before the cleared state has rendered.
+  // A message written on the home page arrives in the navigation state: send it once the history is
+  // in, and once only, even when the effect runs twice (StrictMode) before the cleared state has rendered.
   const location = useLocation();
   const navigate = useNavigate();
   const handoff = (location.state as ChiefDraft | null)?.send;
   const handedOff = useRef<string | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per handed-off message.
   useEffect(() => {
-    if (!handoff || handedOff.current === location.key) return;
+    if (!handoff || !ready || handedOff.current === location.key) return;
     handedOff.current = location.key;
     navigate(location.pathname, { replace: true, state: null });
     submit(handoff);
-  }, [handoff, location.key]);
+  }, [handoff, location.key, ready]);
 
   function onSubmit(event?: FormEvent) {
     event?.preventDefault();
@@ -209,7 +187,7 @@ export function ChiefPage() {
             ) : null}
             {history.isPending ? (
               <ConversationSkeleton />
-            ) : history.isError ? (
+            ) : history.isError && !history.data ? (
               <Notice
                 tone="destructive"
                 title="Couldn’t load the conversation"
@@ -277,7 +255,13 @@ export function ChiefPage() {
             <span className="pl-1 text-caption text-placeholder">
               Enter to send · Shift + Enter for a new line
             </span>
-            <Button type="submit" variant="primary" size="icon-sm" tooltip="Send" disabled={!draft.trim()}>
+            <Button
+              type="submit"
+              variant="primary"
+              size="icon-sm"
+              tooltip="Send"
+              disabled={!draft.trim() || !ready}
+            >
               <ArrowUp aria-hidden />
             </Button>
           </div>

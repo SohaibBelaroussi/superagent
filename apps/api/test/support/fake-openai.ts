@@ -251,7 +251,11 @@ export const OBSERVATIONS =
   '<current-task>\nPrimary: answer the latest request\n</current-task>';
 const OBSERVATIONS_REFLECTED = '<observations>\n* 🔴 The owner researches Mastra\n</observations>';
 
-export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Promise<FakeOpenAI> {
+/** Listens on 127.0.0.1, on `listenOn` (0: any free port). */
+export async function startFakeOpenAI(
+  models = ['fake-chat', 'fake-embed'],
+  listenOn = 0,
+): Promise<FakeOpenAI> {
   const requests: RecordedRequest[] = [];
   // Tool call ids must be unique, like a real provider's: Mastra merges tool calls that share an id.
   let callCounter = 0;
@@ -372,7 +376,7 @@ export async function startFakeOpenAI(models = ['fake-chat', 'fake-embed']): Pro
     send(404, { error: { message: `no route for ${req.method} ${path}` } });
   });
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(listenOn, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   return {
     url: `http://127.0.0.1:${port}/v1`,

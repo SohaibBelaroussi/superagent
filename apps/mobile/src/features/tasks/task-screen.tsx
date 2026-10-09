@@ -35,6 +35,7 @@ import { Card, Section } from '../../ui/surface';
 import { Text } from '../../ui/text';
 import { MAX_FONT_SCALE, makeStyles, radius, space, toneColors, type, useTheme } from '../../ui/theme';
 import { toast } from '../../ui/toast';
+import { TaskTranscript } from '../conversations/task-transcript';
 import { ApprovalCard } from './approval-card';
 import {
   DepartmentLabel,
@@ -46,7 +47,7 @@ import {
   usageLine,
 } from './bits';
 
-type TaskView = 'overview' | 'activity';
+type TaskView = 'overview' | 'activity' | 'transcript';
 
 /** A task: what it is and where it stands, what it waits for, and a line to its lead. */
 export function TaskScreen({ id }: { id: string }) {
@@ -191,9 +192,16 @@ function TaskBody({ task }: { task: Task }) {
             options={[
               { value: 'overview', label: 'Overview' },
               { value: 'activity', label: 'Activity' },
+              { value: 'transcript', label: 'Transcript' },
             ]}
           />
-          {view === 'overview' ? <Overview task={task} /> : <Activity task={task} org={org} />}
+          {view === 'overview' ? (
+            <Overview task={task} />
+          ) : view === 'activity' ? (
+            <Activity task={task} org={org} />
+          ) : (
+            <TaskTranscript task={task} org={org} />
+          )}
 
           {canCancel ? <CancelTask task={task} /> : null}
         </ScrollView>

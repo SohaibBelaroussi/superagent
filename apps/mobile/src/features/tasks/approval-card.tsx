@@ -3,9 +3,10 @@ import type { AttentionItem } from '@superagent/shared';
 import * as Haptics from 'expo-haptics';
 import { ShieldCheck, ShieldQuestion, ShieldX } from 'lucide-react-native';
 import { useRef, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 import { useDecide } from '../../api/queries';
 import { Button } from '../../ui/button';
+import { CodeBlock } from '../../ui/code-block';
 import { TextField } from '../../ui/field';
 import { Text } from '../../ui/text';
 import { makeStyles, radius, space, useTheme } from '../../ui/theme';
@@ -23,7 +24,6 @@ export function ApprovalCard({ item }: { item: AttentionItem }) {
   const decide = useDecide();
   const [declining, setDeclining] = useState(false);
   const [reason, setReason] = useState('');
-  const [showAll, setShowAll] = useState(false);
   // Decided here: the card stays settled until the list drops the item, so it can't be decided twice.
   const [decided, setDecided] = useState<Kind | null>(null);
   // One key per answer, kept across retries: a retry after a lost response is the same decision.
@@ -65,23 +65,7 @@ export function ApprovalCard({ item }: { item: AttentionItem }) {
         </View>
       </View>
 
-      {args ? (
-        <View style={styles.args}>
-          <ScrollView horizontal contentContainerStyle={styles.argsContent}>
-            <Text variant="mono" selectable numberOfLines={showAll ? undefined : 8}>
-              {args}
-            </Text>
-          </ScrollView>
-          {args.split('\n').length > 8 ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              title={showAll ? 'Show less' : 'Show all'}
-              onPress={() => setShowAll((value) => !value)}
-            />
-          ) : null}
-        </View>
-      ) : null}
+      {args ? <CodeBlock value={args} /> : null}
 
       {decided ? (
         <View accessibilityRole="text" accessibilityLiveRegion="polite" style={styles.decided}>
@@ -144,14 +128,6 @@ const useStyles = makeStyles((theme) => ({
     boxShadow: `inset 0 0 0 1px ${theme.colors.warningEdge}`,
   },
   head: { flexDirection: 'row', gap: space.md },
-  args: {
-    borderRadius: radius.md,
-    backgroundColor: theme.colors.fillSubtle,
-    boxShadow: `inset 0 0 0 1px ${theme.colors.surfaceRim}`,
-    gap: space.xs,
-    paddingBottom: space.xs,
-  },
-  argsContent: { padding: space.md },
   buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: space.sm, flexWrap: 'wrap' },
   decided: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: space.xs + 2 },
 }));
