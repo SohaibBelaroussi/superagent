@@ -9,12 +9,16 @@ export interface PairingLink {
 
 const CODE = /^sa_pair_[A-Za-z0-9_-]{43}$/;
 
-/** Which build this is (app.config.ts): development and test builds may use plain HTTP to localhost. */
+/** This computer, as the app reaches it: forwarded with `adb reverse`, or the Android emulator's alias. */
+const LOCAL_HOSTS = ['localhost', '127.0.0.1', '10.0.2.2'];
+
+/** Which build this is (app.config.ts): development and test builds may use plain HTTP to this computer. */
 export const variant: string = (Constants.expoConfig?.extra?.variant as string | undefined) ?? 'development';
 
 /**
  * A server address as typed or carried by a link: its origin, `https://` when no scheme is given.
- * Plain HTTP only reaches localhost, and only in development and test builds.
+ * Plain HTTP only reaches this computer (localhost, or 10.0.2.2 from the Android emulator), and only in
+ * development and test builds.
  */
 export function normalizeServer(input: string): { server: string } | { error: string } {
   const text = input.trim().replace(/\/+$/, '');
@@ -29,7 +33,7 @@ export function normalizeServer(input: string): { server: string } | { error: st
     return { error: 'The address starts with https://.' };
   }
   if (url.protocol === 'http:') {
-    const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+    const local = LOCAL_HOSTS.includes(url.hostname);
     if (variant === 'production' || !local) {
       return { error: 'Use the server’s https:// address (its tailnet name from `tailscale serve`).' };
     }

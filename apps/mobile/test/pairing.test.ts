@@ -30,6 +30,8 @@ describe('pairing links', () => {
       server: 'http://localhost:5173',
       code: CODE,
     });
+    // The Android emulator's name for this computer.
+    expect(normalizeServer('http://10.0.2.2:4111')).toEqual({ server: 'http://10.0.2.2:4111' });
     expect(parsePairingLink(link('http://192.168.1.20:4111'))).toEqual({
       error: expect.stringContaining('https://'),
     });

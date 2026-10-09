@@ -1,6 +1,6 @@
 // Development and test builds may use plain HTTP to this computer only: localhost, which `adb reverse`
-// forwards to it (the API, the stack), and 10.0.2.2, the emulator's own name for it, where React
-// Native's debug builds look for Metro. Everything else stays HTTPS. Release builds for a phone don't
+// forwards to it, and 10.0.2.2, the emulator's own name for it (where React Native's debug builds look
+// for Metro, and the end-to-end flows reach the stack). Everything else stays HTTPS. Release builds for a phone don't
 // get this plugin at all (app.config.ts).
 const { AndroidConfig, withAndroidManifest, withDangerousMod } = require('expo/config-plugins');
 const { mkdirSync, writeFileSync } = require('node:fs');
