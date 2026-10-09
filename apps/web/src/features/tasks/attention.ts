@@ -1,5 +1,5 @@
+import type { Tone } from '@superagent/client';
 import type { AttentionItem } from '@superagent/shared';
-import type { Tone } from '../../lib/tones';
 
 const RANK: Record<AttentionItem['kind'], number> = {
   approval: 0,

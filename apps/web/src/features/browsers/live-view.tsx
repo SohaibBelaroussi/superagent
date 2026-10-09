@@ -16,8 +16,8 @@ import {
   useRef,
   useState,
 } from 'react';
-import { socketUrl } from '../../api/client';
 import { useSession } from '../../api/session';
+import { socketUrl } from '../../api/socket';
 import { cn } from '../../lib/cn';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';

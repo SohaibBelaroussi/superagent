@@ -1,3 +1,4 @@
+import type { Tone } from '@superagent/client';
 import type { AttentionItem } from '@superagent/shared';
 import {
   CircleHelp,
@@ -7,7 +8,6 @@ import {
   ShieldQuestion,
   TriangleAlert,
 } from 'lucide-react';
-import type { Tone } from '../../lib/tones';
 
 export type AttentionKind = AttentionItem['kind'];
 

@@ -1,11 +1,11 @@
+import { departmentTone, plural } from '@superagent/client';
 import { Plus, Search, SquareKanban } from 'lucide-react';
 import { useDeferredValue, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { useBoard } from '../../api/queries';
 import { cn } from '../../lib/cn';
-import { plural } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
-import { departmentTone, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { Button, buttonVariants } from '../../ui/button';
 import { EmptyState, Notice } from '../../ui/feedback';
 import { Input } from '../../ui/field';

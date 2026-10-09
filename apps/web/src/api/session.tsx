@@ -1,8 +1,8 @@
+import { api, apiVoid, onUnauthorized, ProblemError, setApiToken } from '@superagent/client';
 import { CreatedTokenSchema, type Me, MeSchema } from '@superagent/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { storage } from '../lib/storage';
-import { api, apiVoid, onUnauthorized, ProblemError, setApiToken } from './client';
 
 export const TOKEN_KEY = 'superagent.token';
 

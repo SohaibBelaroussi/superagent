@@ -1,12 +1,12 @@
+import { departmentTone, errorMessage } from '@superagent/client';
 import type { Schedule } from '@superagent/shared';
 import { CalendarClock, Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { errorMessage } from '../../api/client';
 import { useSchedules } from '../../api/schedules';
 import { cn } from '../../lib/cn';
 import { useDocumentTitle } from '../../lib/title';
-import { departmentTone, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton } from '../../ui/feedback';
 import { Page, PageHeader } from '../../ui/layout';

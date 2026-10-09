@@ -1,3 +1,4 @@
+import { api, apiVoid, queryKeys, refreshTask } from '@superagent/client';
 import {
   type CreateScheduleInputSchema,
   ScheduleListSchema,
@@ -7,8 +8,6 @@ import {
 } from '@superagent/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
-import { api, apiVoid } from './client';
-import { queryKeys, refreshTask } from './queries';
 
 const schedulePath = (id: string, rest = '') => `/v1/schedules/${encodeURIComponent(id)}${rest}`;
 

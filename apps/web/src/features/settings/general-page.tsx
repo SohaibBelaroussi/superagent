@@ -1,6 +1,6 @@
+import { errorMessage } from '@superagent/client';
 import type { Settings } from '@superagent/shared';
 import { useId, useState } from 'react';
-import { errorMessage } from '../../api/client';
 import { useSettings } from '../../api/org';
 import { useUpdateSettings } from '../../api/settings';
 import { Loaded } from '../../layout/loaded';

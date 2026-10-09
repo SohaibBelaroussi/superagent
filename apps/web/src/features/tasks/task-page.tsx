@@ -1,9 +1,9 @@
+import { errorMessage, ProblemError } from '@superagent/client';
 import type { Task } from '@superagent/shared';
 import { canTransition } from '@superagent/shared/phases';
 import { Check, ChevronRight, CircleSlash, Ellipsis, Pencil, RotateCcw, Send } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
-import { errorMessage, ProblemError } from '../../api/client';
 import { useAttention, useCancelTask, useTask, useUpdateTask } from '../../api/queries';
 import { useDocumentTitle } from '../../lib/title';
 import { Button } from '../../ui/button';

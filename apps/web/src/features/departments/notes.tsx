@@ -1,8 +1,8 @@
+import { errorMessage } from '@superagent/client';
 import type { Department } from '@superagent/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { NotebookPen, Pencil } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { errorMessage } from '../../api/client';
 import { latestNotes, useDepartmentNotes, useSaveDepartmentNotes } from '../../api/memory';
 import { Loaded } from '../../layout/loaded';
 import { useReportUnsaved } from '../../lib/unsaved';

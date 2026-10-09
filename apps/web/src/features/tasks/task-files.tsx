@@ -1,3 +1,4 @@
+import { errorMessage, formatBytes, ProblemError } from '@superagent/client';
 import type { WorkspaceEntry } from '@superagent/shared';
 import { useIsFetching, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -13,10 +14,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { errorMessage, ProblemError } from '../../api/client';
 import { fetchTaskFile, useTaskFolder, workspaceKeys } from '../../api/workspaces';
 import { cn } from '../../lib/cn';
-import { formatBytes } from '../../lib/format';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
 import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';

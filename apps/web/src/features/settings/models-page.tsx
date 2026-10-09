@@ -1,7 +1,7 @@
+import { errorMessage, formatPrice, plural } from '@superagent/client';
 import type { ModelRole, Provider, ProviderModel, ProviderTestResult } from '@superagent/shared';
 import { CircleAlert, CircleCheck, Cpu, Ellipsis, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { type FormEvent, useId, useState } from 'react';
-import { errorMessage } from '../../api/client';
 import { useModelChoices, useSettings } from '../../api/org';
 import {
   useAddModel,
@@ -15,7 +15,6 @@ import {
 } from '../../api/settings';
 import { Loaded } from '../../layout/loaded';
 import { cn } from '../../lib/cn';
-import { formatPrice, plural } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';

@@ -1,5 +1,5 @@
+import { formatDateTime, formatRelative } from '@superagent/client';
 import { useSyncExternalStore } from 'react';
-import { formatDateTime, formatRelative } from '../lib/format';
 
 /*
  * One clock for every relative time on screen: it ticks every 30 seconds while something listens, so

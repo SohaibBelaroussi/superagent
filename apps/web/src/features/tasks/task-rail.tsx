@@ -1,10 +1,9 @@
+import { departmentTone, formatCost, formatDateTime, formatTokens, PRIORITIES } from '@superagent/client';
 import type { Artifact, Task } from '@superagent/shared';
 import { Check, ExternalLink, FileText } from 'lucide-react';
 import { Link } from 'react-router';
 import { useTaskArtifacts } from '../../api/queries';
 import { cn } from '../../lib/cn';
-import { formatCost, formatDateTime, formatTokens } from '../../lib/format';
-import { departmentTone, PRIORITIES } from '../../lib/tones';
 import { Avatar } from '../../ui/avatar';
 import { Skeleton } from '../../ui/feedback';
 import { DetailRow, Panel, ProgressBar } from '../../ui/layout';

@@ -1,14 +1,14 @@
+import { departmentTone, errorMessage } from '@superagent/client';
 import type { Schedule } from '@superagent/shared';
 import { Ellipsis, Pause, Pencil, Play, Trash2, Zap } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { errorMessage } from '../../api/client';
 import { useSettings } from '../../api/org';
 import { useBoard } from '../../api/queries';
 import { useDeleteSchedule, useRunSchedule, useUpdateSchedule } from '../../api/schedules';
 import { cn } from '../../lib/cn';
 import { describeCron, formatFire } from '../../lib/cron';
-import { departmentTone, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/dialog';

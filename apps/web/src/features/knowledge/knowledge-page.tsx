@@ -1,7 +1,7 @@
+import { departmentTone, errorMessage, formatBytes, plural, randomId } from '@superagent/client';
 import type { KnowledgeDocument, KnowledgeHit } from '@superagent/shared';
 import { CircleAlert, CircleCheck, FileText, Library, Search, Trash2, Upload } from 'lucide-react';
 import { type DragEvent, type ReactNode, useDeferredValue, useRef, useState } from 'react';
-import { errorMessage } from '../../api/client';
 import {
   MAX_UPLOAD_BYTES,
   UPLOAD_ACCEPT,
@@ -11,10 +11,8 @@ import {
   useUploadDocument,
 } from '../../api/knowledge';
 import { cn } from '../../lib/cn';
-import { formatBytes, plural } from '../../lib/format';
-import { randomId } from '../../lib/id';
 import { useDocumentTitle } from '../../lib/title';
-import { departmentTone, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/dialog';
 import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';

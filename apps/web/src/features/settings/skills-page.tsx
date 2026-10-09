@@ -1,12 +1,11 @@
+import { errorMessage, formatBytes } from '@superagent/client';
 import type { SkillList } from '@superagent/shared';
 import { FileText, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { errorMessage } from '../../api/client';
 import { usePlugins, useSkill, useSkills } from '../../api/settings';
 import { Loaded } from '../../layout/loaded';
 import { cn } from '../../lib/cn';
-import { formatBytes } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';

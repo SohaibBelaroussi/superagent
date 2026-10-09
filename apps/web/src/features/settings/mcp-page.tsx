@@ -1,7 +1,7 @@
+import { errorMessage, ProblemError, plural } from '@superagent/client';
 import { type ConfigValue, type McpServer, McpServerSlugSchema } from '@superagent/shared';
 import { ChevronDown, Ellipsis, Pencil, Plug, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { type FormEvent, useEffect, useId, useState } from 'react';
-import { errorMessage, ProblemError } from '../../api/client';
 import {
   useCreateMcpServer,
   useDeleteMcpServer,
@@ -12,7 +12,6 @@ import {
 } from '../../api/settings';
 import { Loaded } from '../../layout/loaded';
 import { cn } from '../../lib/cn';
-import { plural } from '../../lib/format';
 import { slugify } from '../../lib/slug';
 import { useDocumentTitle } from '../../lib/title';
 import { Badge } from '../../ui/badge';

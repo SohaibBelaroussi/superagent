@@ -1,6 +1,6 @@
+import { errorMessage } from '@superagent/client';
 import { ChevronsUp } from 'lucide-react';
 import { useState } from 'react';
-import { errorMessage } from '../../api/client';
 import { useTaskEvents } from '../../api/queries';
 import { cn } from '../../lib/cn';
 import { TONE_TEXT } from '../../lib/tones';

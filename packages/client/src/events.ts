@@ -1,8 +1,6 @@
 import { type TaskEvent, TaskEventSchema } from '@superagent/shared';
-import { type LiveStatus, SseConnection, type SseFrame, safeJson } from './sse';
-
-export type { LiveStatus } from './sse';
-export { parseFrame } from './sse';
+import { apiUrl } from './http';
+import { type LiveStatus, SseConnection, type SseConnectionOptions, type SseFrame, safeJson } from './sse';
 
 export interface EventStreamHandlers {
   onEvent(event: TaskEvent): void;
@@ -12,6 +10,11 @@ export interface EventStreamHandlers {
    */
   onReset(): void;
   onStatus(status: LiveStatus): void;
+}
+
+export interface EventStreamOptions {
+  fetchImpl?: typeof fetch;
+  watchOnline?: SseConnectionOptions['watchOnline'];
 }
 
 /**
@@ -27,12 +30,13 @@ export class EventStream {
   constructor(
     token: string,
     private readonly handlers: EventStreamHandlers,
-    fetchImpl?: typeof fetch,
+    options: EventStreamOptions = {},
   ) {
     this.connection = new SseConnection({
-      path: '/v1/events',
+      url: apiUrl('/v1/events'),
       token,
-      fetchImpl,
+      fetchImpl: options.fetchImpl,
+      watchOnline: options.watchOnline,
       headers: (): Record<string, string> => {
         this.resuming = this.lastEventId !== null;
         return this.lastEventId ? { 'last-event-id': this.lastEventId } : {};
@@ -48,6 +52,16 @@ export class EventStream {
 
   stop(): void {
     this.connection.stop();
+  }
+
+  /** The last event this stream saw, to resume from in a later stream (the phone's after a pause). */
+  get position(): string | null {
+    return this.lastEventId;
+  }
+
+  /** Resume from `id` (a stream this one replaces had got that far). */
+  resumeFrom(id: string | null): void {
+    this.lastEventId = id;
   }
 
   private handle(frame: SseFrame): void {

@@ -1,3 +1,4 @@
+import { departmentTone } from '@superagent/client';
 import type { Department } from '@superagent/shared';
 import { OPEN_PHASES } from '@superagent/shared/phases';
 import {
@@ -27,7 +28,7 @@ import { cn } from '../lib/cn';
 import { paletteShortcut } from '../lib/keys';
 import { notificationsSupported, useNotificationsOn } from '../lib/notifications';
 import { THEME_CHOICES, useTheme } from '../lib/theme';
-import { departmentTone, TONE_DOT } from '../lib/tones';
+import { TONE_DOT } from '../lib/tones';
 import { Avatar } from '../ui/avatar';
 import { Kbd } from '../ui/feedback';
 import { LogoMark } from '../ui/icons';

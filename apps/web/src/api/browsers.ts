@@ -1,3 +1,4 @@
+import { api, apiVoid, ProblemError, queryKeys } from '@superagent/client';
 import {
   BrowserIdentitySchema,
   BrowserSessionListSchema,
@@ -5,8 +6,6 @@ import {
   type CreateBrowserIdentityInput,
 } from '@superagent/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, apiVoid, ProblemError } from './client';
-import { queryKeys } from './queries';
 
 /*
  * Browsers: identities (signed-in profiles agents can browse as), the owner's sign-in sessions, and

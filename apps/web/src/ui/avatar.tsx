@@ -1,5 +1,5 @@
+import type { Tone } from '@superagent/client';
 import { cn } from '../lib/cn';
-import type { Tone } from '../lib/tones';
 
 const TONE_FILL: Record<Tone, string> = {
   neutral: 'bg-fill-active text-foreground',

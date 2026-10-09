@@ -1,7 +1,8 @@
+import { decisionKey } from '@superagent/client';
 import type { AttentionItem } from '@superagent/shared';
 import { ShieldCheck, ShieldQuestion, ShieldX } from 'lucide-react';
 import { type ReactNode, useRef, useState } from 'react';
-import { decisionKey, useDecide } from '../../api/queries';
+import { useDecide } from '../../api/queries';
 import { Button } from '../../ui/button';
 import { CodeBlock } from '../../ui/code-block';
 import { Dialog } from '../../ui/dialog';

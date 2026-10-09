@@ -1,3 +1,4 @@
+import { api, apiVoid, queryKeys } from '@superagent/client';
 import {
   type AgentDefinition,
   AgentDefinitionSchema,
@@ -17,8 +18,6 @@ import {
 } from '@superagent/shared';
 import { type QueryClient, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
-import { api, apiVoid } from './client';
-import { queryKeys } from './queries';
 
 /*
  * The organization: departments, agents and their versions, and what agents can be given (tools,

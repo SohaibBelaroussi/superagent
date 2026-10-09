@@ -1,3 +1,4 @@
+import { errorMessage, ProblemError } from '@superagent/client';
 import { type BrowserIdentity, BrowserIdentityNameSchema, type BrowserSession } from '@superagent/shared';
 import { Globe, LogIn, Plus, Trash2, X } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
@@ -10,7 +11,6 @@ import {
   useOpenBrowsers,
   useOpenSignIn,
 } from '../../api/browsers';
-import { errorMessage, ProblemError } from '../../api/client';
 import { useBrowserIdentities } from '../../api/org';
 import { Loaded } from '../../layout/loaded';
 import { cn } from '../../lib/cn';

@@ -1,3 +1,4 @@
+import { departmentTone, formatDate } from '@superagent/client';
 import type { Department, Schedule } from '@superagent/shared';
 import { Building2, CalendarClock, Plus, Search } from 'lucide-react';
 import { type ReactNode, useCallback, useDeferredValue, useState } from 'react';
@@ -6,9 +7,8 @@ import { teamOf } from '../../api/org';
 import { useAgents } from '../../api/queries';
 import { useSchedules } from '../../api/schedules';
 import { cn } from '../../lib/cn';
-import { formatDate } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
-import { departmentTone, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { UnsavedChangesDialog, useUnsavedChanges } from '../../lib/unsaved';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice } from '../../ui/feedback';

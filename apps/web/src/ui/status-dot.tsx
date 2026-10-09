@@ -1,5 +1,5 @@
+import type { Tone } from '@superagent/client';
 import { cn } from '../lib/cn';
-import type { Tone } from '../lib/tones';
 import { TONE_DOT } from '../lib/tones';
 
 const RING_TEXT: Record<Tone, string> = {

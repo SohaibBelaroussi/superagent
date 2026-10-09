@@ -1,13 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  formatCost,
-  formatDuration,
-  formatList,
-  formatRelative,
-  formatTokens,
-  plural,
-} from '../src/lib/format';
-import { departmentTone } from '../src/lib/tones';
+import { formatCost, formatDuration, formatList, formatRelative, formatTokens, plural } from '../src/format';
+import { departmentTone } from '../src/tones';
 
 describe('formatCost', () => {
   it('keeps small costs readable and large ones round', () => {

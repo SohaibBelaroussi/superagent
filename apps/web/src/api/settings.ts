@@ -1,3 +1,4 @@
+import { api, apiVoid, queryKeys } from '@superagent/client';
 import {
   type AddModelInput,
   CreatedTokenSchema,
@@ -29,8 +30,6 @@ import {
 } from '@superagent/shared';
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
-import { api, apiVoid } from './client';
-import { queryKeys } from './queries';
 
 /*
  * Settings: providers and their models, model roles and limits, devices, secrets, MCP servers, plugins

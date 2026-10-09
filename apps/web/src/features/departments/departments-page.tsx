@@ -1,16 +1,15 @@
+import { departmentTone, errorMessage, formatDate, plural } from '@superagent/client';
 import type { AgentDefinition, Department } from '@superagent/shared';
 import { OPEN_PHASES } from '@superagent/shared/phases';
 import { Building2, ChevronDown, Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { errorMessage } from '../../api/client';
 import { teamOf } from '../../api/org';
 import { useAgents, useBoard, useDepartments } from '../../api/queries';
 import { useSchedules } from '../../api/schedules';
 import { cn } from '../../lib/cn';
-import { formatDate, plural } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/title';
-import { departmentTone, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { Avatar } from '../../ui/avatar';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';

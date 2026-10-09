@@ -1,7 +1,7 @@
+import { PRIORITIES } from '@superagent/client';
 import type { Task, TaskPriority } from '@superagent/shared';
 import { type FormEvent, useEffect, useState } from 'react';
 import { useUpdateTask } from '../../api/queries';
-import { PRIORITIES } from '../../lib/tones';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
 import { Spinner } from '../../ui/feedback';

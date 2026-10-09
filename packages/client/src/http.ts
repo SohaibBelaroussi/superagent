@@ -26,6 +26,40 @@ export class ResponseShapeError extends Error {
   }
 }
 
+export interface ClientConfig {
+  /**
+   * Where the API is. The web app is served by the API, so its paths stay relative (''); the phone app
+   * names its server (`https://superagent.example.ts.net`).
+   */
+  baseUrl: string;
+  /** The `fetch` requests go through. Unset: the global one, looked up at each call (tests replace it). */
+  fetch?: typeof fetch;
+  /** What a network failure says (the phone's points at Tailscale). */
+  networkErrorDetail?: string;
+}
+
+let config: ClientConfig = { baseUrl: '' };
+
+/** Points the client at a server. The web app keeps the defaults: its own origin, the browser's fetch. */
+export function configureClient(next: ClientConfig): void {
+  config = { ...next, baseUrl: next.baseUrl.replace(/\/+$/, '') };
+}
+
+/** The address of an API path on the configured server. */
+export function apiUrl(path: string): string {
+  return `${config.baseUrl}${path}`;
+}
+
+/** The `fetch` the client uses: the configured one, or the global one at the time of the call. */
+export function clientFetch(input: string, init?: RequestInit): Promise<Response> {
+  return config.fetch ? config.fetch(input, init) : fetch(input, init);
+}
+
+/** A request given up on purpose (`AbortController`). Not every runtime has `DOMException`. */
+export function isAbortError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError';
+}
+
 let currentToken: string | null = null;
 let unauthorizedHandler: ((token: string) => void) | null = null;
 
@@ -65,13 +99,13 @@ export interface RequestOptions {
 }
 
 function url(path: string, query: RequestOptions['query']): string {
-  if (!query) return path;
+  if (!query) return apiUrl(path);
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
   }
   const search = params.toString();
-  return search ? `${path}?${search}` : path;
+  return apiUrl(search ? `${path}?${search}` : path);
 }
 
 async function send(path: string, options: RequestOptions): Promise<Response> {
@@ -86,7 +120,7 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
 
   let response: Response;
   try {
-    response = await fetch(url(path, options.query), {
+    response = await clientFetch(url(path, options.query), {
       method: options.method ?? (body === undefined ? 'GET' : 'POST'),
       headers,
       body,
@@ -95,13 +129,13 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
       cache: 'no-store',
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    if (isAbortError(error)) throw error;
     throw new ProblemError(0, {
       type: 'about:blank',
       title: 'Network error',
       status: 0,
       code: 'network_error',
-      detail: "Can't reach the server. Check your connection.",
+      detail: config.networkErrorDetail ?? "Can't reach the server. Check your connection.",
     });
   }
 
@@ -159,17 +193,6 @@ export async function apiVoid(path: string, options: RequestOptions = {}): Promi
 export async function apiBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
   const response = await send(path, { ...options, headers: { accept: '*/*', ...options.headers } });
   return response.blob();
-}
-
-/**
- * The address of a WebSocket route on this origin. A browser can't put a header on a WebSocket, so the
- * token goes as `?apiKey=` (the API's request log never records it).
- */
-export function socketUrl(path: string, token: string): string {
-  const url = new URL(path, window.location.href);
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  url.searchParams.set('apiKey', token);
-  return url.toString();
 }
 
 /** A message for people, from whatever a request threw. */

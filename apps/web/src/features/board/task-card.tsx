@@ -1,8 +1,9 @@
+import { departmentTone } from '@superagent/client';
 import type { AgentDefinition, AttentionItem, Department, Task } from '@superagent/shared';
 import { CircleAlert } from 'lucide-react';
 import { Link } from 'react-router';
 import { cn } from '../../lib/cn';
-import { departmentTone, TONE_TEXT } from '../../lib/tones';
+import { TONE_TEXT } from '../../lib/tones';
 import { Avatar } from '../../ui/avatar';
 import { ProgressBar } from '../../ui/layout';
 import { focusRingInset } from '../../ui/recipes';

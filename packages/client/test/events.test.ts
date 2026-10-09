@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { onUnauthorized, setApiToken } from '../src/api/client';
-import { EventStream, type LiveStatus, parseFrame } from '../src/api/events';
-import { staleKeysFor } from '../src/api/live';
-import { event } from './msw';
+import { EventStream } from '../src/events';
+import { onUnauthorized, setApiToken } from '../src/http';
+import { staleKeysFor } from '../src/live';
+import { type LiveStatus, parseFrame } from '../src/sse';
+import { event } from './fixtures';
 
 /** A response whose body the test writes, chunk by chunk, like a server sending events. */
 function sse(status = 200) {
@@ -92,7 +93,7 @@ describe('EventStream', () => {
         },
         onStatus: (status) => statuses.push(status),
       },
-      fetchImpl as unknown as typeof fetch,
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
     );
     live.start();
     return live;

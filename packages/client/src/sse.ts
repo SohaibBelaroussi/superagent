@@ -1,4 +1,4 @@
-import { notifyUnauthorized } from './client';
+import { clientFetch, notifyUnauthorized } from './http';
 
 export type LiveStatus = 'connecting' | 'live' | 'offline';
 
@@ -9,18 +9,34 @@ export interface SseFrame {
 }
 
 export interface SseConnectionOptions {
-  path: string;
+  /** The stream's full address (`apiUrl('/v1/events')`). */
+  url: string;
   token: string;
   /** Headers for the next connection attempt, such as the Last-Event-ID to resume from. */
   headers?: () => Record<string, string>;
   onFrame(frame: SseFrame): void;
   onStatus(status: LiveStatus): void;
   fetchImpl?: typeof fetch;
+  /**
+   * Calls `wake` when the network comes back, so the connection skips the rest of its backoff, and
+   * returns how to stop. Unset: the browser's `online` event, where there is one.
+   */
+  watchOnline?: (wake: () => void) => () => void;
 }
 
 /** The server sends a comment every 25 s; this much silence means the connection is gone. */
 const SILENCE_MS = 60_000;
 const MAX_BACKOFF_MS = 30_000;
+
+/** The browser's `online` event. React Native has a `window` without event listeners. */
+function watchBrowserOnline(wake: () => void): () => void {
+  const target = globalThis as { addEventListener?: unknown; removeEventListener?: unknown };
+  if (typeof target.addEventListener !== 'function' || typeof target.removeEventListener !== 'function') {
+    return () => {};
+  }
+  globalThis.addEventListener('online', wake);
+  return () => globalThis.removeEventListener('online', wake);
+}
 
 /**
  * One long-lived Server-Sent Events connection, read with fetch so the token travels in a header, not
@@ -34,11 +50,12 @@ export class SseConnection {
   private lastHeard = 0;
   private watchdog: ReturnType<typeof setInterval> | undefined;
   private wake: (() => void) | null = null;
+  private unwatchOnline: (() => void) | null = null;
   private status: LiveStatus = 'connecting';
-  private readonly fetchImpl: typeof fetch;
+  private readonly fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
 
   constructor(private readonly options: SseConnectionOptions) {
-    this.fetchImpl = options.fetchImpl ?? ((...args) => fetch(...args));
+    this.fetchImpl = options.fetchImpl ?? clientFetch;
   }
 
   start(): void {
@@ -47,14 +64,15 @@ export class SseConnection {
     this.watchdog = setInterval(() => {
       if (this.controller && Date.now() - this.lastHeard > SILENCE_MS) this.controller.abort();
     }, 15_000);
-    window.addEventListener('online', this.reconnectNow);
+    this.unwatchOnline = (this.options.watchOnline ?? watchBrowserOnline)(this.reconnectNow);
     void this.run();
   }
 
   stop(): void {
     this.stopped = true;
     clearInterval(this.watchdog);
-    window.removeEventListener('online', this.reconnectNow);
+    this.unwatchOnline?.();
+    this.unwatchOnline = null;
     this.controller?.abort();
     this.wake?.();
   }
@@ -87,7 +105,7 @@ export class SseConnection {
           ...this.options.headers?.(),
         };
         this.lastHeard = Date.now();
-        const response = await this.fetchImpl(this.options.path, {
+        const response = await this.fetchImpl(this.options.url, {
           headers,
           signal: this.controller.signal,
           cache: 'no-store',
@@ -129,6 +147,8 @@ export class SseConnection {
     try {
       for (;;) {
         const { value, done } = await reader.read();
+        // However it ends (the server closed it, or a cut connection that looks like a close), the
+        // caller reconnects and resumes.
         if (done) return;
         this.lastHeard = Date.now();
         // Normalized on the whole buffer, so a CRLF split across two chunks still reads as one break.

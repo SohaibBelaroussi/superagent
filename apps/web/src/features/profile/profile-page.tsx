@@ -1,10 +1,10 @@
+import { formatList } from '@superagent/client';
 import type { OwnerProfile, OwnerProfilePatch } from '@superagent/shared';
 import { Plus, X } from 'lucide-react';
 import { useId } from 'react';
 import { useUpdateProfile } from '../../api/memory';
 import { useProfile } from '../../api/queries';
 import { Loaded } from '../../layout/loaded';
-import { formatList } from '../../lib/format';
 import { useServerDraft } from '../../lib/server-draft';
 import { timezones } from '../../lib/timezones';
 import { useDocumentTitle } from '../../lib/title';

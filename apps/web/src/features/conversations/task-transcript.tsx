@@ -1,7 +1,7 @@
+import { errorMessage } from '@superagent/client';
 import type { Task } from '@superagent/shared';
 import { TERMINAL_PHASES } from '@superagent/shared/phases';
 import { ChevronsUp, MessagesSquare } from 'lucide-react';
-import { errorMessage } from '../../api/client';
 import { useConversation } from '../../api/conversations';
 import { Button } from '../../ui/button';
 import { EmptyState, Notice, Skeleton, Spinner } from '../../ui/feedback';

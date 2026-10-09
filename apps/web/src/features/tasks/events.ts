@@ -1,3 +1,4 @@
+import { PHASES, type Tone } from '@superagent/client';
 import type { TaskEvent, TaskPhase } from '@superagent/shared';
 import {
   ArrowRightLeft,
@@ -18,7 +19,6 @@ import {
   Sparkles,
   UserRound,
 } from 'lucide-react';
-import { PHASES, type Tone } from '../../lib/tones';
 import type { OrgLookup } from './org';
 
 export interface DescribedEvent {

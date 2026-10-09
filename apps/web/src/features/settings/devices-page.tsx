@@ -1,7 +1,7 @@
+import { errorMessage, ProblemError } from '@superagent/client';
 import type { TokenRecord } from '@superagent/shared';
 import { Copy, KeyRound, MonitorSmartphone, Plus } from 'lucide-react';
 import { type FormEvent, useId, useState } from 'react';
-import { errorMessage, ProblemError } from '../../api/client';
 import { useMe } from '../../api/session';
 import { useCreateToken, useRevokeToken, useTokens } from '../../api/settings';
 import { cn } from '../../lib/cn';

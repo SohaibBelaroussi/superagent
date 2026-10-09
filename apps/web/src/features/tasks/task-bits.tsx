@@ -1,8 +1,16 @@
+import {
+  departmentTone,
+  formatCost,
+  formatDate,
+  formatRelative,
+  formatTokens,
+  PHASES,
+  PRIORITIES,
+} from '@superagent/client';
 import type { Department, Task, TaskPhase, TaskPriority, UsageTotals } from '@superagent/shared';
 import { CalendarClock, Repeat, Sparkles } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { formatCost, formatDate, formatRelative, formatTokens } from '../../lib/format';
-import { departmentTone, PHASES, PRIORITIES, TONE_DOT } from '../../lib/tones';
+import { TONE_DOT } from '../../lib/tones';
 import { Badge } from '../../ui/badge';
 import { focusRing } from '../../ui/recipes';
 import { Tooltip } from '../../ui/tooltip';

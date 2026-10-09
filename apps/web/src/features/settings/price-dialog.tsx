@@ -1,6 +1,6 @@
+import { errorMessage } from '@superagent/client';
 import type { ProviderModel } from '@superagent/shared';
 import { type FormEvent, useEffect, useState } from 'react';
-import { errorMessage } from '../../api/client';
 import { useRemovePrice, useSetPrice } from '../../api/settings';
 import { Button } from '../../ui/button';
 import { Dialog } from '../../ui/dialog';
