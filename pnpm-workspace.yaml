@@ -13,11 +13,13 @@ ignoredBuiltDependencies:
   - protobufjs
   - ssh2
 
-# @mastra/mcp's ext-apps lists React as an optional peer, which pnpm resolves once the web app brings
-# React into the workspace: the API would ship React without ever loading it.
+# Optional peers pnpm would resolve from the apps, so the API would ship them without ever loading them:
+# @mastra/mcp's ext-apps lists React (the web and phone apps bring it), drizzle-orm lists expo-sqlite (the
+# phone app brings it, and with it Expo and React Native).
 overrides:
   '@modelcontextprotocol/ext-apps>react': '-'
   '@modelcontextprotocol/ext-apps>react-dom': '-'
+  'drizzle-orm>expo-sqlite': '-'
 
 # Packages see each other's dependencies through pnpm's hidden hoist. The phone app's Jest brings
 # @types/jsdom, which vitest's optional types would then find, pulling the DOM's globals into the API's
