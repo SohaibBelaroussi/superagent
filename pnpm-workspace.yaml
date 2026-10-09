@@ -18,3 +18,10 @@ ignoredBuiltDependencies:
 overrides:
   '@modelcontextprotocol/ext-apps>react': '-'
   '@modelcontextprotocol/ext-apps>react-dom': '-'
+
+# Packages see each other's dependencies through pnpm's hidden hoist. The phone app's Jest brings
+# @types/jsdom, which vitest's optional types would then find, pulling the DOM's globals into the API's
+# typecheck. Jest still gets it as its own dependency.
+hoistPattern:
+  - '*'
+  - '!@types/jsdom'
