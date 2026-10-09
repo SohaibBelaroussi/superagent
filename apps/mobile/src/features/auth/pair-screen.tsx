@@ -10,6 +10,7 @@ import { Button } from '../../ui/button';
 import { Notice } from '../../ui/feedback';
 import { Text } from '../../ui/text';
 import { makeStyles, radius, space, useTheme } from '../../ui/theme';
+import { confirmSignOut } from './confirm-sign-out';
 
 /**
  * Where a pairing link lands (`superagent://pair?server=…&code=…`), scanned, pasted or opened. It says
@@ -70,7 +71,11 @@ export function PairScreen() {
           <Notice tone="warning" title="This phone is signed in already">
             {`It’s signed in to ${state.session.server}. Sign out first, then open the pairing link again.`}
           </Notice>
-          <Button title="Sign out" variant="destructive" onPress={() => void signOut()} />
+          <Button
+            title="Sign out"
+            variant="destructive"
+            onPress={() => confirmSignOut(() => void signOut())}
+          />
         </>
       ) : (
         <>

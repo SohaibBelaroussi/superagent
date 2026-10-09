@@ -64,9 +64,10 @@ export function ToastHost() {
 
   useEffect(() => {
     if (!message) {
-      Animated.timing(opacity, { toValue: 0, duration: 150, useNativeDriver: true }).start(() =>
-        setShown(null),
-      );
+      // Unless a new message cut the fade short: it's the one showing now.
+      Animated.timing(opacity, { toValue: 0, duration: 150, useNativeDriver: true }).start(({ finished }) => {
+        if (finished) setShown(null);
+      });
       return;
     }
     setShown(message);

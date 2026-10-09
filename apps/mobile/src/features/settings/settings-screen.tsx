@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 import * as WebBrowser from 'expo-web-browser';
 import { Globe, LogOut } from 'lucide-react-native';
 import { useState } from 'react';
-import { Alert, View } from 'react-native';
+import { View } from 'react-native';
 import { useLiveStatus } from '../../api/live';
 import { useSession, useSignedIn } from '../../api/session';
 import { StatusDot } from '../../ui/badge';
@@ -12,6 +12,7 @@ import { Segmented } from '../../ui/segmented';
 import { Section } from '../../ui/surface';
 import { Text } from '../../ui/text';
 import { space, type ThemeChoice, useThemeChoice } from '../../ui/theme';
+import { confirmSignOut } from '../auth/confirm-sign-out';
 
 const THEMES = [
   { value: 'system', label: 'System' },
@@ -28,18 +29,11 @@ export function SettingsScreen() {
   const [leaving, setLeaving] = useState(false);
   const liveLabel = live === 'live' ? 'Live' : live === 'connecting' ? 'Connecting…' : 'Offline, retrying';
 
-  const confirmSignOut = () =>
-    Alert.alert('Sign out?', 'This phone’s token is revoked. Pair it again to come back.', [
-      { text: 'Stay signed in', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: () => {
-          setLeaving(true);
-          void signOut();
-        },
-      },
-    ]);
+  const leave = () =>
+    confirmSignOut(() => {
+      setLeaving(true);
+      void signOut();
+    });
 
   return (
     <Screen>
@@ -78,7 +72,7 @@ export function SettingsScreen() {
             title={leaving ? 'Signing out…' : 'Sign out'}
             destructive
             chevron={false}
-            onPress={leaving ? undefined : confirmSignOut}
+            onPress={leaving ? undefined : leave}
             last
           />
         </List>
