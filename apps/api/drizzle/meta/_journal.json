@@ -92,6 +92,13 @@
       "when": 1791409110934,
       "tag": "0012_usage",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791556241946,
+      "tag": "0013_pairing_codes",
+      "breakpoints": true
     }
   ]
 }

@@ -1,9 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IMastraLogger } from '@mastra/core/logger';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { Db } from '../db/client';
-import { type ApiTokenRow, apiTokens } from '../db/schema';
+import { type ApiTokenRow, apiTokens, pairingCodes } from '../db/schema';
 
 /** The single user of this server. Every valid token authenticates as the owner. */
 export const OWNER_ID = 'owner';
@@ -16,12 +16,27 @@ export interface AuthUser {
   name: string;
   tokenId: string;
   tokenName: string;
+  /** Set when the caller presented a pairing code: it may only claim a device token (D53). */
+  pairingId?: string;
 }
 
 const TOKEN_PREFIX = 'sa_';
 
 export function generateToken(): string {
   return `${TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
+}
+
+const PAIRING_PREFIX = 'sa_pair_';
+/** How long a pairing code works, once made (D53). */
+export const PAIRING_TTL_MS = 10 * 60_000;
+
+/** A pairing code: as much randomness as a token, and a prefix no token has (tokens are 46 characters). */
+export function generatePairingCode(): string {
+  return `${PAIRING_PREFIX}${randomBytes(32).toString('base64url')}`;
+}
+
+export function isPairingCode(value: string): boolean {
+  return /^sa_pair_[A-Za-z0-9_-]{43}$/.test(value);
 }
 
 export function hashToken(token: string): string {
@@ -78,6 +93,9 @@ export class TokenService {
       return { id: OWNER_ID, name: 'Owner', tokenId: ADMIN_TOKEN_ID, tokenName: 'admin (env)' };
     }
 
+    // Pairing codes are checked against the database every time: they are used once, and rarely.
+    if (isPairingCode(token)) return this.lookupPairing(hash);
+
     const now = Date.now();
     const cached = this.cache.get(hash);
     if (cached && cached.expiresAt > now) {
@@ -115,14 +133,73 @@ export class TokenService {
       : null;
   }
 
+  private async lookupPairing(hash: string): Promise<AuthUser | null> {
+    const [row] = await this.db
+      .select({ id: pairingCodes.id })
+      .from(pairingCodes)
+      .where(
+        and(
+          eq(pairingCodes.codeHash, hash),
+          isNull(pairingCodes.claimedAt),
+          gt(pairingCodes.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+    return row
+      ? {
+          id: OWNER_ID,
+          name: 'Owner',
+          tokenId: `pairing:${row.id}`,
+          tokenName: 'pairing code',
+          pairingId: row.id,
+        }
+      : null;
+  }
+
   async create(name: string): Promise<{ token: string; record: ApiTokenRow }> {
-    const token = generateToken();
-    const [record] = await this.db
-      .insert(apiTokens)
-      .values({ id: uuidv7(), name, tokenHash: hashToken(token), prefix: tokenPrefix(token) })
-      .returning();
-    if (!record) throw new Error('Token insert returned no row');
-    return { token, record };
+    return insertToken(this.db, name);
+  }
+
+  /**
+   * A pairing code for a phone (D53): it works once, for `PAIRING_TTL_MS`. Codes that ended over a day
+   * ago are cleared on the way.
+   */
+  async createPairing(): Promise<{ code: string; expiresAt: Date }> {
+    const code = generatePairingCode();
+    const expiresAt = new Date(Date.now() + PAIRING_TTL_MS);
+    await this.db
+      .delete(pairingCodes)
+      .where(lt(pairingCodes.expiresAt, new Date(Date.now() - 24 * 3_600_000)));
+    await this.db.insert(pairingCodes).values({ id: uuidv7(), codeHash: hashToken(code), expiresAt });
+    return { code, expiresAt };
+  }
+
+  /**
+   * Claims a pairing code for a new device token named `name`. The code is spent and the token made in
+   * one transaction: two claims racing with one code get one token. Null when the code is no longer
+   * valid (claimed, or expired since it was checked).
+   */
+  async claimPairing(
+    pairingId: string,
+    name: string,
+  ): Promise<{ token: string; record: ApiTokenRow } | null> {
+    return this.db.transaction(async (tx) => {
+      const [claimed] = await tx
+        .update(pairingCodes)
+        .set({ claimedAt: new Date() })
+        .where(
+          and(
+            eq(pairingCodes.id, pairingId),
+            isNull(pairingCodes.claimedAt),
+            gt(pairingCodes.expiresAt, new Date()),
+          ),
+        )
+        .returning({ id: pairingCodes.id });
+      if (!claimed) return null;
+      const created = await insertToken(tx, name);
+      await tx.update(pairingCodes).set({ tokenId: created.record.id }).where(eq(pairingCodes.id, pairingId));
+      return created;
+    });
   }
 
   async list(): Promise<ApiTokenRow[]> {
@@ -177,4 +254,16 @@ export class TokenService {
       .where(eq(apiTokens.id, tokenId))
       .catch((error: unknown) => this.options.logger?.warn('Could not record token use', { tokenId, error }));
   }
+}
+
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+async function insertToken(executor: Db | Tx, name: string): Promise<{ token: string; record: ApiTokenRow }> {
+  const token = generateToken();
+  const [record] = await executor
+    .insert(apiTokens)
+    .values({ id: uuidv7(), name, tokenHash: hashToken(token), prefix: tokenPrefix(token) })
+    .returning();
+  if (!record) throw new Error('Token insert returned no row');
+  return { token, record };
 }
